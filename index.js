@@ -1964,7 +1964,9 @@ async function initDb() {
       favorite_category TEXT DEFAULT '—',
       last_card TEXT DEFAULT '—',
       rarest_card TEXT DEFAULT '—',
-      cards_collected TEXT DEFAULT ''
+      cards_collected TEXT DEFAULT '',
+      streak_recovery_left INTEGER DEFAULT 3,
+      last_streak_before_break INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS tarot_category_stats (
@@ -1994,6 +1996,12 @@ async function initDb() {
 
   try {
     await dbExec(`ALTER TABLE menfess_posts ADD COLUMN thread_id TEXT`);
+  } catch { }
+  try {
+    await dbExec(`ALTER TABLE tarot_users ADD COLUMN streak_recovery_left INTEGER DEFAULT 3`);
+  } catch { }
+  try {
+    await dbExec(`ALTER TABLE tarot_users ADD COLUMN last_streak_before_break INTEGER DEFAULT 0`);
   } catch { }
 
   await seedSupportLeaderboard().catch(() => null);
@@ -4698,7 +4706,7 @@ function joinTargetVoice(client) {
       return;
     }
 
-    console.log(` ├── [VOICE 24/7] Connected to: ${channel.name} (${channel.id})`);
+    console.log(` ├── [VOICE 24/7] Attempting to connect to: ${channel.name} (${channel.id})`);
     const connection = joinVoiceChannel({
       channelId: channel.id,
       guildId: channel.guild.id,
@@ -4708,13 +4716,16 @@ function joinTargetVoice(client) {
     });
 
     connection.on('stateChange', (oldState, newState) => {
+      if (newState.status === VoiceConnectionStatus.Ready) {
+        console.log(` ├── [VOICE 24/7] Connected to: ${channel.name} (${channel.id})`);
+      }
       if (newState.status === VoiceConnectionStatus.Disconnected) {
-        console.log("[VOICE 24/7] Disconnected. Reconnecting in 5 seconds...");
+        console.log("[VOICE 24/7] Disconnected. Reconnecting in 30 seconds...");
         setTimeout(() => {
           if (connection.state.status === VoiceConnectionStatus.Disconnected) {
             joinTargetVoice(client);
           }
-        }, 5000);
+        }, 30000);
       }
     });
 
@@ -4723,7 +4734,7 @@ function joinTargetVoice(client) {
       try {
         connection.destroy();
       } catch { }
-      setTimeout(() => joinTargetVoice(client), 5000);
+      setTimeout(() => joinTargetVoice(client), 30000);
     });
 
   } catch (err) {
@@ -7109,9 +7120,8 @@ Enjoy your reward ✨`
 
       if (!matches.length) {
         return message.reply(
-          "🧁 **Uhh, gak ada emoji custom yang terdeteksi...** `(｡•́︿•̀｡)`\n" +
-          "> **Format:** `cstealemoji <:nama:id> [emoji lainnya...]`\n" +
-          "> *Tips: Kamu tinggal copy-paste emoji custom dari server mana aja, animated juga bisa kok! ˚ʚ♡ɞ˚*"
+          "Tidak ada emoji custom yang terdeteksi.\n" +
+          "**Format:** `cstealemoji <:nama:id> [emoji lainnya...]`"
         );
       }
 
@@ -7121,9 +7131,7 @@ Enjoy your reward ✨`
         : null;
 
       const statusMsg = await message.reply(
-        "🥛 **Menyalin emoji...**\n" +
-        `> ◌ *Sedang memproses **${matches.length}** emoji gemas untukmu.* ˚ʚ♡ɞ˚\n` +
-        "> ◌ *Mohon tunggu sebentar, yaa~* 🎀"
+        "Menyalin emoji... Mohon tunggu sebentar."
       );
 
       const results = [];
@@ -7147,19 +7155,19 @@ Enjoy your reward ✨`
             name: finalName,
           });
 
-          results.push(`✨ ${created} \`:${created.name}:\` *berhasil disalin!* 🩰`);
+          results.push(`${created} \`:${created.name}:\` berhasil disalin!`);
         } catch (err) {
           const reason = err?.rawError?.message || err?.message || "Unknown error";
-          results.push(`🩹 \`:${finalName}:\` *gagal disalin...* \`(๑•́ ₃ •̀๑)\`\n> \`Kendala: ${reason}\``);
+          results.push(`\`:${finalName}:\` gagal disalin. Kendala: ${reason}`);
         }
       }
 
-      const resultText = results.join("\n\n");
+      const resultText = results.join("\n");
       const successCount = results.filter(r => r.includes("berhasil disalin")).length;
       
       const responseText = 
-        `💌 **Proses salin emoji selesai!** ˚ʚ♡ɞ˚\n` +
-        `◌ *Berhasil memindahkan **${successCount}** / **${matches.length}** emoji ke server.* 🌸\n\n` +
+        `**Proses salin emoji selesai!**\n` +
+        `Berhasil menyalin **${successCount}** dari **${matches.length}** emoji.\n\n` +
         `${resultText}`;
 
       return statusMsg.edit(responseText).catch(() => message.channel.send(responseText));

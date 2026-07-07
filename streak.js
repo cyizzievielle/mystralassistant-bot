@@ -1,5 +1,5 @@
 // streak.js
-const { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, PermissionFlagsBits, ChannelType, Events } = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, PermissionFlagsBits, ChannelType, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const crypto = require("crypto");
 const path = require("path");
@@ -142,6 +142,17 @@ async function getAllActivePairsForUser(guildId, userId) {
   );
 }
 
+async function getActivePairCountForUser(guildId, userId) {
+  const row = await dbGet(
+    `SELECT COUNT(*) as cnt FROM streak_pairs 
+     WHERE guild_id = ? 
+       AND (user_one = ? OR user_two = ?) 
+       AND status IN ('active', 'warning', 'forming')`,
+    [guildId, userId, userId]
+  );
+  return row ? row.cnt : 0;
+}
+
 async function createPair(guildId, userA, userB) {
   const [u1, u2] = [userA, userB].sort();
   const now = Date.now();
@@ -162,6 +173,29 @@ async function updatePair(id, updates) {
 
 async function deletePair(id) {
   await dbRun("DELETE FROM streak_pairs WHERE id = ?", [id]);
+}
+
+async function resetAllGuildStreaks(guildId) {
+  await dbRun("DELETE FROM streak_daily_activity WHERE pair_id IN (SELECT id FROM streak_pairs WHERE guild_id = ?)", [guildId]);
+  await dbRun("DELETE FROM streak_logs WHERE guild_id = ?", [guildId]);
+  await dbRun("DELETE FROM streak_pairs WHERE guild_id = ?", [guildId]);
+}
+
+async function resetUserGuildStreaks(guildId, userId) {
+  await dbRun(
+    `DELETE FROM streak_daily_activity 
+     WHERE pair_id IN (SELECT id FROM streak_pairs WHERE guild_id = ? AND (user_one = ? OR user_two = ?))`,
+    [guildId, userId, userId]
+  );
+  await dbRun(
+    `DELETE FROM streak_logs 
+     WHERE pair_id IN (SELECT id FROM streak_pairs WHERE guild_id = ? AND (user_one = ? OR user_two = ?))`,
+    [guildId, userId, userId]
+  );
+  await dbRun(
+    `DELETE FROM streak_pairs WHERE guild_id = ? AND (user_one = ? OR user_two = ?)`,
+    [guildId, userId, userId]
+  );
 }
 
 async function getLastActivity(pairId, userId) {
@@ -978,6 +1012,11 @@ async function handleMessageActivity(client, message) {
 
   let pair = await getPair(guildId, u1, u2);
   if (!pair) {
+    const countA = await getActivePairCountForUser(guildId, userA);
+    const countB = await getActivePairCountForUser(guildId, userB);
+    if (countA >= 25 || countB >= 25) {
+      return; // Limit 25 pasangan aktif
+    }
     pair = await createPair(guildId, u1, u2);
     await addLog(guildId, pair.id, userA, "create_forming_pair", `Forming pair created between ${userA} and ${userB}`);
   }
@@ -991,54 +1030,65 @@ async function handleMessageActivity(client, message) {
   }
 
   await addActivity(pair.id, userA, now, hash);
-  await message.react("1523182445875302463").catch(() => {});
 
-  if (pair.status === "active" || pair.status === "warning") {
-    if (pair.user_one === userA && !pair.user_one_active_today) {
-      await updatePair(pair.id, { user_one_active_today: 1 });
-      await logToGuild(client, guildId, `<@${userA}> melakukan interaksi hari ini untuk streak dengan <@${userB}>.`);
-    } else if (pair.user_two === userA && !pair.user_two_active_today) {
-      await updatePair(pair.id, { user_two_active_today: 1 });
-      await logToGuild(client, guildId, `<@${userA}> melakukan interaksi hari ini untuk streak dengan <@${userB}>.`);
-    }
-    return;
+  const updateData = {};
+  if (pair.user_one === userA && !pair.user_one_active_today) {
+    updateData.user_one_active_today = 1;
+  } else if (pair.user_two === userA && !pair.user_two_active_today) {
+    updateData.user_two_active_today = 1;
   }
 
-  const wibToday = getWibDateString();
-  const allAct = await getLastActivity(pair.id, userB);
-
-  if (allAct && getWibDateString(allAct.last_message_at) === wibToday) {
-    const lastActiveDate = pair.last_active_at ? getWibDateString(pair.last_active_at) : null;
-
-    let newProgress = 1;
-    if (lastActiveDate === wibToday) {
-      newProgress = pair.progress_count;
-    } else if (lastActiveDate === getWibYesterdayString()) {
-      newProgress = pair.progress_count + 1;
+  let isCompletingMessage = false;
+  if (Object.keys(updateData).length > 0) {
+    await updatePair(pair.id, updateData);
+    const reloadedPair = await getPairById(pair.id);
+    if (reloadedPair.user_one_active_today === 1 && reloadedPair.user_two_active_today === 1) {
+      isCompletingMessage = true;
     }
+    pair = reloadedPair;
+    await logToGuild(client, guildId, `<@${userA}> melakukan interaksi hari ini untuk streak dengan <@${userB}>.`);
+  }
 
-    if (newProgress >= 3) {
+  if (isCompletingMessage) {
+    await message.react("1523182445875302463").catch(() => { });
+
+    if (pair.status === "active" || pair.status === "warning") {
+      const newStreak = pair.current_streak + 1;
+      const highest = Math.max(pair.highest_streak, newStreak);
+      const isMilestone = MILESTONES.includes(newStreak) || (newStreak > 1000 && newStreak % 100 === 0);
+
+      await updatePair(pair.id, {
+        current_streak: newStreak,
+        highest_streak: highest,
+        status: "active",
+        last_streak_increment_at: now
+      });
+
+      await addLog(guildId, pair.id, null, "daily_increment", `Streak incremented to ${newStreak} in real-time`);
+      await logToGuild(client, guildId, `🔥 **Streak Berlanjut!** Streak <@${pair.user_one}> & <@${pair.user_two}> naik menjadi **${newStreak} Hari**!`);
+
+      // Card hanya muncul mulai hari ke-3
+      if (newStreak >= 3) {
+        if (isMilestone) {
+          await sendStreakCardNotification(client, guildId, pair.id, "Milestone");
+        } else {
+          await sendStreakCardNotification(client, guildId, pair.id, "Daily Progress");
+        }
+      }
+    } else if (pair.status === "forming") {
       await updatePair(pair.id, {
         status: "active",
-        current_streak: 3,
-        highest_streak: 3,
+        current_streak: 1,
+        highest_streak: Math.max(pair.highest_streak, 1),
         created_at: now,
         last_active_at: now,
         last_streak_increment_at: now,
-        progress_count: 3,
-        user_one_active_today: 1,
-        user_two_active_today: 1
+        progress_count: 1
       });
 
       await addLog(guildId, pair.id, null, "streak_formed", `Active streak pair formed between ${u1} and ${u2}`);
-      await logToGuild(client, guildId, `🔥 **Streak Baru Terbentuk!** Pasangan <@${u1}> & <@${u2}> berhasil menyelesaikan progress 3 hari!`);
-      await sendStreakCardNotification(client, guildId, pair.id, "New Streak");
-    } else {
-      await updatePair(pair.id, {
-        progress_count: newProgress,
-        last_active_at: now
-      });
-      await logToGuild(client, guildId, `◌ Pasangan <@${u1}> & <@${u2}> mencapai progress **${newProgress}/3** hari.`);
+      // Hari ke-1: tidak ada card, hanya log internal
+      await logToGuild(client, guildId, `🔥 **Streak Dimulai!** <@${u1}> & <@${u2}> sudah saling berinteraksi hari ini. Ayo jaga terus selama 3 hari untuk mendapat kartu pertama!`);
     }
   }
 }
@@ -1054,17 +1104,35 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
     const pair = await getPairById(pairId);
     if (!pair) return;
 
+    const guild = client.guilds.cache.get(guildId);
+    let memberOne = null;
+    let memberTwo = null;
+    if (guild) {
+      memberOne = await guild.members.fetch(pair.user_one).catch(() => null);
+      memberTwo = await guild.members.fetch(pair.user_two).catch(() => null);
+    }
+
     const userOne = await client.users.fetch(pair.user_one).catch(() => null);
     const userTwo = await client.users.fetch(pair.user_two).catch(() => null);
 
-    const nameOne = userOne ? userOne.username : "User One";
-    const nameTwo = userTwo ? userTwo.username : "User Two";
+    const nameOne = memberOne ? memberOne.displayName : (userOne ? userOne.displayName : "User One");
+    const nameTwo = memberTwo ? memberTwo.displayName : (userTwo ? userTwo.displayName : "User Two");
+    const handleOne = userOne ? `@${userOne.username}` : "@userone";
+    const handleTwo = userTwo ? `@${userTwo.username}` : "@usertwo";
+
     const avatarOne = userOne ? userOne.displayAvatarURL({ extension: "png", size: 128 }) : "";
     const avatarTwo = userTwo ? userTwo.displayAvatarURL({ extension: "png", size: 128 }) : "";
+
+    const actOne = await getLastActivity(pair.id, pair.user_one);
+    const actTwo = await getLastActivity(pair.id, pair.user_two);
+    const lastActiveOne = actOne ? actOne.last_message_at : null;
+    const lastActiveTwo = actTwo ? actTwo.last_message_at : null;
 
     const cardBuffer = await drawStreakCard({
       userOneName: nameOne,
       userTwoName: nameTwo,
+      userOneHandle: handleOne,
+      userTwoHandle: handleTwo,
       userOneAvatarUrl: avatarOne,
       userTwoAvatarUrl: avatarTwo,
       userOneActive: pair.user_one_active_today,
@@ -1072,29 +1140,109 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
       currentStreak: pair.current_streak,
       recoveryLeft: pair.recovery_left,
       nextMilestone: getNextMilestone(pair.current_streak),
-      cardType
+      cardType,
+      lastActiveOne,
+      lastActiveTwo
     });
 
     const attachment = new AttachmentBuilder(cardBuffer, { name: "streak_card.png" });
 
     const emoji = getMilestoneEmoji(pair.current_streak);
+    const streak = pair.current_streak;
+
+    // Helper: teks berjenjang berdasarkan level/nama flame streak (variatif & jelas)
+    function getTieredText() {
+      if (streak >= 1000) {
+        return {
+          title: `${emoji} Legendary Eternal Flame!`,
+          body: `Selamat <@${pair.user_one}> & <@${pair.user_two}>! Kalian telah mencapai milestone luar biasa **${streak} hari** bersama **Legendary Eternal Flame**. Tetap jaga api abadi ini!`
+        };
+      } else if (streak >= 900) {
+        return {
+          title: `${emoji} Cosmic Aurora Flame!`,
+          body: `Luar biasa! Streak <@${pair.user_one}> & <@${pair.user_two}> kini menyentuh **${streak} hari** di tingkat **Cosmic Aurora Flame**.`
+        };
+      } else if (streak >= 800) {
+        return {
+          title: `${emoji} Aurora Flame!`,
+          body: `Selamat kepada <@${pair.user_one}> & <@${pair.user_two}> atas pencapaian **${streak} hari** dengan **Aurora Flame**.`
+        };
+      } else if (streak >= 700) {
+        return {
+          title: `${emoji} Diamond Flame!`,
+          body: `Keren! Streak <@${pair.user_one}> & <@${pair.user_two}> telah resmi mencapai **${streak} hari** bersama **Diamond Flame**.`
+        };
+      } else if (streak >= 600) {
+        return {
+          title: `${emoji} Celestial Flame!`,
+          body: `Hebat! Pasangan <@${pair.user_one}> & <@${pair.user_two}> berhasil mempertahankan streak hingga **${streak} hari** dengan **Celestial Flame**.`
+        };
+      } else if (streak >= 500) {
+        return {
+          title: `${emoji} Diamond Flame!`,
+          body: `Selamat! Perjalanan streak <@${pair.user_one}> & <@${pair.user_two}> telah berhasil menembus **${streak} hari** bersama **Diamond Flame**.`
+        };
+      } else if (streak >= 400) {
+        return {
+          title: `${emoji} Ruby Flame!`,
+          body: `Selamat <@${pair.user_one}> & <@${pair.user_two}>! Streak kalian kini resmi berada di angka **${streak} hari** dengan **Ruby Flame**.`
+        };
+      } else if (streak >= 300) {
+        return {
+          title: `${emoji} Emerald Flame!`,
+          body: `Luar biasa! Streak <@${pair.user_one}> & <@${pair.user_two}> sukses berlanjut hingga **${streak} hari** dengan **Emerald Flame**.`
+        };
+      } else if (streak >= 200) {
+        return {
+          title: `${emoji} Crystal Flame!`,
+          body: `Selamat kepada <@${pair.user_one}> & <@${pair.user_two}> atas keberhasilan mencapai **${streak} hari** dengan **Crystal Flame**.`
+        };
+      } else if (streak >= 100) {
+        return {
+          title: `${emoji} Royal Flame!`,
+          body: `Hebat! Streak <@${pair.user_one}> & <@${pair.user_two}> kini genap berjalan **${streak} hari** di tingkat **Royal Flame**.`
+        };
+      } else if (streak >= 30) {
+        return {
+          title: `${emoji} Golden Orange Flame!`,
+          body: `Selamat! Pasangan <@${pair.user_one}> & <@${pair.user_two}> telah mencapai **${streak} hari** bersama **Golden Orange Flame**.`
+        };
+      } else if (streak >= 7) {
+        return {
+          title: `${emoji} Bright Orange Flame!`,
+          body: `Keren! Streak <@${pair.user_one}> & <@${pair.user_two}> berhasil dipertahankan hingga **${streak} hari** dengan **Bright Orange Flame**.`
+        };
+      } else {
+        return {
+          title: `${emoji} Orange Flame!`,
+          body: `Selamat! <@${pair.user_one}> & <@${pair.user_two}> kini resmi berjalan **${streak} hari** dengan **Orange Flame**. Jaga terus apinya!`
+        };
+      }
+    }
+
+    let embedTitle = "";
     let content = "";
-    if (cardType === "New Streak") {
-      content = `${emoji} **Yaaay! Streak Baru Terbentuk!**\nSelamat <@${pair.user_one}> & <@${pair.user_two}>! Jaga terus apinya yaa~ ˚ʚ♡ɞ˚`;
-    } else if (cardType === "Warning") {
-      content = `<a:22593alert:1523238009393123409> **Peringatan! Streak Hampir Padam!**\n<@${pair.user_one}> & <@${pair.user_two}>, salah satu dari kalian belum aktif hari ini. Ayo sapa satu sama lain sebelum reset! ⏱️`;
+
+    if (cardType === "Warning") {
+      embedTitle = "<a:22593alert:1523238009393123409> Streak Hampir Padam!";
+      content = `<@${pair.user_one}> & <@${pair.user_two}>, salah satu dari kalian belum aktif hari ini. Segera berinteraksi sebelum reset pukul 00:00 WIB!`;
     } else if (cardType === "Broken") {
-      content = `<a:aw_heartbreak1091957075757781032:1523337514599841842> **Streak Padam...**\nSayang sekali streak <@${pair.user_one}> & <@${pair.user_two}> terputus. Gunakan \`/streak recover\` untuk memulihkannya! 🩹`;
+      embedTitle = "<a:aw_heartbreak1091957075757781032:1523337514599841842> Streak Padam...";
+      content = `Sayang sekali streak <@${pair.user_one}> & <@${pair.user_two}> terputus. Gunakan \`/streak recover\` jika ingin memulihkannya.`;
     } else if (cardType === "Milestone") {
-      content = `${emoji} **Milestone Terlampaui!**\nSelamat <@${pair.user_one}> & <@${pair.user_two}> berhasil mencapai **${pair.current_streak} Hari**! Kalian luar biasa! ✨`;
+      embedTitle = `${emoji} Milestone Terlampaui!`;
+      content = `Selamat kepada <@${pair.user_one}> & <@${pair.user_two}> yang telah mencapai **${streak} Hari**! Pencapaian luar biasa!`;
     } else {
-      content = `${emoji} **Evaluasi Harian Streak**\nStreak harian <@${pair.user_one}> & <@${pair.user_two}> berlanjut menjadi **${pair.current_streak} Hari**! Keep it up! 🌸`;
+      // Daily Progress — tiered
+      const tiered = getTieredText();
+      embedTitle = tiered.title;
+      content = tiered.body;
     }
 
     const mInfo = getMilestoneInfo(pair.current_streak);
     const embedColor = cardType === "Broken" ? 0x4f545c : parseInt(mInfo.color.replace("#", ""), 16);
     const embed = new EmbedBuilder()
-      .setTitle("🔥 Mystral Flame Streak Notification")
+      .setTitle(embedTitle)
       .setDescription(content)
       .setColor(embedColor)
       .setImage("attachment://streak_card.png")
@@ -1123,27 +1271,11 @@ async function runDailyEvaluation(client) {
         const u2Active = pair.user_two_active_today;
 
         if (u1Active && u2Active) {
-          const newStreak = pair.current_streak + 1;
-          const highest = Math.max(pair.highest_streak, newStreak);
-          const isMilestone = MILESTONES.includes(newStreak) || (newStreak > 1000 && newStreak % 100 === 0);
-
           await updatePair(pair.id, {
-            current_streak: newStreak,
-            highest_streak: highest,
-            status: "active",
             user_one_active_today: 0,
-            user_two_active_today: 0,
-            last_streak_increment_at: Date.now()
+            user_two_active_today: 0
           });
-
-          await addLog(guildId, pair.id, null, "daily_increment", `Streak incremented to ${newStreak}`);
           await clearActivity(pair.id);
-
-          if (isMilestone) {
-            await sendStreakCardNotification(client, guildId, pair.id, "Milestone");
-          } else {
-            await sendStreakCardNotification(client, guildId, pair.id, "Daily Progress");
-          }
         } else {
           if (pair.status === "active") {
             await updatePair(pair.id, {
@@ -1164,9 +1296,58 @@ async function runDailyEvaluation(client) {
           }
         }
       }
+      await dbRun(
+        `UPDATE streak_pairs 
+         SET user_one_active_today = 0, user_two_active_today = 0 
+         WHERE guild_id = ? AND status = 'forming'`,
+        [guildId]
+      );
     } catch (err) {
       console.error(`[STREAK EVAL ERROR] Guild ${guildId}:`, err);
     }
+  }
+}
+
+async function sendDmReminders(client) {
+  console.log("[STREAK] Running 21:00 WIB DM Reminders...");
+  try {
+    const pairs = await dbAll(`SELECT * FROM streak_pairs WHERE status IN ('active', 'warning')`);
+    for (const pair of pairs) {
+      const u1Active = pair.user_one_active_today;
+      const u2Active = pair.user_two_active_today;
+
+      if (u1Active && u2Active) continue;
+
+      const u1User = await client.users.fetch(pair.user_one).catch(() => null);
+      const u2User = await client.users.fetch(pair.user_two).catch(() => null);
+
+      const u1Name = u1User ? u1User.username : "Partner";
+      const u2Name = u2User ? u2User.username : "Partner";
+
+      if (!u1Active && u1User) {
+        const embed = new EmbedBuilder()
+          .setTitle("⏰ Pengingat Streak Hampir Padam!")
+          .setDescription(`Halo **${u1User.username}**, streak kamu dengan **${u2Name}** hari ini belum lengkap!\n\nSegera balas chat atau mention **${u2Name}** di server sebelum reset pukul **00:00 WIB** agar streak kalian yang mencapai **${pair.current_streak} Hari** tidak padam! 🕯️`)
+          .setColor(0xffaa00)
+          .setTimestamp();
+        await u1User.send({ embeds: [embed] }).catch(() => {
+          console.log(`[STREAK DM] Failed to DM ${pair.user_one} (probably closed DMs)`);
+        });
+      }
+
+      if (!u2Active && u2User) {
+        const embed = new EmbedBuilder()
+          .setTitle("⏰ Pengingat Streak Hampir Padam!")
+          .setDescription(`Halo **${u2User.username}**, streak kamu dengan **${u1Name}** hari ini belum lengkap!\n\nSegera balas chat atau mention **${u1Name}** di server sebelum reset pukul **00:00 WIB** agar streak kalian yang mencapai **${pair.current_streak} Hari** tidak padam! 🕯️`)
+          .setColor(0xffaa00)
+          .setTimestamp();
+        await u2User.send({ embeds: [embed] }).catch(() => {
+          console.log(`[STREAK DM] Failed to DM ${pair.user_two} (probably closed DMs)`);
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[STREAK DM REMINDER ERROR]", e);
   }
 }
 
@@ -1211,6 +1392,32 @@ async function breakStreak(guildId, userId) {
   return { success: true, partner: pair.user_one === userId ? pair.user_two : pair.user_one };
 }
 
+async function resetMonthlyRecoveryTokens(client) {
+  console.log("[STREAK] Running Monthly Recovery Tokens Reset...");
+  try {
+    // Reset default ke 5 untuk seluruh pasangan
+    await dbRun("UPDATE streak_pairs SET recovery_left = 5");
+
+    // Sesuaikan dengan pengaturan spesifik guild jika ada
+    const settingsList = await dbAll("SELECT guild_id, recovery_limit FROM streak_settings");
+    for (const setting of settingsList) {
+      const limit = setting.recovery_limit !== null ? setting.recovery_limit : 5;
+      await dbRun(
+        "UPDATE streak_pairs SET recovery_left = ? WHERE guild_id = ?",
+        [limit, setting.guild_id]
+      );
+      await logToGuild(
+        client,
+        setting.guild_id,
+        `📅 **Reset Bulanan:** Kuota pemulihan (*recovery*) seluruh pasangan streak telah di-reset kembali menjadi **${limit}** untuk bulan baru.`
+      );
+    }
+    console.log("[STREAK] Monthly recovery tokens successfully reset!");
+  } catch (err) {
+    console.error("[STREAK MONTHLY RESET ERROR]", err);
+  }
+}
+
 let cronInterval = null;
 function startScheduler(client) {
   if (cronInterval) clearInterval(cronInterval);
@@ -1234,6 +1441,21 @@ function startScheduler(client) {
         if (hh === 0 && mm === 0) {
           console.log("[STREAK] Running 00:00 WIB Reset Evaluation...");
           await runDailyEvaluation(client);
+
+          // Reset token recovery setiap tanggal 1
+          const dayFormatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: "Asia/Jakarta",
+            day: "numeric"
+          });
+          const dayOfMonth = parseInt(dayFormatter.format(now), 10);
+          if (dayOfMonth === 1) {
+            await resetMonthlyRecoveryTokens(client);
+          }
+        }
+
+        if (hh === 21 && mm === 0) {
+          console.log("[STREAK] Running 21:00 WIB DM Reminders...");
+          await sendDmReminders(client);
         }
       }
     } catch (e) {
@@ -1284,6 +1506,20 @@ const streakCommandBuilder = new SlashCommandBuilder()
       .setDescription("Bubarkan hubungan streak dengan pasanganmu")
   )
   .addSubcommand(sc =>
+    sc.setName("reset")
+      .setDescription("Reset data streak (Khusus Admin)")
+      .addStringOption(o =>
+        o.setName("tipe")
+          .setDescription("Reset semua user atau per user tertentu")
+          .setRequired(true)
+          .addChoices(
+            { name: "Semua User (All)", value: "all" },
+            { name: "Per User (User)", value: "user" }
+          )
+      )
+      .addUserOption(o => o.setName("member").setDescription("Pilih member yang ingin di-reset (jika tipe = user)").setRequired(false))
+  )
+  .addSubcommand(sc =>
     sc.setName("info")
       .setDescription("Informasi cara kerja dan daftar milestone tier Mystral Flame Streak")
   )
@@ -1312,6 +1548,53 @@ async function handlePrefixCommand(message, client) {
   const settings = await getSettings(guildId);
   if (subcommand !== "settings" && (!settings || !settings.enabled)) {
     return message.reply("❌ Sistem **Mystral Flame Streak** belum diaktifkan di server ini oleh Administrator.");
+  }
+
+  // Subcommand: SET / GRANT (Owner Only)
+  if (subcommand === "set" || subcommand === "grant") {
+    const isOwner = message.author.id === process.env.BOT_OWNER_ID;
+    if (!isOwner) {
+      return message.reply("❌ Perintah ini hanya dapat dijalankan oleh Bot Owner.");
+    }
+
+    const userMatches = [...message.content.matchAll(/<@!?(\d{15,25})>/g)];
+    const userIds = userMatches.map(m => m[1]);
+
+    for (const arg of args) {
+      if (/^\d{15,25}$/.test(arg) && !userIds.includes(arg)) {
+        userIds.push(arg);
+      }
+    }
+
+    if (userIds.length < 2) {
+      return message.reply("❌ **Format Salah!** Harap mention 2 user atau berikan 2 ID user.\nContoh: `cstreak set @UserA @UserB 30`");
+    }
+
+    const dayArg = args.find(arg => /^\d+$/.test(arg) && !userIds.includes(arg));
+    if (!dayArg) {
+      return message.reply("❌ **Format Salah!** Harap tentukan jumlah hari (angka).\nContoh: `cstreak set @UserA @UserB 30`");
+    }
+
+    const days = parseInt(dayArg, 10);
+    const [u1, u2] = [userIds[0], userIds[1]].sort();
+
+    let pair = await getPair(guildId, u1, u2);
+    if (!pair) {
+      pair = await createPair(guildId, u1, u2);
+    }
+
+    await updatePair(pair.id, {
+      current_streak: days,
+      highest_streak: Math.max(pair.highest_streak, days),
+      status: "active",
+      user_one_active_today: 1,
+      user_two_active_today: 1
+    });
+
+    await addLog(guildId, pair.id, message.author.id, "streak_set", `Owner set streak to ${days} days`);
+    await logToGuild(client, guildId, `⚙️ **Streak Set:** Owner <@${message.author.id}> mengatur streak antara <@${u1}> & <@${u2}> menjadi **${days} Hari**.`);
+
+    return message.reply(`✅ **Berhasil!** Streak antara <@${u1}> dan <@${u2}> telah diatur menjadi **${days} Hari** (Status: ACTIVE).`);
   }
 
   // Subcommand: PROFILE (Default)
@@ -1414,44 +1697,132 @@ async function handlePrefixCommand(message, client) {
       return message.reply(`❌ **${targetUser.username}** belum memiliki pasangan streak aktif maupun padam.`);
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle(`📜 Daftar Streak — ${targetUser.username}`)
-      .setColor(0xff7700)
-      .setTimestamp();
+    const activeItems = allActive.map(pair => ({ type: "active", pair }));
+    const brokenItems = allBroken.map(pair => ({ type: "broken", pair }));
+    const totalItems = [...activeItems, ...brokenItems];
 
-    const lines = [];
+    const totalPages = Math.ceil(totalItems.length / 10);
+    let currentPage = 0;
 
-    if (allActive.length > 0) {
-      lines.push("🔥 **STREAK AKTIF:**");
-      for (const pair of allActive) {
-        const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
-        const partner = await client.users.fetch(partnerId).catch(() => null);
-        const name = partner ? partner.username : partnerId;
-        const emoji = getMilestoneEmoji(pair.current_streak);
+    async function buildPage(page) {
+      const start = page * 10;
+      const end = start + 10;
+      const pageItems = totalItems.slice(start, end);
+      const lines = [];
 
-        const isTodayDone = pair.user_one === targetUser.id ? pair.user_one_active_today : pair.user_two_active_today;
-        const partnerTodayDone = pair.user_one === targetUser.id ? pair.user_two_active_today : pair.user_one_active_today;
+      const pageActive = pageItems.filter(item => item.type === "active");
+      if (pageActive.length > 0) {
+        lines.push("🔥 **STREAK AKTIF:**");
+        const renderedActive = await Promise.all(
+          pageActive.map(async ({ pair }) => {
+            const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
+            const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
+            const name = partner ? partner.username : partnerId;
+            const emoji = getMilestoneEmoji(pair.current_streak);
+            const isTodayDone = pair.user_one === targetUser.id ? pair.user_one_active_today : pair.user_two_active_today;
+            const partnerTodayDone = pair.user_one === targetUser.id ? pair.user_two_active_today : pair.user_one_active_today;
+            const statusIndicator = isTodayDone && partnerTodayDone ? "🔥" : "⏳";
+            return `• ${emoji} **${name}** — \`${pair.current_streak} Hari\` (Status: *${pair.status.toUpperCase()}*) ${statusIndicator}`;
+          })
+        );
+        lines.push(...renderedActive);
+      }
 
-        const statusIndicator = isTodayDone && partnerTodayDone ? "🔥" : "⏳";
+      const pageBroken = pageItems.filter(item => item.type === "broken");
+      if (pageBroken.length > 0) {
+        if (lines.length > 0) lines.push("");
+        lines.push("🕯️ **STREAK PADAM (BROKEN):**");
+        const renderedBroken = await Promise.all(
+          pageBroken.map(async ({ pair }) => {
+            const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
+            const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
+            const name = partner ? partner.username : partnerId;
+            return `• <:aw_heartbreak1091957075757781032:1523337514599841842> **${name}** — \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`;
+          })
+        );
+        lines.push(...renderedBroken);
+      }
 
-        lines.push(`• ${emoji} **${name}** — \`${pair.current_streak} Hari\` (Status: *${pair.status.toUpperCase()}*) ${statusIndicator}`);
+      return new EmbedBuilder()
+        .setTitle(`📜 Daftar Streak — ${targetUser.username}`)
+        .setDescription(lines.join("\n"))
+        .setColor(0xff7700)
+        .setFooter({ text: `Halaman ${page + 1} dari ${totalPages} (Total ${totalItems.length} pasangan)` })
+        .setTimestamp();
+    }
+
+    function buildButtons(page) {
+      const row = new ActionRowBuilder();
+      const prevBtn = new ButtonBuilder()
+        .setCustomId("prev")
+        .setLabel("Prev")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page === 0);
+
+      const nextBtn = new ButtonBuilder()
+        .setCustomId("next")
+        .setLabel("Next")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page === totalPages - 1);
+
+      row.addComponents(prevBtn, nextBtn);
+      return row;
+    }
+
+    const embed = await buildPage(0);
+    const components = totalPages > 1 ? [buildButtons(0)] : [];
+    const replyMsg = await message.reply({ embeds: [embed], components });
+
+    if (totalPages > 1) {
+      const filter = (i) => i.user.id === runnerId;
+      const collector = replyMsg.createMessageComponentCollector({ filter, time: 60000 });
+
+      collector.on("collect", async (i) => {
+        if (i.customId === "prev") {
+          currentPage = Math.max(0, currentPage - 1);
+        } else if (i.customId === "next") {
+          currentPage = Math.min(totalPages - 1, currentPage + 1);
+        }
+        const nextEmbed = await buildPage(currentPage);
+        await i.update({ embeds: [nextEmbed], components: [buildButtons(currentPage)] });
+      });
+
+      collector.on("end", () => {
+        replyMsg.edit({ components: [] }).catch(() => { });
+      });
+    }
+    return;
+  }
+
+  // Subcommand: RESET
+  if (subcommand === "reset") {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return message.reply("❌ Kamu tidak memiliki izin (Administrator) untuk menjalankan perintah ini.");
+    }
+
+    const typeArg = args[0]?.toLowerCase();
+    if (typeArg === "all") {
+      await resetAllGuildStreaks(guildId);
+      await logToGuild(client, guildId, `⚙️ **Reset All:** Admin <@${runnerId}> melakukan reset total seluruh data streak di server ini.`);
+      return message.reply("✅ **Reset Total Berhasil!** Seluruh data streak dan log di server ini telah dihapus.");
+    }
+
+    // If target is a user
+    let targetUser = message.mentions.users.first();
+    if (!targetUser && args[0]) {
+      const cleanedId = (args[0] === "user" ? args[1] : args[0])?.replace(/[<@!>]/g, "");
+      if (cleanedId) {
+        targetUser = await client.users.fetch(cleanedId).catch(() => null);
       }
     }
 
-    if (allBroken.length > 0) {
-      if (lines.length > 0) lines.push(""); // spacer
-      lines.push("🕯️ **STREAK PADAM (BROKEN):**");
-      for (const pair of allBroken) {
-        const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
-        const partner = await client.users.fetch(partnerId).catch(() => null);
-        const name = partner ? partner.username : partnerId;
-
-        lines.push(`• <:aw_heartbreak1091957075757781032:1523337514599841842> **${name}** — \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`);
-      }
+    if (!targetUser) {
+      return message.reply("❌ **Format Salah!** Gunakan:\n• `cstreak reset all` untuk me-reset semua user.\n• `cstreak reset @User` untuk me-reset user tertentu.");
     }
 
-    embed.setDescription(lines.join("\n"));
-    return message.reply({ embeds: [embed] });
+    await resetUserGuildStreaks(guildId, targetUser.id);
+    await logToGuild(client, guildId, `⚙️ **Reset User:** Admin <@${runnerId}> melakukan reset seluruh data streak milik <@${targetUser.id}>.`);
+    return message.reply(`✅ **Reset User Berhasil!** Seluruh hubungan streak milik **${targetUser.username}** telah dihapus.`);
   }
 
   // Subcommand: LEADERBOARD
@@ -1594,8 +1965,7 @@ async function handlePrefixCommand(message, client) {
         "**Tingkatan Milestone (Flame Tiers):**",
         "• `3 Hari` — <:3haritiktokorangeflame:1523332105319485562> Orange Flame",
         "• `7 Hari` — <:7haribrightorangeflame:1523332107533811744> Bright Orange Flame",
-        "• `30 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Golden Orange Flame",
-        "• `100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Royal Flame",
+        "• `30-100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Purple Royal Flame",
         "• `200 Hari` — <:200haricrystalflamegrey:1523332112030371940> Crystal Flame",
         "• `300 Hari` — <:300hariemeralflame:1523332114819579944> Emerald Flame",
         "• `400 Hari` — <:400harirubyredflame:1523332117193293966> Ruby Flame",
@@ -1715,44 +2085,127 @@ async function handleInteraction(interaction, client) {
       return interaction.editReply(`❌ **${targetUser.username}** belum memiliki pasangan streak aktif maupun padam.`);
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle(`📜 Daftar Streak — ${targetUser.username}`)
-      .setColor(0xff7700)
-      .setTimestamp();
+    const activeItems = allActive.map(pair => ({ type: "active", pair }));
+    const brokenItems = allBroken.map(pair => ({ type: "broken", pair }));
+    const totalItems = [...activeItems, ...brokenItems];
 
-    const lines = [];
+    const totalPages = Math.ceil(totalItems.length / 10);
+    let currentPage = 0;
 
-    if (allActive.length > 0) {
-      lines.push("🔥 **STREAK AKTIF:**");
-      for (const pair of allActive) {
-        const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
-        const partner = await client.users.fetch(partnerId).catch(() => null);
-        const name = partner ? partner.username : partnerId;
-        const emoji = getMilestoneEmoji(pair.current_streak);
+    async function buildPage(page) {
+      const start = page * 10;
+      const end = start + 10;
+      const pageItems = totalItems.slice(start, end);
+      const lines = [];
 
-        const isTodayDone = pair.user_one === targetUser.id ? pair.user_one_active_today : pair.user_two_active_today;
-        const partnerTodayDone = pair.user_one === targetUser.id ? pair.user_two_active_today : pair.user_one_active_today;
-
-        const statusIndicator = isTodayDone && partnerTodayDone ? "🔥" : "⏳";
-
-        lines.push(`• ${emoji} **${name}** — \`${pair.current_streak} Hari\` (Status: *${pair.status.toUpperCase()}*) ${statusIndicator}`);
+      const pageActive = pageItems.filter(item => item.type === "active");
+      if (pageActive.length > 0) {
+        lines.push("🔥 **STREAK AKTIF:**");
+        const renderedActive = await Promise.all(
+          pageActive.map(async ({ pair }) => {
+            const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
+            const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
+            const name = partner ? partner.username : partnerId;
+            const emoji = getMilestoneEmoji(pair.current_streak);
+            const isTodayDone = pair.user_one === targetUser.id ? pair.user_one_active_today : pair.user_two_active_today;
+            const partnerTodayDone = pair.user_one === targetUser.id ? pair.user_two_active_today : pair.user_one_active_today;
+            const statusIndicator = isTodayDone && partnerTodayDone ? "🔥" : "⏳";
+            return `• ${emoji} **${name}** — \`${pair.current_streak} Hari\` (Status: *${pair.status.toUpperCase()}*) ${statusIndicator}`;
+          })
+        );
+        lines.push(...renderedActive);
       }
+
+      const pageBroken = pageItems.filter(item => item.type === "broken");
+      if (pageBroken.length > 0) {
+        if (lines.length > 0) lines.push("");
+        lines.push("🕯️ **STREAK PADAM (BROKEN):**");
+        const renderedBroken = await Promise.all(
+          pageBroken.map(async ({ pair }) => {
+            const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
+            const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
+            const name = partner ? partner.username : partnerId;
+            return `• <:aw_heartbreak1091957075757781032:1523337514599841842> **${name}** — \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`;
+          })
+        );
+        lines.push(...renderedBroken);
+      }
+
+      return new EmbedBuilder()
+        .setTitle(`📜 Daftar Streak — ${targetUser.username}`)
+        .setDescription(lines.join("\n"))
+        .setColor(0xff7700)
+        .setFooter({ text: `Halaman ${page + 1} dari ${totalPages} (Total ${totalItems.length} pasangan)` })
+        .setTimestamp();
     }
 
-    if (allBroken.length > 0) {
-      if (lines.length > 0) lines.push(""); // spacer
-      lines.push("🕯️ **STREAK PADAM (BROKEN):**");
-      for (const pair of allBroken) {
-        const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
-        const partner = await client.users.fetch(partnerId).catch(() => null);
-        const name = partner ? partner.username : partnerId;
+    function buildButtons(page) {
+      const row = new ActionRowBuilder();
+      const prevBtn = new ButtonBuilder()
+        .setCustomId("prev")
+        .setLabel("Prev")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page === 0);
 
-        lines.push(`• <:aw_heartbreak1091957075757781032:1523337514599841842> **${name}** — \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`);
-      }
+      const nextBtn = new ButtonBuilder()
+        .setCustomId("next")
+        .setLabel("Next")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(page === totalPages - 1);
+
+      row.addComponents(prevBtn, nextBtn);
+      return row;
     }
 
-    embed.setDescription(lines.join("\n"));
-    return interaction.editReply({ embeds: [embed] });
+    const embed = await buildPage(0);
+    const components = totalPages > 1 ? [buildButtons(0)] : [];
+    const replyMsg = await interaction.editReply({ embeds: [embed], components });
+
+    if (totalPages > 1) {
+      const filter = (i) => i.user.id === interaction.user.id;
+      const collector = replyMsg.createMessageComponentCollector({ filter, time: 60000 });
+
+      collector.on("collect", async (i) => {
+        if (i.customId === "prev") {
+          currentPage = Math.max(0, currentPage - 1);
+        } else if (i.customId === "next") {
+          currentPage = Math.min(totalPages - 1, currentPage + 1);
+        }
+        const nextEmbed = await buildPage(currentPage);
+        await i.update({ embeds: [nextEmbed], components: [buildButtons(currentPage)] });
+      });
+
+      collector.on("end", () => {
+        interaction.editReply({ components: [] }).catch(() => { });
+      });
+    }
+  }
+
+  if (subcommand === "reset") {
+    await interaction.deferReply({ ephemeral: true });
+
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.editReply({ content: "❌ Kamu tidak memiliki izin (Administrator) untuk menjalankan perintah ini." });
+    }
+
+    const type = interaction.options.getString("tipe");
+
+    if (type === "all") {
+      await resetAllGuildStreaks(guildId);
+      await logToGuild(client, guildId, `⚙️ **Reset All:** Admin <@${runnerId}> melakukan reset total seluruh data streak di server ini.`);
+      return interaction.editReply({ content: "✅ **Reset Total Berhasil!** Seluruh data streak dan log di server ini telah dihapus." });
+    }
+
+    if (type === "user") {
+      const targetUser = interaction.options.getUser("member");
+      if (!targetUser) {
+        return interaction.editReply({ content: "❌ **Error:** Harap pilih member yang ingin di-reset pada opsi input!" });
+      }
+
+      await resetUserGuildStreaks(guildId, targetUser.id);
+      await logToGuild(client, guildId, `⚙️ **Reset User:** Admin <@${runnerId}> melakukan reset seluruh data streak milik <@${targetUser.id}>.`);
+      return interaction.editReply({ content: `✅ **Reset User Berhasil!** Seluruh hubungan streak milik **${targetUser.username}** telah dihapus.` });
+    }
   }
 
   if (subcommand === "leaderboard") {
@@ -1886,10 +2339,9 @@ async function handleInteraction(interaction, client) {
         "• Reset evaluasi dilakukan setiap pukul **00.00 WIB**.",
         "",
         "**Tingkatan Milestone (Flame Tiers):**",
-        "• `3 Hari` — <:3haritiktokorangeflame:1523332105319485562> TikTok Orange Flame",
+        "• `3 Hari` — <:3haritiktokorangeflame:1523332105319485562> Orange Flame",
         "• `7 Hari` — <:7haribrightorangeflame:1523332107533811744> Bright Orange Flame",
-        "• `30 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Golden Orange Flame",
-        "• `100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Royal Flame",
+        "• `30-100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Purple Royal Flame",
         "• `200 Hari` — <:200haricrystalflamegrey:1523332112030371940> Crystal Flame",
         "• `300 Hari` — <:300hariemeralflame:1523332114819579944> Emerald Flame",
         "• `400 Hari` — <:400harirubyredflame:1523332117193293966> Ruby Flame",
