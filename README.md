@@ -12,17 +12,7 @@ Sistem interaksi harian dua arah otomatis antar-member tanpa perlu pairing manua
 * **Evaluasi Reset:** Mengevaluasi kegagalan interaksi setiap hari pukul **00:00 WIB** (Asia/Jakarta).
 * **Pengingat Otomatis:** Bot mengirim pengingat via DM pada pukul **21:00 WIB** jika salah satu pasangan belum melengkapi interaksi harian.
 * **Token Pemulihan (Recovery):** Dilengkapi kuota **5 token pemulihan per bulan** yang di-reset otomatis setiap tanggal 1.
-* **Canvas Premium:** Kartu status perkembangan streak beresolusi tinggi dengan tingkatan evolusi api (*Flame Tiers*):
-  - <:3haritiktokorangeflame:1523332105319485562> **3 Hari:** Orange Flame
-  - <:7haribrightorangeflame:1523332107533811744> **7 Hari:** Bright Orange Flame
-  - <:30100hari_flamepurpleroyal:1523332110067306656> **30-100 Hari:** Purple Royal Flame
-  - <:200haricrystalflamegrey:1523332112030371940> **200 Hari:** Crystal Flame
-  - <:300hariemeralflame:1523332114819579944> **300 Hari:** Emerald Flame
-  - <:400harirubyredflame:1523332117193293966> **400 Hari:** Ruby Flame
-  - <:500600_blueroyalfame:1523332118917152779> **500-600 Hari:** Blue Royal Flame
-  - <:700haridiamondflame:1523332121333334016> **700 Hari:** Diamond Flame
-  - <:800900hariauroraflame:1523332124667805746> **800-900 Hari:** Aurora Flame
-  - <:1000haridanseterusnyalegendaryeternalflame:1523332127176003805> **1000+ Hari:** Legendary Eternal Flame (Eternal Legend)
+* **Canvas Premium:** Kartu status perkembangan streak beresolusi tinggi dengan tingkatan evolusi api (*Flame Tiers*) dinamis yang berubah secara otomatis mengikuti lama hari streak yang dipertahankan.
 
 ### 2. 🎴 Tarot Readings
 * Ambil kartu tarot harian Anda (`/tarot pull`) untuk memperoleh ramalan bermakna yang disajikan dengan detail tema, fokus, dan ilustrasi Canvas.
@@ -47,6 +37,18 @@ Sistem interaksi harian dua arah otomatis antar-member tanpa perlu pairing manua
 ### 7. 🔗 FAQ Manager & Self-Roles Panel
 * Menyajikan FAQ interaktif melalui menu select dinamis.
 * Panel *self-roles* sekali klik dengan pilihan: Generasi (Age), Minat (Interest), Wilayah (Region), Status, dan Notifikasi (Ping).
+
+### 8. ✉️ Menfess System
+* Pengiriman pesan rahasia secara anonim ke channel menfess tujuan, lengkap dengan log peninjauan rahasia oleh admin/staf.
+
+### 9. ⏰ Reminder System
+* Sistem pengingat waktu otomatis yang mendukung format durasi menit (`/remind`) maupun format jam/tanggal spesifik (`/remind_at`).
+
+### 10. 🎁 Giveaway Manager
+* Pembuatan giveaway secara langsung lewat perintah slash dengan opsi durasi, nama hadiah, dan jumlah pemenang.
+
+### 11. 💬 Quote Generator
+* Membuat kutipan gambar estetik (Canvas) dari pesan member lain menggunakan aplikasi context menu klik-kanan atau prefix command.
 
 ---
 
