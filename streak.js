@@ -158,7 +158,7 @@ async function createPair(guildId, userA, userB) {
   const now = Date.now();
   await dbRun(
     `INSERT INTO streak_pairs (guild_id, user_one, user_two, current_streak, highest_streak, recovery_left, status, created_at, last_active_at, progress_count)
-     VALUES (?, ?, ?, 0, 0, 5, 'active', ?, ?, 1)`,
+     VALUES (?, ?, ?, 0, 0, 5, 'forming', ?, ?, 1)`,
     [guildId, u1, u2, now, now]
   );
   return await getPair(guildId, u1, u2);
@@ -1128,24 +1128,27 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
     const lastActiveOne = actOne ? actOne.last_message_at : null;
     const lastActiveTwo = actTwo ? actTwo.last_message_at : null;
 
-    const cardBuffer = await drawStreakCard({
-      userOneName: nameOne,
-      userTwoName: nameTwo,
-      userOneHandle: handleOne,
-      userTwoHandle: handleTwo,
-      userOneAvatarUrl: avatarOne,
-      userTwoAvatarUrl: avatarTwo,
-      userOneActive: pair.user_one_active_today,
-      userTwoActive: pair.user_two_active_today,
-      currentStreak: pair.current_streak,
-      recoveryLeft: pair.recovery_left,
-      nextMilestone: getNextMilestone(pair.current_streak),
-      cardType,
-      lastActiveOne,
-      lastActiveTwo
-    });
+    let attachment = null;
+    if (cardType !== "Warning") {
+      const cardBuffer = await drawStreakCard({
+        userOneName: nameOne,
+        userTwoName: nameTwo,
+        userOneHandle: handleOne,
+        userTwoHandle: handleTwo,
+        userOneAvatarUrl: avatarOne,
+        userTwoAvatarUrl: avatarTwo,
+        userOneActive: pair.user_one_active_today,
+        userTwoActive: pair.user_two_active_today,
+        currentStreak: pair.current_streak,
+        recoveryLeft: pair.recovery_left,
+        nextMilestone: getNextMilestone(pair.current_streak),
+        cardType,
+        lastActiveOne,
+        lastActiveTwo
+      });
 
-    const attachment = new AttachmentBuilder(cardBuffer, { name: "streak_card.png" });
+      attachment = new AttachmentBuilder(cardBuffer, { name: "streak_card.png" });
+    }
 
     const emoji = getMilestoneEmoji(pair.current_streak);
     const streak = pair.current_streak;
@@ -1245,10 +1248,18 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
       .setTitle(embedTitle)
       .setDescription(content)
       .setColor(embedColor)
-      .setImage("attachment://streak_card.png")
       .setTimestamp();
 
-    await channel.send({ embeds: [embed], files: [attachment] });
+    if (cardType !== "Warning") {
+      embed.setImage("attachment://streak_card.png");
+    }
+
+    const payload = { embeds: [embed] };
+    if (attachment) {
+      payload.files = [attachment];
+    }
+
+    await channel.send(payload);
   } catch (e) {
     console.error("[STREAK CARD NOTIFICATION ERROR]", e);
   }
@@ -1309,7 +1320,7 @@ async function runDailyEvaluation(client) {
 }
 
 async function sendDmReminders(client) {
-  console.log("[STREAK] Running 21:00 WIB DM Reminders...");
+  console.log("[STREAK] Running 23:00 WIB DM Reminders...");
   try {
     const pairs = await dbAll(`SELECT * FROM streak_pairs WHERE status IN ('active', 'warning')`);
     for (const pair of pairs) {
@@ -1453,8 +1464,8 @@ function startScheduler(client) {
           }
         }
 
-        if (hh === 21 && mm === 0) {
-          console.log("[STREAK] Running 21:00 WIB DM Reminders...");
+        if (hh === 23 && mm === 0) {
+          console.log("[STREAK] Running 23:00 WIB DM Reminders...");
           await sendDmReminders(client);
         }
       }
