@@ -1320,7 +1320,7 @@ async function runDailyEvaluation(client) {
 }
 
 async function sendDmReminders(client) {
-  console.log("[STREAK] Running 23:00 WIB DM Reminders...");
+  console.log("[STREAK] Running 22:00 WIB DM Reminders...");
   try {
     const pairs = await dbAll(`SELECT * FROM streak_pairs WHERE status IN ('active', 'warning')`);
     for (const pair of pairs) {
@@ -1329,19 +1329,26 @@ async function sendDmReminders(client) {
 
       if (u1Active && u2Active) continue;
 
+      const settings = await getSettings(pair.guild_id);
+      const chatChannelId = settings?.chat_channel;
+      const chatChannelLink = chatChannelId 
+        ? `https://discord.com/channels/${pair.guild_id}/${chatChannelId}` 
+        : null;
+
       const u1User = await client.users.fetch(pair.user_one).catch(() => null);
       const u2User = await client.users.fetch(pair.user_two).catch(() => null);
-
-      const u1Name = u1User ? u1User.username : "Partner";
-      const u2Name = u2User ? u2User.username : "Partner";
 
       if (!u1Active && u1User) {
         const embed = new EmbedBuilder()
           .setTitle("⏰ Pengingat Streak Hampir Padam!")
-          .setDescription(`Halo **${u1User.username}**, streak kamu dengan **${u2Name}** hari ini belum lengkap!\n\nSegera balas chat atau mention **${u2Name}** di server sebelum reset pukul **00:00 WIB** agar streak kalian yang mencapai **${pair.current_streak} Hari** tidak padam! 🕯️`)
+          .setDescription(
+            `Halo <@${pair.user_one}>, hubungan streak-mu dengan <@${pair.user_two}> hari ini belum lengkap!\n\n` +
+            `Segera balas chat atau mention <@${pair.user_two}> di channel <#${chatChannelId}> sebelum reset pukul **00:00 WIB** agar streak kalian yang mencapai **${pair.current_streak} Hari** tidak padam! 🕯️\n\n` +
+            (chatChannelLink ? `🔗 **Link Obrolan:** [Buka Channel Chat](${chatChannelLink})` : "")
+          )
           .setColor(0xffaa00)
           .setTimestamp();
-        await u1User.send({ embeds: [embed] }).catch(() => {
+        await u1User.send({ content: `<@${pair.user_one}>`, embeds: [embed] }).catch(() => {
           console.log(`[STREAK DM] Failed to DM ${pair.user_one} (probably closed DMs)`);
         });
       }
@@ -1349,10 +1356,14 @@ async function sendDmReminders(client) {
       if (!u2Active && u2User) {
         const embed = new EmbedBuilder()
           .setTitle("⏰ Pengingat Streak Hampir Padam!")
-          .setDescription(`Halo **${u2User.username}**, streak kamu dengan **${u1Name}** hari ini belum lengkap!\n\nSegera balas chat atau mention **${u1Name}** di server sebelum reset pukul **00:00 WIB** agar streak kalian yang mencapai **${pair.current_streak} Hari** tidak padam! 🕯️`)
+          .setDescription(
+            `Halo <@${pair.user_two}>, hubungan streak-mu dengan <@${pair.user_one}> hari ini belum lengkap!\n\n` +
+            `Segera balas chat atau mention <@${pair.user_one}> di channel <#${chatChannelId}> sebelum reset pukul **00:00 WIB** agar streak kalian yang mencapai **${pair.current_streak} Hari** tidak padam! 🕯️\n\n` +
+            (chatChannelLink ? `🔗 **Link Obrolan:** [Buka Channel Chat](${chatChannelLink})` : "")
+          )
           .setColor(0xffaa00)
           .setTimestamp();
-        await u2User.send({ embeds: [embed] }).catch(() => {
+        await u2User.send({ content: `<@${pair.user_two}>`, embeds: [embed] }).catch(() => {
           console.log(`[STREAK DM] Failed to DM ${pair.user_two} (probably closed DMs)`);
         });
       }
@@ -1464,8 +1475,8 @@ function startScheduler(client) {
           }
         }
 
-        if (hh === 23 && mm === 0) {
-          console.log("[STREAK] Running 23:00 WIB DM Reminders...");
+        if (hh === 22 && mm === 0) {
+          console.log("[STREAK] Running 22:00 WIB DM Reminders...");
           await sendDmReminders(client);
         }
       }
