@@ -34,6 +34,7 @@ const {
   PermissionFlagsBits,
   FileUploadBuilder,
   LabelBuilder,
+  ChannelType,
 } = require("discord.js");
 
 const { createCanvas, loadImage, GlobalFonts } = require("@napi-rs/canvas");
@@ -1337,36 +1338,77 @@ function todDisplayCode(question) {
   return `C-${hash.toString(36).toUpperCase().slice(-3).padStart(3, "0")}`;
 }
 
-function todCard(question, requestedBy) {
-  return new EmbedBuilder()
+function todCard(question, challengerId, targetId, status = "pending") {
+  const embed = new EmbedBuilder()
     .setTitle(question.type === "dare" ? "🎲 Dare" : "🕯️ Truth")
-    .setColor(0x1f1b24)
     .setDescription(`**${question.question}**`)
-    .addFields(
-      {
-        name: "Info",
-        value:
-          `Requested by <@${requestedBy}>\n` +
-          `\`${String(question.type).toUpperCase()}\` • \`${question.rating}\` • \`${todDisplayCode(question)}\``,
-        inline: false,
-      }
-    )
     .setFooter({ text: "Mystral • Truth or Dare" })
     .setTimestamp();
+
+  if (status === "pending") {
+    embed.setColor(0x1f1b24);
+    if (targetId && targetId !== challengerId) {
+      embed.addFields(
+        { name: "Challenger", value: `<@${challengerId}>`, inline: true },
+        { name: "Target", value: `<@${targetId}>`, inline: true }
+      );
+    } else {
+      embed.addFields({ name: "Player", value: `<@${challengerId}>`, inline: true });
+    }
+    embed.addFields({
+      name: "Info",
+      value: `\`${String(question.type).toUpperCase()}\` • \`${question.rating}\` • \`${todDisplayCode(question)}\``,
+      inline: false
+    });
+  } else if (status === "done") {
+    embed.setColor(0x2ecc71); // Green
+    embed.setTitle(`🟢 TOD Selesai - ${question.type === "dare" ? "Dare" : "Truth"}`);
+    embed.setDescription(`**${question.question}**\n\n✅ <@${targetId}> berhasil menyelesaikan tantangan ini!`);
+  } else if (status === "pass") {
+    embed.setColor(0xe74c3c); // Red
+    embed.setTitle(`🔴 TOD Gagal - ${question.type === "dare" ? "Dare" : "Truth"}`);
+    embed.setDescription(`**${question.question}**\n\n❌ <@${targetId}> menyerah/gagal menyelesaikan tantangan ini!`);
+  }
+
+  return embed;
 }
 
-function todRow() {
+function todPanelCard(challengerId, targetId) {
+  const embed = new EmbedBuilder()
+    .setTitle("⚔️ Truth or Dare Duel")
+    .setColor(0x1f1b24)
+    .setFooter({ text: "Mystral • Truth or Dare" })
+    .setTimestamp();
+
+  if (targetId && targetId !== challengerId) {
+    embed.setDescription(`<@${challengerId}> menantang <@${targetId}> untuk bermain Truth or Dare! \n\nSilakan pilih kategori di bawah.`);
+  } else {
+    embed.setDescription(`<@${challengerId}> ingin bermain Truth or Dare! \n\nSilakan pilih kategori di bawah.`);
+  }
+  return embed;
+}
+
+function todRow(challengerId, targetId) {
+  const target = targetId || "self";
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("tod:truth").setLabel("Truth").setStyle(ButtonStyle.Secondary).setEmoji("🕯️"),
-    new ButtonBuilder().setCustomId("tod:dare").setLabel("Dare").setStyle(ButtonStyle.Secondary).setEmoji("🎲"),
-    new ButtonBuilder().setCustomId("tod:random").setLabel("Random").setStyle(ButtonStyle.Primary).setEmoji("✨")
+    new ButtonBuilder().setCustomId(`tod:truth:${challengerId}:${target}`).setLabel("Truth").setStyle(ButtonStyle.Secondary).setEmoji("🕯️"),
+    new ButtonBuilder().setCustomId(`tod:dare:${challengerId}:${target}`).setLabel("Dare").setStyle(ButtonStyle.Secondary).setEmoji("🎲"),
+    new ButtonBuilder().setCustomId(`tod:random:${challengerId}:${target}`).setLabel("Random").setStyle(ButtonStyle.Primary).setEmoji("✨")
   );
 }
 
-async function sendTodQuestion(channel, question, requestedBy) {
+function todResponseRow(targetId, questionId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`tod:done:${targetId}:${questionId}`).setLabel("Selesai (Done)").setStyle(ButtonStyle.Success).setEmoji("🟢"),
+    new ButtonBuilder().setCustomId(`tod:pass:${targetId}:${questionId}`).setLabel("Menyerah (Pass)").setStyle(ButtonStyle.Danger).setEmoji("🔴")
+  );
+}
+
+async function sendTodQuestion(channel, question, challengerId, targetId) {
+  const target = targetId || challengerId;
   return channel.send({
-    embeds: [todCard(question, requestedBy)],
-    components: [todRow()],
+    embeds: [todCard(question, challengerId, target)],
+    components: [todResponseRow(target, question.id)],
     allowedMentions: { parse: [] },
   });
 }
@@ -10004,22 +10046,70 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: "❌ Channel tidak valid.", flags: MessageFlags.Ephemeral }).catch(() => { });
       }
 
+      const parts = interaction.customId.split(":");
+      const action = parts[1]; // truth, dare, random, done, pass
+
+      // If action is done/pass (resolution)
+      if (action === "done" || action === "pass") {
+        const targetId = parts[2];
+        const questionId = parts[3];
+
+        if (interaction.user.id !== targetId) {
+          return interaction.reply({
+            content: `❌ Hanya <@${targetId}> yang bisa menyelesaikan/melewati tantangan ini!`,
+            flags: MessageFlags.Ephemeral
+          }).catch(() => {});
+        }
+
+        // Fetch question details to render the completed card
+        const q = await safeGet("SELECT * FROM tod_questions WHERE id = ?", [questionId]).catch(() => null);
+        let questionText = "Tantangan/Pertanyaan TOD";
+        let questionType = "truth";
+        let rating = "PG";
+        if (q) {
+          questionText = q.question;
+          questionType = q.type;
+          rating = q.rating;
+        } else if (interaction.message.embeds[0]) {
+          questionText = interaction.message.embeds[0].description.replace(/^\*\*|\*\*$/g, "");
+          questionType = interaction.message.embeds[0].title.toLowerCase().includes("dare") ? "dare" : "truth";
+        }
+
+        const reconstructedQ = { id: questionId, question: questionText, type: questionType, rating };
+        const status = action === "done" ? "done" : "pass";
+
+        await interaction.update({
+          embeds: [todCard(reconstructedQ, null, targetId, status)],
+          components: []
+        }).catch(() => {});
+        return;
+      }
+
+      // If action is choosing Truth/Dare/Random from panel
+      const challengerId = parts[2] || interaction.user.id;
+      const targetId = parts[3] || "self";
+
+      const allowedUser = targetId === "self" ? challengerId : targetId;
+      if (interaction.user.id !== allowedUser) {
+        return interaction.reply({
+          content: `❌ Hanya <@${allowedUser}> yang bisa memilih kategori!`,
+          flags: MessageFlags.Ephemeral
+        }).catch(() => {});
+      }
+
+      // Apply cooldown
       const cdKey = `${interaction.guildId}:${interaction.user.id}`;
       const now = Date.now();
       const last = todCooldown.get(cdKey) || 0;
       const cooldownMs = Number(process.env.TOD_COOLDOWN_MS || 5000);
 
-      const parts = interaction.customId.split(":");
-      const action = parts[1];
       if (now - last < cooldownMs) {
         return interaction.reply({
           content: `⏳ Tunggu sebentar sebelum ambil TOD lagi.`,
           flags: MessageFlags.Ephemeral,
         }).catch(() => { });
       }
-
       todCooldown.set(cdKey, now);
-      await interaction.deferUpdate().catch(() => { });
 
       const q =
         action === "truth"
@@ -10028,8 +10118,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
             ? await getRandomTodQuestion({ type: "dare" })
             : await getRandomTodQuestion();
 
-      await interaction.message.edit({ components: [] }).catch(() => { });
-      await sendTodQuestion(interaction.channel, q, interaction.user.id);
+      if (!q) {
+        return interaction.reply({
+          content: "❌ Gagal mendapatkan pertanyaan.",
+          flags: MessageFlags.Ephemeral
+        }).catch(() => {});
+      }
+
+      // Edit message to show the question card
+      await interaction.update({
+        embeds: [todCard(q, challengerId, allowedUser)],
+        components: [todResponseRow(allowedUser, q.id)]
+      }).catch(() => {});
+
+      // Auto-create thread if text channel
+      if (interaction.channel.type === ChannelType.GuildText) {
+        const targetUser = await interaction.client.users.fetch(allowedUser).catch(() => null);
+        const nameTag = targetUser ? `@${targetUser.username}` : allowedUser;
+
+        const thread = await interaction.message.startThread({
+          name: `💬 TOD - ${nameTag}`,
+          autoArchiveDuration: 60,
+          reason: `Truth or Dare discussion`
+        }).catch(() => null);
+
+        if (thread) {
+          await thread.send(`Halo <@${allowedUser}>, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => {});
+        }
+      }
       return;
     }
 
@@ -12532,6 +12648,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const mode = interaction.options.getSubcommand();
+        const targetUser = interaction.options.getUser("target");
+        const challengerId = interaction.user.id;
+        const targetId = targetUser ? targetUser.id : challengerId;
+
         if (mode === "submit") {
           const modal = new ModalBuilder()
             .setCustomId("tod:submit")
@@ -12570,15 +12690,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.showModal(modal);
         }
 
+        // Mode: PANEL (Sends category buttons panel)
         if (mode === "panel") {
-          const q = await getRandomTodQuestion();
-          await sendTodQuestion(interaction.channel, q, interaction.user.id);
+          await interaction.channel.send({
+            embeds: [todPanelCard(challengerId, targetId)],
+            components: [todRow(challengerId, targetId)],
+            allowedMentions: { parse: [] }
+          });
+
           return safeReply(interaction, {
             content: "✅ Panel Truth or Dare terkirim.",
             flags: MessageFlags.Ephemeral,
           });
         }
 
+        // Mode: TRUTH / DARE / RANDOM / DAILY (Immediately sends question)
         const q =
           mode === "truth"
             ? await getRandomTodQuestion({ type: "truth" })
@@ -12588,7 +12714,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 ? await getRandomTodQuestion({ category: todThemeForToday() })
                 : await getRandomTodQuestion();
 
-        await sendTodQuestion(interaction.channel, q, interaction.user.id);
+        if (!q) {
+          return safeReply(interaction, {
+            content: "❌ Gagal mendapatkan pertanyaan. Pastikan database sudah terisi.",
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        // Send question with Selesai & Menyerah buttons
+        const msg = await interaction.channel.send({
+          embeds: [todCard(q, challengerId, targetId)],
+          components: [todResponseRow(targetId, q.id)],
+          allowedMentions: { parse: [] }
+        });
+
+        // Auto-create thread if text channel
+        if (interaction.channel.type === ChannelType.GuildText) {
+          const nameTag = targetUser ? `@${targetUser.username}` : `@${interaction.user.username}`;
+          const thread = await msg.startThread({
+            name: `💬 TOD - ${nameTag}`,
+            autoArchiveDuration: 60,
+            reason: `Truth or Dare discussion`
+          }).catch(() => null);
+
+          if (thread) {
+            const targetMention = targetUser ? `<@${targetId}>` : `<@${challengerId}>`;
+            await thread.send(`Halo ${targetMention}, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => {});
+          }
+        }
+
         return safeReply(interaction, {
           content: mode === "daily" ? `✅ Tema hari ini: **${todThemeForToday()}**` : "✅ Truth or Dare terkirim.",
           flags: MessageFlags.Ephemeral,

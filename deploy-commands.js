@@ -105,11 +105,31 @@ const commands = [
   new SlashCommandBuilder()
     .setName("tod")
     .setDescription("Truth or Dare interaktif")
-    .addSubcommand((sc) => sc.setName("panel").setDescription("Kirim panel Truth or Dare"))
-    .addSubcommand((sc) => sc.setName("truth").setDescription("Ambil pertanyaan Truth"))
-    .addSubcommand((sc) => sc.setName("dare").setDescription("Ambil tantangan Dare"))
-    .addSubcommand((sc) => sc.setName("random").setDescription("Ambil Truth/Dare acak"))
-    .addSubcommand((sc) => sc.setName("daily").setDescription("Ambil TOD tema harian"))
+    .addSubcommand((sc) =>
+      sc.setName("panel")
+        .setDescription("Kirim panel Truth or Dare")
+        .addUserOption((o) => o.setName("target").setDescription("User yang ingin ditantang (opsional)").setRequired(false))
+    )
+    .addSubcommand((sc) =>
+      sc.setName("truth")
+        .setDescription("Ambil pertanyaan Truth")
+        .addUserOption((o) => o.setName("target").setDescription("User yang ingin ditantang (opsional)").setRequired(false))
+    )
+    .addSubcommand((sc) =>
+      sc.setName("dare")
+        .setDescription("Ambil tantangan Dare")
+        .addUserOption((o) => o.setName("target").setDescription("User yang ingin ditantang (opsional)").setRequired(false))
+    )
+    .addSubcommand((sc) =>
+      sc.setName("random")
+        .setDescription("Ambil Truth/Dare acak")
+        .addUserOption((o) => o.setName("target").setDescription("User yang ingin ditantang (opsional)").setRequired(false))
+    )
+    .addSubcommand((sc) =>
+      sc.setName("daily")
+        .setDescription("Ambil TOD tema harian")
+        .addUserOption((o) => o.setName("target").setDescription("User yang ingin ditantang (opsional)").setRequired(false))
+    )
     .addSubcommand((sc) => sc.setName("submit").setDescription("Submit pertanyaan anonim")),
 
   new SlashCommandBuilder()
