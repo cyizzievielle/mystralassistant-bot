@@ -1,5 +1,5 @@
-/**
- * index.js — Mystral Academy (SQLite FINAL + PREFIX)
+﻿/**
+ * index.js — Mystral (SQLite FINAL + PREFIX)
  * discord.js v14 + @napi-rs/canvas
  *
  * DB Engine:
@@ -31,6 +31,7 @@ const {
   AttachmentBuilder,
   MessageFlags,
   StringSelectMenuBuilder,
+  PermissionFlagsBits,
   FileUploadBuilder,
   LabelBuilder,
 } = require("discord.js");
@@ -41,10 +42,16 @@ const { joinVoiceChannel, VoiceConnectionStatus, getVoiceConnection } = require(
 // ===================== CONFIG =====================
 const BRAND_NAME = "Mystral Assistant";
 const ID_CARD_TITLE = "MYSTRAL IDENTITY CARD";
-const EMBED_COLOR = 0x77d0d7;
+const EMBED_COLOR = 0x000001;
 const PREFIX = process.env.PREFIX || "c";
 
-const BOT_OWNER_ID = String(process.env.BOT_OWNER_ID)
+const BOT_OWNER_ID = String(process.env.BOT_OWNER_ID);
+
+// ================== QUOTES SYSTEM CONFIG ==================
+const QUOTES_CHANNEL_ID = process.env.QUOTES_CHANNEL_ID || "";
+const WATERMARK_TEXT = process.env.WATERMARK_TEXT || "CYZA";
+const QUOTES_THEME = (process.env.THEME || "dark").toLowerCase(); // "dark" / "light"
+const QUOTES_TIMEZONE = process.env.TIMEZONE || "Asia/Jakarta";
 
 // ===================== SELF ROLES (ADD-ON) =====================
 const SELFROLES = require("./selfroles.roles.js");
@@ -127,7 +134,7 @@ function selfrolesPanelEmbeds() {
         "Pilihan ini dapat diperbarui kapan saja.",
       ].join("\n")
     )
-    .setFooter({ text: "Mystral Academy • Identity Registry" });
+    .setFooter({ text: "Mystral • Identity Registry" });
 
   const e2 = new EmbedBuilder()
     .setTitle("🎯 INTEREST / HOBBY")
@@ -144,7 +151,7 @@ function selfrolesPanelEmbeds() {
         "🎨 **Creative** — karya, skill, dan gaya hidup yang kamu sukai.",
       ].join("\n")
     )
-    .setFooter({ text: "Mystral Academy • Social Affinity" });
+    .setFooter({ text: "Mystral • Social Affinity" });
 
   const e3 = new EmbedBuilder()
     .setTitle("💖 STATUS")
@@ -156,7 +163,7 @@ function selfrolesPanelEmbeds() {
         "Pilih **1 Status**, atau kosongkan untuk menghapus.",
       ].join("\n")
     )
-    .setFooter({ text: "Mystral Academy • Personal State" });
+    .setFooter({ text: "Mystral • Personal State" });
 
   const eRegion = new EmbedBuilder()
     .setTitle("🗺️ REGION")
@@ -169,7 +176,7 @@ function selfrolesPanelEmbeds() {
         "atau kosongkan untuk menghapus pilihan.",
       ].join("\n")
     )
-    .setFooter({ text: "Mystral Academy • Region" });
+    .setFooter({ text: "Mystral • Region" });
 
   const ePing = new EmbedBuilder()
     .setTitle("🔔 PING ROLES")
@@ -182,7 +189,7 @@ function selfrolesPanelEmbeds() {
         "Kamu dapat memilih **lebih dari satu** role Ping.",
       ].join("\n")
     )
-    .setFooter({ text: "Mystral Academy • Ping Opt-in" });
+    .setFooter({ text: "Mystral • Ping Opt-in" });
 
   // return semua embed sekaligus
   return [e1, e2, e3, eRegion, ePing];
@@ -800,12 +807,12 @@ async function buildMusicControlCenterBody(guild) {
   const body =
     `╭── 🎧  Music Control Center ────────────╮
 
-   ◉  LIVE IN VOICE  (${active.length})
+   <a:open:1523182738054713424>  LIVE IN VOICE  (${active.length})
    ────────────────────
 ${activeText}
 
 
-   ○  STANDBY  (${idle.length})
+   <a:close:1523182754454306967>  STANDBY  (${idle.length})
    ────────────────────
 ${idleText}
 
@@ -892,7 +899,7 @@ async function logMod(guild, title, color, fields, targetUser = null) {
     .setColor(color)
     .addFields(fields)
     .setThumbnail('https://cdn-icons-png.flaticon.com/512/1022/1022300.png') // Icon peringatan
-    .setFooter({ text: "Mystral Academy • Disciplinary System" })
+    .setFooter({ text: "Mystral • Disciplinary System" })
     .setTimestamp();
 
   if (targetUser) {
@@ -1068,7 +1075,7 @@ function calcSafe(expr) {
 
 // ===================== ANTI-TOXIC =====================
 const TOXIC_WORDS = [
-  "anjing", "babi", "tolol", "goblok", "bangsat", "kontol", "memek", "ngentot", "asu", "bajingan", "tai"
+  "anjing", "babi", "tolol", "goblok", "bangsat", "kontol", "memek", "asu", "bajingan", "tai", "dick", "pussy", "bastard", "retard", "kontl", "mmq", "ngntl", "bgsd", "bgsat", "ngentod", "goblok", "tolol", "meki", "mek", "jancok", "cuk", "cukimay", "bego", "begooo", "idiot", "tololll", "kimakkk", "jembut", "titit", "peler", "ngentot", "entot"
 ].map(w => w.toLowerCase());
 
 function containsToxic(text) {
@@ -1344,7 +1351,7 @@ function todCard(question, requestedBy) {
         inline: false,
       }
     )
-    .setFooter({ text: "Mystral Academy • Truth or Dare" })
+    .setFooter({ text: "Mystral • Truth or Dare" })
     .setTimestamp();
 }
 
@@ -1474,7 +1481,7 @@ async function buildProfileEmbed({ guild, user, member }) {
   const nickname = member?.nickname || "—";
 
   const afkText = afk
-    ? `🕯️ **AFK:** ${afk.reason}\nSejak: <t:${Math.floor((Number(afk.since) || Date.now()) / 1000)}:R>`
+    ? `💤 **AFK:** ${afk.reason}\nSejak: <t:${Math.floor((Number(afk.since) || Date.now()) / 1000)}:R>`
     : "—";
 
   const idText = idData
@@ -1496,7 +1503,7 @@ async function buildProfileEmbed({ guild, user, member }) {
   const embed = new EmbedBuilder()
     .setTitle(`🧿 Mystral Profile — ${displayName}`)
     .setColor(EMBED_COLOR)
-    .setThumbnail(user.displayAvatarURL({ extension: "png", size: 256 }))
+    .setThumbnail((member ?? user).displayAvatarURL({ extension: "png", size: 256 }))
     .setDescription(`**Mention:** <@${user.id}>`)
     .addFields(
       {
@@ -1689,22 +1696,61 @@ function formatIdDate(ms) {
 
 // ===================== WELCOME =====================
 const WELCOME_MESSAGES = [
-  (m, g) => `✨ lonceng kristal berdentang lembut di menara akademi saat gerbang terbuka untukmu. ${m}, selamat datang di ${g}. di tempat ini, ilmu, percakapan, dan misteri dijaga bersama. jelajahi aula dengan rasa hormat, ikuti tatanan yang berlaku, dan biarkan perjalananmu berkembang dengan tenang. 🌙`,
-  (m, g) => `🔮 tinta arcane kembali mengalir di buku induk akademi, menuliskan satu nama baru: ${m}. selamat datang di ${g}. luangkan waktu untuk memahami aturan yang menjaga keseimbangan kami, agar setiap langkahmu selaras dengan suasana dan kebijaksanaan tempat ini. ✨`,
-  (m, g) => `🕯️ cahaya lilin menyala satu per satu di lorong batu tua saat kakimu melangkah masuk. ${m}, selamat datang di ${g}. semoga harimu hangat dan percakapanmu membawa kebaikan. ingatlah untuk menghormati sesama murid dan menaati tata tertib akademi. 🌿`,
-  (m, g) => `🌌 angin senja berbisik dari menara observatorium: seorang murid baru telah tiba. ${m}, selamat datang di ${g}. sebelum memulai petualanganmu, luangkan sejenak membaca aturan agar setiap interaksi tetap aman, nyaman, dan bermakna. ✨`,
-  (m, g) => `📜 arsip kuno kembali terbuka, menyambut satu nama yang kini tercatat di dalamnya. selamat datang ${m} di ${g}. akademi ini berdiri atas rasa saling menghormati, maka jagalah tutur kata dan patuhi ketentuan yang telah disepakati bersama. 🔮`,
-  (m, g) => `🜂 nyala api di aula utama bergetar pelan, menandai kedatanganmu. ${m}, selamat datang di ${g}. belajarlah dengan bebas, berdiskusilah dengan bijak, dan jangan lupa mengikuti aturan agar keseimbangan akademi tetap terjaga. 🌙`,
-  (m, g) => `🌙 bulan menggantung tenang di atas menara saat kau resmi diterima. ${m}, selamat datang di ${g}. kami mengundangmu untuk berpartisipasi dengan sopan, menghormati batasan, dan menaati tata tertib yang menjaga keharmonisan bersama. ✨`,
-  (m, g) => `🔔 bel akademi berbunyi lirih, seolah menyapa langkah barumu. ${m}, selamat datang di ${g}. sebelum menjelajah lebih jauh, pastikan kau memahami aturan dasar agar setiap ruang tetap menjadi tempat yang aman dan menyenangkan. 🕯️`,
-  (m, g) => `🕯️ cahaya hangat di ruang studi menyambut kehadiranmu. ${m}, kini kau bagian dari ${g}. gunakan ruang ini dengan bijaksana, hormati sesama, dan ikuti aturan yang ada agar semua dapat belajar dengan nyaman. 🌿`,
-  (m, g) => `🌌 bintang-bintang menjadi saksi langkah pertamamu di akademi. ${m}, selamat datang di ${g}. kebebasan berekspresi dihargai di sini, selama tetap selaras dengan aturan dan rasa hormat terhadap yang lain. ✨`,
-  (m, g) => `📖 sebuah halaman kosong terbuka di mejamu, menunggu kisah yang akan kau tulis. ${m}, selamat datang di ${g}. sebelum menorehkan ceritamu, luangkan waktu memahami tata tertib agar perjalananmu berjalan tanpa hambatan. 🔮`,
-  (m, g) => `🜄 gemericik air di taman arcane mengiringi langkahmu masuk. ${m}, selamat datang di ${g}. jaga ketenangan, hargai perbedaan, dan patuhi aturan agar suasana akademi tetap seimbang dan damai. 🌙`,
-  (m, g) => `✨ gema mantra penyambutan terdengar lembut di aula utama. ${m} kini resmi bergabung dengan ${g}. kami percaya setiap murid mampu menjaga sikap dan menaati aturan demi kenyamanan bersama. 🕯️`,
-  (m, g) => `🔮 para penjaga arsip menatap tenang saat satu nama baru dicatat. ${m}, selamat datang di ${g}. ikutilah ketentuan yang telah ditetapkan, karena di sanalah kebijaksanaan akademi dijaga. 🌌`,
-  (m, g) => `🌿 dedaunan di halaman dalam bergoyang pelan, menyambut kehadiranmu. ${m}, selamat datang di ${g}. nikmati perjalananmu, jalin percakapan yang baik, dan jangan lupa menaati aturan agar keharmonisan tetap terjaga. ✨`,
+  (m, g) => `**🌙 Welcome to ${g}, ${m}!**\nSemoga kamu betah di sini, menemukan teman baru, dan menikmati setiap momen bersama para Mystralians. 🤍`,
+  (m, g) => `**✨ Halo ${m}, selamat datang di ${g}!**\nTerima kasih sudah bergabung. Semoga District ini menjadi tempat yang nyaman untukmu. 🌿`,
+  (m, g) => `**🤍 Welcome aboard, ${m}!**\nKami senang kamu menjadi bagian dari Mystral District. Selamat menikmati komunitas ini bersama para Mystralians.`,
+  (m, g) => `**🌿 Welcome to ${g}, ${m}!**\nSemoga harimu lebih menyenangkan bersama komunitas yang hangat dan ramah di MYSTRAL.`,
+  (m, g) => `**🌌 Welcome to ${g}!**\nJangan ragu untuk mengobrol, bergabung di voice, atau sekadar menikmati suasana komunitas. ✨`,
+  (m, g) => `**🌙 Hai ${m}, selamat datang di Mystral District!**\nSemoga kamu menemukan banyak cerita, teman baru, dan pengalaman seru di sini. 🤍`,
+  (m, g) => `**✨ Welcome, ${m}!**\nTerima kasih telah bergabung dengan ${g}. Semoga kamu merasa nyaman menjadi bagian dari para Mystralians.`,
+  (m, g) => `**🤝 Halo ${m}, welcome to ${g}!**\nNikmati setiap percakapan, event, dan momen yang akan kamu temukan di komunitas ini.`,
+  (m, g) => `**🌠 Selamat datang di ${g}, ${m}!**\nSemoga langkah pertamamu di MYSTRAL menjadi awal dari banyak kenangan yang menyenangkan.`,
+  (m, g) => `**📍 Welcome to ${g}, ${m}!**\nLuangkan waktumu sesukamu, berkenalan dengan member lain, dan nikmati setiap perjalananmu di sini.`,
+  (m, g) => `**🌙 Senang melihatmu bergabung, ${m}!**\nSemoga Mystral District menjadi tempat yang selalu membuatmu merasa diterima. 🤍`,
+  (m, g) => `**💫 Halo ${m}, welcome to ${g}!**\nSemoga kamu menemukan komunitas yang positif, hangat, dan penuh cerita baru.`,
+  (m, g) => `**✨ Selamat datang di ${g}, ${m}!**\nSemoga setiap hari yang kamu habiskan di MYSTRAL membawa pengalaman yang menyenangkan.`,
+  (m, g) => `**🌿 Welcome, ${m}!**\nTerima kasih telah menjadi bagian dari Mystralians. Semoga kamu betah dan menikmati komunitas ini.`,
+  (m, g) => `**🤍 Halo ${m}, selamat datang di ${g}!**\nSemoga kamu selalu menemukan hal-hal baik dan orang-orang hebat selama berada di MYSTRAL.`,
+  (m, g) => `**🌌 Welcome to Mystral District, ${m}!**\nKami senang menyambutmu di komunitas ini. Selamat menikmati perjalanan barumu bersama kami. ✨`,
+  (m, g) => `**🌙 Welcome, ${m}!**\nSemoga District ini menjadi tempat untuk berbagi cerita, membangun pertemanan, dan menciptakan banyak momen berharga.`,
+  (m, g) => `**✨ Halo ${m}, senang bertemu denganmu!**\nSemoga kamu menikmati setiap fitur dan aktivitas yang tersedia di ${g}.`,
+  (m, g) => `**🤝 Selamat datang di ${g}, ${m}!**\nTerima kasih telah bergabung. Semoga kamu merasa seperti di rumah bersama para Mystralians. 🤍`,
+  (m, g) => `**🌠 Welcome to ${g}, ${m}!**\nSemoga perjalananmu di MYSTRAL dipenuhi teman baru, pengalaman baru, dan banyak kenangan indah. 🌙`,
 ];
+
+function pickWelcomeMessage(member) {
+  const templates = WELCOME_MESSAGES.filter((fn) => typeof fn === "function");
+  if (!templates.length) {
+    return `Selamat datang di ${member.guild.name}, <@${member.id}>. Semoga betah dan menikmati perjalananmu bersama kami!`;
+  }
+
+  const template = templates[Math.floor(Math.random() * templates.length)];
+  return template(`<@${member.id}>`, member.guild.name);
+}
+
+function buildWelcomeText(member, memberCount) {
+  const rulesMention = resolveChannelMention(member.guild, "RULES_CHANNEL_ID", ["rules", "peraturan"], "rules");
+  const selfRoleMention = resolveChannelMention(member.guild, "SELF_ROLE_CHANNEL_ID", ["self-role", "selfrole", "pilih-peran"], "self-role");
+  const announceMention = resolveChannelMention(member.guild, "ANNOUNCEMENTS_CHANNEL_ID", ["announcements", "pengumuman"], "announcements");
+  const idCardMention = resolveChannelMention(member.guild, "IDCARD_CHANNEL_ID", ["idcard", "id-card", "registrasi"], "idcard");
+  const lobbyMention = resolveChannelMention(member.guild, "LOBBY_CHANNEL_ID", ["lobby", "lobby-chat", "berkenalan"], "lobby");
+
+  return [
+    `<:profile:1510055150486814853> **Welcome to Mystral District**`,
+    ``,
+    `╭・📖 **Peraturan** ${rulesMention}`,
+    `├・🎭 **Pilih Role** ${selfRoleMention}`,
+    `├・📢 **Pengumuman** ${announceMention}`,
+    `├・<:pink_cards1:1510057886795956235> **Registrasi** ${idCardMention}`,
+    `╰・💬 **Lobby** ${lobbyMention}`,
+    ``,
+    `Kamu adalah member ke-**${memberCount}!**. Semoga betah menjadi bagian dari **Mystralians**. 🤍`,
+  ].join("\n");
+}
+
+function buildLobbyWelcomeText(member) {
+  return pickWelcomeMessage(member);
+}
 
 async function seedSupportLeaderboard() {
   try {
@@ -1992,6 +2038,53 @@ async function initDb() {
       PRIMARY KEY (day, user_id)
     );
     CREATE INDEX IF NOT EXISTS idx_voice_act_day ON voice_activity_daily(day);
+
+    CREATE TABLE IF NOT EXISTS autoresponses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      trigger_text TEXT NOT NULL,
+      response_text TEXT NOT NULL,
+      match_type TEXT NOT NULL,
+      ignore_case INTEGER NOT NULL DEFAULT 1,
+      cooldown INTEGER NOT NULL DEFAULT 0,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      reply_mode TEXT NOT NULL DEFAULT 'reply',
+      mention_user INTEGER NOT NULL DEFAULT 0,
+      embed_response INTEGER NOT NULL DEFAULT 0,
+      random_responses TEXT,
+      attachment_url TEXT,
+      button_label TEXT,
+      button_url TEXT,
+      select_menu_options TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS timed_roles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      expire_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS active_voice_sessions (
+      user_id TEXT PRIMARY KEY,
+      join_timestamp INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sticky_messages (
+      channel_id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      last_message_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS media_settings (
+      guild_id TEXT PRIMARY KEY,
+      enabled INTEGER DEFAULT 1,
+      delete_original INTEGER DEFAULT 0,
+      nsfw_filter INTEGER DEFAULT 1,
+      quality TEXT DEFAULT 'auto',
+      platforms TEXT DEFAULT '{}'
+    );
   `);
 
   try {
@@ -2006,7 +2099,76 @@ async function initDb() {
 
   await seedSupportLeaderboard().catch(() => null);
   await seedTodQuestionsIfNeeded().catch(() => null);
+}
 
+async function getOrInitMediaSettings(guildId) {
+  const gid = String(guildId);
+  if (mediaSettingsCache.has(gid)) {
+    return mediaSettingsCache.get(gid);
+  }
+
+  let row = await safeGet("SELECT * FROM media_settings WHERE guild_id=?", [gid]);
+  if (!row) {
+    await safeRun(
+      "INSERT OR IGNORE INTO media_settings (guild_id, enabled, delete_original, nsfw_filter, quality, platforms) VALUES (?, 1, 0, 1, 'auto', '{}')",
+      [gid]
+    );
+    row = {
+      guild_id: gid,
+      enabled: 1,
+      delete_original: 0,
+      nsfw_filter: 1,
+      quality: "auto",
+      platforms: "{}"
+    };
+  }
+
+  const settings = {
+    enabled: Number(row.enabled),
+    deleteOriginal: Number(row.delete_original),
+    nsfwFilter: Number(row.nsfw_filter),
+    quality: String(row.quality || "auto"),
+    platforms: JSON.parse(row.platforms || "{}")
+  };
+  mediaSettingsCache.set(gid, settings);
+  return settings;
+}
+
+async function saveMediaSettings(guildId, settings) {
+  const gid = String(guildId);
+  mediaSettingsCache.set(gid, settings);
+  await safeRun(
+    "INSERT INTO media_settings (guild_id, enabled, delete_original, nsfw_filter, quality, platforms) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled, delete_original=excluded.delete_original, nsfw_filter=excluded.nsfw_filter, quality=excluded.quality, platforms=excluded.platforms",
+    [
+      gid,
+      settings.enabled ? 1 : 0,
+      settings.deleteOriginal ? 1 : 0,
+      settings.nsfwFilter ? 1 : 0,
+      settings.quality || "auto",
+      JSON.stringify(settings.platforms || {})
+    ]
+  );
+}
+
+function getDownloadUrl(url) {
+  if (!url) return "https://cobalt.tools";
+  const decoded = decodeURIComponent(url);
+  if (/tiktok\.com/i.test(decoded)) return `https://snaptik.app/?url=${encodeURIComponent(decoded)}`;
+  if (/instagram\.com/i.test(decoded)) return `https://snapinsta.app/?url=${encodeURIComponent(decoded)}`;
+  if (/(twitter|x)\.com/i.test(decoded)) return `https://savetwitter.net/?url=${encodeURIComponent(decoded)}`;
+  if (/reddit\.com/i.test(decoded)) return `https://rapidsave.com/info?url=${encodeURIComponent(decoded)}`;
+  if (/youtube\.com|youtu\.be/i.test(decoded)) return `https://y2mate.is/`;
+  return `https://cobalt.tools/?u=${encodeURIComponent(decoded)}`;
+}
+
+function getPlatformEmoji(guild, platform) {
+  if (!guild) return null;
+  const nameQuery = platform.toLowerCase();
+  const emoji = guild.emojis.cache.find(e => {
+    const n = e.name.toLowerCase();
+    return n === nameQuery || n.includes(nameQuery);
+  });
+  return emoji ? emoji.id : null;
 }
 
 // ===================== TAROT SYSTEM HELPERS =====================
@@ -2102,10 +2264,15 @@ async function addTarotReadingRecord(userId, username, card, categorySelected) {
   const user = await getOrInitTarotUser(userId, username);
 
   let newStreak = 1;
+  let saveStreak = user.last_streak_before_break || 0;
   if (user.last_reading_date === todayStr) {
     newStreak = user.streak || 1;
   } else if (user.last_reading_date === yesterdayStr) {
     newStreak = (user.streak || 0) + 1;
+  } else {
+    if (user.streak > 0) {
+      saveStreak = user.streak;
+    }
   }
 
   let collected = user.cards_collected ? user.cards_collected.split(",").filter(Boolean) : [];
@@ -2134,15 +2301,43 @@ async function addTarotReadingRecord(userId, username, card, categorySelected) {
        streak = ?,
        last_card = ?,
        rarest_card = ?,
-       cards_collected = ?
+       cards_collected = ?,
+       last_streak_before_break = ?
      WHERE user_id = ?`,
-    [username, todayStr, newStreak, card.name, newRarest, collectedStr, userId]
+    [username, todayStr, newStreak, card.name, newRarest, collectedStr, saveStreak, userId]
   );
 
   await incrementTarotCategory(userId, categorySelected);
   await updateFavoriteCategory(userId);
 
   return { streak: newStreak };
+}
+
+async function recoverTarotStreak(userId, username) {
+  const user = await getOrInitTarotUser(userId, username);
+  if (!user) {
+    return { error: "User tidak ditemukan." };
+  }
+  if (user.last_streak_before_break <= 0) {
+    return { error: "Kamu tidak memiliki streak tarot yang padam untuk dipulihkan!" };
+  }
+  if (user.streak_recovery_left <= 0) {
+    return { error: "Batas token pemulihan (recovery token) kamu telah habis! (Maksimal 3)" };
+  }
+
+  const newStreak = user.last_streak_before_break;
+  const nextRec = user.streak_recovery_left - 1;
+
+  await safeRun(
+    `UPDATE tarot_users SET
+       streak = ?,
+       streak_recovery_left = ?,
+       last_streak_before_break = 0
+     WHERE user_id = ?`,
+    [newStreak, nextRec, userId]
+  );
+
+  return { success: true, newStreak, recoveryLeft: nextRec };
 }
 
 function buildTarotMainEmbed() {
@@ -2162,7 +2357,7 @@ function buildTarotMainEmbed() {
       "Kamu hanya bisa membuka **1 reading per hari**."
     ].join("\n"))
     .setColor(EMBED_COLOR)
-    .setFooter({ text: "Mystral Academy • Daily Tarot" })
+    .setFooter({ text: "Mystral • Daily Tarot" })
     .setTimestamp();
 }
 
@@ -2182,7 +2377,7 @@ function buildTarotMainButtonsRow2(userId) {
   );
 }
 
-async function buildTarotProfileEmbed(targetUser, client) {
+async function buildTarotProfileEmbed(targetUser, client, requester = null) {
   const tUser = await getOrInitTarotUser(targetUser.id, targetUser.username);
   const totalCards = TAROT_CARDS.length;
   const collectedList = tUser.cards_collected ? tUser.cards_collected.split(",").filter(Boolean) : [];
@@ -2190,27 +2385,32 @@ async function buildTarotProfileEmbed(targetUser, client) {
   const percent = totalCards > 0 ? Math.round((collectedCount / totalCards) * 100) : 0;
   const rank = getTarotRank(tUser.total_reading);
 
+  const targetGuildId = process.env.GUILD_ID;
+  const guild = targetGuildId ? client.guilds.cache.get(targetGuildId) : null;
+  const targetMember = guild ? (guild.members.cache.get(targetUser.id) || await guild.members.fetch(targetUser.id).catch(() => null)) : null;
+
   const embed = new EmbedBuilder()
     .setTitle(`${TAROT_EMOJIS.crystall} Tarot Profile — ${targetUser.username}`)
     .setColor(EMBED_COLOR)
-    .setThumbnail(targetUser.displayAvatarURL({ extension: "png", size: 256 }))
+    .setThumbnail((targetMember ?? targetUser).displayAvatarURL({ extension: "png", size: 256 }))
     .setDescription(`**Mention:** <@${targetUser.id}>`)
     .addFields(
       { name: `${TAROT_EMOJIS.crystall} Rank`, value: `\`${rank}\``, inline: true },
       { name: `${TAROT_EMOJIS.streak} Current Streak`, value: `\`${tUser.streak || 0} Hari\``, inline: true },
+      { name: `🩹 Recovery Token`, value: `\`${tUser.streak_recovery_left !== null ? tUser.streak_recovery_left : 3} / 3\``, inline: true },
       { name: `${TAROT_EMOJIS.collection} Collection Progress`, value: `\`${collectedCount} / ${totalCards} (${percent}%)\``, inline: true },
       { name: `${TAROT_EMOJIS.favcategory} Fav Category`, value: `\`${tUser.favorite_category || "—"}\``, inline: true },
       { name: `${TAROT_EMOJIS.card} Last Card Drawn`, value: `\`${tUser.last_card || "—"}\``, inline: true },
       { name: `${TAROT_EMOJIS.rarefix} Rarest Card Drawn`, value: `\`${tUser.rarest_card || "—"}\``, inline: true },
       { name: `${TAROT_EMOJIS.statistic} Total Readings`, value: `\`${tUser.total_reading || 0}\``, inline: true }
     )
-    .setFooter({ text: "Mystral Academy • Tarot Registry" })
+    .setFooter({ text: requester ? `Mystral • Tarot Registry | Requested by ${requester.username}` : "Mystral • Tarot Registry" })
     .setTimestamp();
 
   return embed;
 }
 
-async function buildTarotLeaderboardEmbed(guild) {
+async function buildTarotLeaderboardEmbed(guild, requester = null) {
   const rows = await safeAll(
     `SELECT user_id, username, total_reading, streak FROM tarot_users ORDER BY total_reading DESC LIMIT 10`
   );
@@ -2232,15 +2432,15 @@ async function buildTarotLeaderboardEmbed(guild) {
     .setTitle(`${TAROT_EMOJIS.leaderboard} Tarot Leaderboard — Readings`)
     .setDescription(lines.join("\n"))
     .setColor(EMBED_COLOR)
-    .setFooter({ text: "Mystral Academy • Tarot Leaderboard" })
+    .setFooter({ text: requester ? `Mystral • Tarot Leaderboard | Requested by ${requester.username}` : "Mystral • Tarot Leaderboard" })
     .setTimestamp();
 }
 
 function buildTarotAnnouncementEmbed() {
   return new EmbedBuilder()
-    .setTitle(`${TAROT_EMOJIS.crystall} Daily Arcane Tarot — Mystral Academy`)
+    .setTitle(`${TAROT_EMOJIS.crystall} Daily Arcane Tarot — Mystral`)
     .setDescription([
-      "Selamat datang di gerbang misteri takdir! Dek Tarot Akurasi Tinggi kini telah terintegrasi di Mystral Academy.",
+      "Selamat datang di gerbang misteri takdir! Dek Tarot Akurasi Tinggi kini telah terintegrasi di Mystral.",
       "Akses ramalan spiritual harianmu untuk mendapatkan panduan batin hari ini."
     ].join("\n"))
     .addFields(
@@ -2277,11 +2477,11 @@ function buildTarotAnnouncementEmbed() {
       }
     )
     .setColor(EMBED_COLOR)
-    .setFooter({ text: "Mystral Academy • Daily Tarot System" })
+    .setFooter({ text: "Mystral • Daily Tarot System" })
     .setTimestamp();
 }
 
-async function buildTarotCollectionEmbed(targetUser) {
+async function buildTarotCollectionEmbed(targetUser, requester = null) {
   const tUser = await getOrInitTarotUser(targetUser.id, targetUser.username);
   const collectedIds = tUser.cards_collected ? tUser.cards_collected.split(",").filter(Boolean).map(Number) : [];
 
@@ -2318,7 +2518,7 @@ async function buildTarotCollectionEmbed(targetUser) {
       `📜 **Common** (${colCommon.length}/${common.length}):`,
       colCommon.length ? `${colCommon.length} kartu` : "_Belum ada_"
     ].join("\n"))
-    .setFooter({ text: "Mystral Academy • Tarot Collection" })
+    .setFooter({ text: requester ? `Mystral • Tarot Collection | Requested by ${requester.username}` : "Mystral • Tarot Collection" })
     .setTimestamp();
 
   return embed;
@@ -2491,7 +2691,7 @@ function buildfaqPanelComponentsV2(guild, row) {
     .addActionRowComponents(row)
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`${guild?.name || "Server"} ? FAQ Panel`)
+      new TextDisplayBuilder().setContent(`${guild?.name || "Server"}  • FAQ Panel`)
     );
 
   return [container];
@@ -2556,7 +2756,7 @@ async function getTicketSettings(guildId) {
 
   try {
     // ✅ aman walau kolom beda-beda, karena SELECT * ga nembak kolom yang ga ada
-    const row = await safeGet(`SELECT * FROM ticket_setup WHERE guild_id=?`, [guildId]);
+    const row = await safeGet(`SELECT * FROM ticket_settings WHERE guild_id=?`, [guildId]);
     return row || null;
   } catch (e) {
     console.error("[TICKET] getTicketSettings error:", e?.message || e);
@@ -2633,29 +2833,25 @@ async function userHasOpenTicket(guildId, userId) {
 }
 
 function buildTicketPanel(settings) {
-  // Discord: max 5 buttons per row
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("ticket:open:complaint").setLabel("Keluhan").setStyle(ButtonStyle.Primary).setEmoji("🕯"),
-    new ButtonBuilder().setCustomId("ticket:open:report").setLabel("Report").setStyle(ButtonStyle.Danger).setEmoji("⚠"),
-    new ButtonBuilder().setCustomId("ticket:open:donate").setLabel("Donate").setStyle(ButtonStyle.Success).setEmoji("💠"),
-    new ButtonBuilder().setCustomId("ticket:open:partnership").setLabel("Partner").setStyle(ButtonStyle.Primary).setEmoji("🤝"),
-    new ButtonBuilder().setCustomId("ticket:open:verification").setLabel("Verify").setStyle(ButtonStyle.Success).setEmoji("✅")
-  );
+  const rows = ticketPanelRows();
+  const title = settings?.panel_title || "<a:G_moonfo:1523238023750352947> Mystral Support Desk";
 
-  const title = settings?.panel_title || "🎫 Arcane Support Desk";
   const description =
     settings?.panel_description ||
     [
-      "Jika kau mengalami gangguan, kebingungan, atau membutuhkan bantuan resmi dari akademi—",
-      "buka ticket secara privat di sini.",
+      "Butuh bantuan atau ingin menghubungi Staff **Mystral**?",
       "",
-      "🕯️ **Keluhan** — pengalaman tidak nyaman / konflik / hal pribadi",
-      "⚠️ **Report** — pelanggaran aturan / tindakan meresahkan",
-      "💠 **Donasi** — dukungan untuk pengembangan akademi",
-      "🤝 **Partnership** — kerja sama komunitas / event",
-      "✅ **Verifikasi** — pengajuan atau kendala role verified",
+      "Pilih salah satu kategori di bawah untuk membuat ticket privat.",
       "",
-      "🔐 Ticket bersifat **rahasia**: hanya kamu & staff yang dapat melihatnya.",
+      "<:Administrator:1523387282248171560> **Support** — Bantuan umum, bot, role, atau kendala server.",
+      "<a:lightred:1523182352702898258> **Report** — Melaporkan pelanggaran atau perilaku yang mengganggu.",
+      "<a:blue_diamond:1523181238154956956> **Donasi** — Informasi dan konfirmasi donasi.",
+      "🤝 **Partnership** — Kerja sama komunitas, sponsor, atau event.",
+      "<a:VerifiedUser:1384396379102908416> **Verifikasi** — Pengajuan dan kendala role Verified.",
+      "<:a1_heart:1510056894889463969> **Ask** — Pertanyaan, saran, maupun permintaan lainnya.",
+      "",
+      "> <:visitor:1523182956493930567> Semua ticket bersifat **rahasia** dan hanya dapat dilihat oleh kamu serta Tim Staff MYSTRAL.",
+      "> 📝 Mohon jelaskan kronologi atau kebutuhanmu secara lengkap agar kami dapat membantu lebih cepat."
     ].join("\n");
 
   const container = new ContainerBuilder()
@@ -2664,10 +2860,11 @@ function buildTicketPanel(settings) {
       new TextDisplayBuilder().setContent(description)
     )
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-    .addActionRowComponents(row)
+    .addActionRowComponents(rows[0])
+    .addActionRowComponents(rows[1])
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("Mystral Academy • Speak freely, we will listen.")
+      new TextDisplayBuilder().setContent("Mystral • Speak freely, we will listen.")
     );
 
   return { components: [container] };
@@ -2677,10 +2874,13 @@ function buildTicketPanel(settings) {
 function ticketTypeLabel(type) {
   const map = {
     complaint: "Keluhan",
+    support: "Support",
     report: "Report",
-    donate: "Donate",
+    donate: "Donasi",
+    donation: "Donasi",
     partnership: "Partnership",
-    verification: "Verification",
+    verification: "Verifikasi",
+    ask: "Ask",
     custom: "Custom",
   };
   return map[String(type || "").toLowerCase()] || String(type || "Ticket");
@@ -2690,7 +2890,7 @@ function buildTicketModal(type) {
   const t = String(type || "custom").toLowerCase();
   const modal = new ModalBuilder()
     .setCustomId(`ticket:modal:${t}`)
-    .setTitle(`🎫 ${ticketTypeLabel(t)} — Mystral Academy`);
+    .setTitle(`🎫 ${ticketTypeLabel(t)} — Mystral`);
 
   const titleInput = new TextInputBuilder()
     .setCustomId("title")
@@ -2702,6 +2902,7 @@ function buildTicketModal(type) {
   let contentInput;
   switch (t) {
     case "donate":
+    case "donation":
       contentInput = new TextInputBuilder()
         .setCustomId("content")
         .setLabel("Informasi Donasi")
@@ -2831,6 +3032,30 @@ async function getMenfessPostById(id) {
   )) || null;
 }
 
+// ===================== MENFESS BUTTON CLEANUP =====================
+async function handleMenfessButtonCleanup(client, sentMsg) {
+  if (!sentMsg) return;
+  try {
+    const lastMsgRow = await dbGet(`SELECT value FROM app_meta WHERE key='menfess_last_msg_id'`);
+    const lastChRow = await dbGet(`SELECT value FROM app_meta WHERE key='menfess_last_channel_id'`);
+
+    if (lastMsgRow?.value && lastChRow?.value) {
+      const oldCh = await client.channels.fetch(lastChRow.value).catch(() => null);
+      if (oldCh) {
+        const oldMsg = await oldCh.messages.fetch(lastMsgRow.value).catch(() => null);
+        if (oldMsg && oldMsg.components?.length > 0) {
+          await oldMsg.edit({ components: [] }).catch(() => null);
+        }
+      }
+    }
+
+    await dbRun(`INSERT INTO app_meta (key, value) VALUES ('menfess_last_msg_id', ?) ON CONFLICT(key) DO UPDATE SET value=?`, [sentMsg.id, sentMsg.id]);
+    await dbRun(`INSERT INTO app_meta (key, value) VALUES ('menfess_last_channel_id', ?) ON CONFLICT(key) DO UPDATE SET value=?`, [sentMsg.channelId, sentMsg.channelId]);
+  } catch (err) {
+    console.error("❌ handleMenfessButtonCleanup Error:", err);
+  }
+}
+
 // ===================== MENFESS LOG (EMBED STYLE) =====================
 async function sendMenfessLog(guild, data) {
   try {
@@ -2893,8 +3118,6 @@ async function sendMenfessLog(guild, data) {
           inline: false
         }
       )
-      .setTimestamp();
-
     if (image && /^https?:\/\//i.test(image)) {
       e.setImage(image);
     }
@@ -3013,7 +3236,7 @@ async function buildTicketTranscript(channel) {
 <body>
   <div class="wrap">
     <div class="head">
-      <div style="font-weight:800; font-size:16px">Mystral Academy — Ticket Transcript</div>
+      <div style="font-weight:800; font-size:16px">Mystral — Ticket Transcript</div>
       <div style="opacity:.85; font-size:12px">Channel: ${esc(channel.name)} • Exported: ${esc(new Date().toLocaleString("id-ID"))}</div>
     </div>
     ${htmlRows || "<i>(no messages)</i>"}
@@ -3569,7 +3792,7 @@ async function renderIdCard({ theme, number, name, gender, domisili, hobi, statu
   // Copyright Text at the bottom left
   ctx.fillStyle = subInk;
   setFont(ctx, "normal", 12);
-  ctx.fillText(`© Mystral Academy • Powered by ${BRAND_NAME}`, lx, cardY + cardH - 36);
+  ctx.fillText(`© Mystral • Powered by ${BRAND_NAME}`, lx, cardY + cardH - 36);
 
   return canvas.toBuffer("image/png");
 }
@@ -3622,7 +3845,7 @@ async function renderHouseCard({ choice, name, gender, hovId, avatarUrl }) {
 
   ctx.fillStyle = ink;
   setFont(ctx, "bold", 34);
-  ctx.fillText("MYSTRAL ACADEMY", x + 34, y + 64);
+  ctx.fillText("Mystral", x + 34, y + 64);
 
   ctx.fillStyle = subInk;
   setFont(ctx, "bold", 20);
@@ -3991,7 +4214,7 @@ async function renderWelcomeCard({ username, avatarUrl, memberCount, guildName }
   ctx.textAlign = "right";
   ctx.fillStyle = "#ffd700"; // Solid vibrant gold
   setFont(ctx, "bold", 12, "Cinzel");
-  ctx.fillText("MYSTRAL ACADEMY", 510, 68);
+  ctx.fillText("Mystral", 510, 68);
   ctx.restore();
 
   // Status on the right ticket tag
@@ -4172,7 +4395,7 @@ async function renderLeaveCard({ username, avatarUrl, guildName }) {
   ctx.textAlign = "right";
   ctx.fillStyle = "#60a5fa"; // Solid bright slate/sky blue
   setFont(ctx, "bold", 12, "Cinzel");
-  ctx.fillText("MYSTRAL ACADEMY", 510, 68);
+  ctx.fillText("Mystral", 510, 68);
   ctx.restore();
 
   // Status on the right ticket tag
@@ -4239,8 +4462,8 @@ function sortingPanelComponentsV2() {
   const body = [
     "When the veil thins, destiny answers.",
     "",
-    "Lingkaran arcane kembali aktif, memanggil setiap jiwa yang melangkah ke dalam wilayah Mystral Academy.",
-    "Dengan menyentuh segel di bawah, kau akan memasuki **Ritual Pemilahan Arcane**?hukum kuno yang menentukan afiliasimu.",
+    "Lingkaran arcane kembali aktif, memanggil setiap jiwa yang melangkah ke dalam wilayah Mystral.",
+    "Dengan menyentuh segel di bawah, kau akan memasuki **Ritual Pemilahan Arcane** hukum kuno yang menentukan afiliasimu.",
     "",
     "> Arcane akan membaca gema jiwamu dan menetapkan satu jalan:",
     `${LIGHT} **Light Student** : cahaya, tatanan, dan penjaga keseimbangan kerajaan`,
@@ -4292,212 +4515,218 @@ function menfessPanelEmbed() {
 
 function menfessPanelRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("menfess:new").setLabel("Kirim Menfess").setStyle(ButtonStyle.Success).setEmoji("✉️")
+    new ButtonBuilder().setCustomId("menfess:new").setLabel("Kirim Menfess").setStyle(ButtonStyle.Success).setEmoji("✉️"),
+    new ButtonBuilder().setCustomId("menfess:reply_panel").setLabel("Balas Menfess").setStyle(ButtonStyle.Primary).setEmoji("🫧")
   );
 }
 
 const HELP_CATEGORIES = {
+  assistant: {
+    emoji: "🤖",
+    label: "Management Assistant",
+    description: "Manage autoresponses, server statistics, active voice channels, and roles.",
+    commands: [
+      "`/c <query>` - Run assistant text queries directly.",
+      "`/serverstats` - View server statistics.",
+      "`/voicecheck` - Show active voice channel states.",
+      "`/sticky set <content>` / `/sticky remove` - Sticky Message management.",
+      "`/media enable` / `/media disable` / `/media status` - Universal Media Embed settings.",
+      "`/media platform <name> <enabled>` / `/media delete-original <value>` - Configure platforms and auto-deletion.",
+      "**Role Management & Information**:",
+      "- `c add <role> to <user> [days]` - Assign a role to a member with optional duration.",
+      "- `c remove <role> from <user>` - Remove a role from a member.",
+      "- `c list <role>` / `who` - List all members holding a role.",
+      "**Voice & Status Channels**:",
+      "- `c voice check` / `vc` / `vcc` - Show active voice channels.",
+      "- `c vc <user>` / `cv` / `voice` / `cfind` / `cvc` / `ccv` - Check a member's voice channel.",
+      "- `c server stats` / `ss` / `stats` - Show detailed server statistics.",
+      "**Moderation & Actions**:",
+      "- `c timeout <user> <duration>` / `to` - Timeout a member.",
+      "- `c untimeout <user>` / `unto` - Remove timeout from a member.",
+      "- `c nickname <user> <nick>` / `nick` - Change a member's nickname.",
+      "- `c move voice <user> <channel>` / `mv vc` - Move a member to another voice channel.",
+      "- `c disconnect voice <user>` / `dc vc` - Disconnect a member from voice.",
+      "- `c mute voice <user>` / `mu vc` - Server-mute a member in voice.",
+      "- `c deafen voice <user>` / `df vc` - Server-deafen a member in voice.",
+      "- `c purge <amount>` / `pg` / `cl` - Bulk delete messages.",
+      "- `c sticky set <content>` / `stset` - Set sticky message for this channel.",
+      "- `c sticky remove` / `strem` - Remove sticky message from this channel.",
+      "- `c media enable [platform]` / `c media disable` - Enable/Disable platform media links.",
+      "- `c media delete-original <true/false>` - Toggle original link message deletion.",
+      "- `c media status` - Check current media configuration status.",
+      "**Autoresponder**:",
+      "- `c add autoresponse ...` / `aar` - Add a new autoresponse.",
+      "- `c edit autoresponse ...` / `ear` - Edit an existing autoresponse.",
+      "- `c delete autoresponse <id>` / `dar` - Delete an autoresponse.",
+      "- `c list autoresponse` / `lar` - List all autoresponses.",
+      "- `c enable/disable autoresponse <id>` / `enar` / `disar` - Enable/Disable an autoresponse."
+    ]
+  },
   general: {
     emoji: "🧭",
-    label: "Umum & Utilitas",
-    description: "Command umum, bot status, ping, dan kalkulator.",
+    label: "General & Utilities",
+    description: "General commands, status checks, latency ping, and calculator.",
     commands: [
-      "`/help` - Menampilkan grimoire bantuan ini.",
-      "`/ping` - Cek koneksi & latensi bot.",
-      "`/botstatus` - Cek penggunaan memori dan status bot.",
-      "`/halo` - Sapaan hangat dari asisten.",
-      "`/about` - Informasi detail seputar Mystral Assistant.",
-      "`/calc <ekspresi>` - Kalkulator aman berbasis matematika murni.",
-      "`/translate <teks> [to] [from]` - Terjemahkan teks ke bahasa lain.",
-      "`/weather <lokasi>` - Cek kondisi cuaca di lokasi tertentu.",
-      "`/qrcode <teks>` - Buat QR Code dari teks atau link URL.",
-      "`/shorturl <url>` - Singkat URL panjang menggunakan TinyURL."
+      "`/help` - Display this help grimoire.",
+      "`/ping` - Check bot connection & latency.",
+      "`/botstatus` - Check memory usage and bot status.",
+      "`/halo` - Warm greetings from the assistant.",
+      "`/about` - Detailed information about Mystral Assistant.",
+      "`/calc <expression>` - Secure calculator based on pure mathematics.",
+      "`/translate <text> [to] [from]` - Translate text to another language.",
+      "`/weather <location>` - Check weather conditions in a location.",
+      "`/qrcode <text>` - Generate a QR Code from text or URL.",
+      "`/shorturl <url>` - Shorten a URL using TinyURL."
     ]
   },
   profile: {
     emoji: "🪞",
-    label: "Profil & Lookup",
-    description: "Informasi profil user, avatar, server, dan keaktifan.",
+    label: "Profile & Lookup",
+    description: "User profiles, avatars, server details, and activity metrics.",
     commands: [
-      "`/profile` - Lihat profil akademi interaktif milikmu atau orang lain.",
-      "`/avatar` - Mengambil foto profil user dengan resolusi tinggi.",
-      "`/userinfo` - Menampilkan detail akun discord seorang user.",
-      "`/serverinfo` - Menampilkan statistik & informasi server ini.",
-      "`/lastseen` - Lacak kapan terakhir kali seorang member aktif di chat.",
-      "`/topactive` - Lihat peringkat member teraktif di server.",
-      "`/check <platform>` - Cek profil game (Roblox, Github, Steam, Chess)."
+      "`/profile` - View your interactive academy profile or someone else's.",
+      "`/avatar` - Retrieve a user's high-resolution avatar.",
+      "`/userinfo` - Show detailed Discord account information.",
+      "`/serverinfo` - Display server statistics and information.",
+      "`/lastseen` - Track when a member was last active in chat.",
+      "`/topactive` - View the most active members in the server.",
+      "`/check <platform>` - Check game profile (Roblox, GitHub, Steam, Chess)."
     ]
   },
   academy: {
     emoji: "🪪",
     label: "Academy Identity",
-    description: "Pembuatan ID Card dan pemilahan ritual (Arcane Sorting).",
+    description: "Academy ID Cards and Arcane Sorting ritual.",
     commands: [
-      "`/idcard` - Buat, update, atau rancang Mystral Identity Card milikmu.",
-      "`/registry` - Akses daftar member yang terdaftar di Mystral Academy.",
-      "`/myhouse` - Tampilkan info asrama/afiliasi hasil ritual pemilahanmu.",
-      "`/sortingpanel` - Pasang panel ritual sorting *(Owner Only)*."
+      "`/idcard` - Create, update, or design your Mystral Identity Card.",
+      "`/registry` - Access the list of registered Mystral members.",
+      "`/myhouse` - Show your hostel/affiliation from the sorting ritual.",
+      "`/sortingpanel` - Deploy the sorting ritual panel *(Owner Only)*."
     ]
   },
   social: {
     emoji: "🕯️",
-    label: "Sosial & Chill",
-    description: "Status AFK, pengingat (reminders), dan Truth or Dare.",
+    label: "Social & Chill",
+    description: "AFK states, interactive reminders, and Truth or Dare.",
     commands: [
-      "`/tod panel` - Buka game Truth or Dare dengan tombol interaktif.",
-      "`/tod truth` - Ambil pertanyaan Truth secara acak.",
-      "`/tod dare` - Ambil tantangan Dare secara acak.",
-      "`/tod random` - Ambil tantangan/pertanyaan secara random.",
-      "`/tod daily` - Ambil tantangan harian khusus.",
-      "`/tod submit` - Kirim ide Truth/Dare buatanmu sendiri.",
-      "`/afk <alasan>` - Masuk ke mode AFK, bot akan me-mention alasanmu jika di-tag.",
-      "`/afk_list` - Lihat daftar member yang sedang AFK saat ini.",
-      "`/remind_in <durasi> <pesan>` - Buat alarm pengingat berdasarkan durasi waktu.",
-      "`/remind_at <waktu> <pesan>` - Buat alarm pengingat di jam tertentu (WIB).",
-      "`/remind_list` - Lihat atau hapus alarm pengingat aktif milikmu.",
-      "`/menfesspanel` - Kirim panel kirim menfess anonim *(Owner Only)*."
+      "`/tod panel` - Open Truth or Dare with interactive buttons.",
+      "`/tod truth` - Get a random Truth question.",
+      "`/tod dare` - Get a random Dare challenge.",
+      "`/tod random` - Get a random Truth or Dare.",
+      "`/tod daily` - Get a special daily challenge.",
+      "`/tod submit` - Submit your own custom Truth or Dare ideas.",
+      "`/afk [reason]` - Enter AFK state (notifies when mentioned).",
+      "`/afk_list` - View the list of currently AFK members.",
+      "`/remind_in <duration> <message>` - Set a reminder alarm based on duration.",
+      "`/remind_at <time> <message>` - Set a reminder alarm at a specific time (WIB).",
+      "`/remind_list` - View or delete your active reminders.",
+      "`/menfesspanel` - Send the anonymous menfess panel *(Owner Only)*."
     ]
   },
   games: {
     emoji: "🎉",
     label: "Games & Events",
-    description: "Mini-games tebak angka dan sistem giveaway.",
+    description: "Number guessing mini-games and giveaway system.",
     commands: [
-      "`/tebakangka` - Mulai game tebak angka interaktif di channel.",
-      "`/hint` - Ambil petunjuk batas angka dari game aktif.",
-      "`/stopgame` - Hentikan permainan tebak angka yang sedang berjalan.",
-      "`/leaderboard tebakangka` - Lihat peringkat penebak terjitu.",
-      "`/giveaway_start` - Mulai event giveaway berhadiah.",
-      "`/giveaway_end` - Selesaikan giveaway aktif dan pilih pemenang.",
-      "`/giveaway_list` - Tampilkan semua daftar giveaway aktif.",
-      "`/giveaway_entries` - Cek daftar peserta giveaway tertentu.",
-      "`/giveaway_delete` - Batalkan/hapus giveaway tertentu.",
-      "`/giveaway_reroll` - Undi ulang pemenang giveaway."
+      "`/tebakangka` - Start an interactive number guessing game.",
+      "`/hint` - Get range hints for the active guessing game.",
+      "`/stopgame` - Terminate the active guessing game.",
+      "`/leaderboard tebakangka` - View top guessers leaderboard.",
+      "`/giveaway_start` - Start a new giveaway event.",
+      "`/giveaway_end` - End the active giveaway and draw winners.",
+      "`/giveaway_list` - List all active giveaways.",
+      "`/giveaway_entries` - View entries for a specific giveaway.",
+      "`/giveaway_delete` - Cancel/delete a specific giveaway.",
+      "`/giveaway_reroll` - Reroll winners for a giveaway."
     ]
   },
   support: {
     emoji: "🎫",
     label: "Support Desk",
-    description: "Manajemen tiket aduan, report, dan kerja sama.",
+    description: "Support ticket management, reporting, and logs.",
     commands: [
-      "`/ticket_setup` - Inisialisasi kategori & setelan log ticket.",
-      "`/ticketpanel` - Kirim panel private ticket ke channel *(Owner Only)*.",
-      "**Operasional Tiket**:",
-      "• `claim` - Klaim tiket oleh staff untuk mulai melayani.",
-      "• `close` - Menutup tiket secara permanen & membuat log transkrip."
+      "`/ticket_setup` - Set up log channels and ticket categories.",
+      "`/ticketpanel` - Send the private support ticket panel *(Owner Only)*.",
+      "**Ticket Operations**:",
+      "• `claim` - Claim a ticket by staff to start support.",
+      "• `close` - Permanently close a ticket and generate transcript logs."
     ]
   },
   faq: {
     emoji: "📚",
     label: "Knowledge Base (FAQ)",
-    description: "Pusat informasi akademi (Frequently Asked Questions).",
+    description: "Frequently Asked Questions (FAQ) information center.",
     commands: [
-      "`/faq_view <tag>` - Lihat jawaban FAQ berdasarkan tag kunci.",
-      "`/faq_search <query>` - Cari artikel FAQ yang relevan.",
-      "`/faq_list` - Tampilkan daftar lengkap FAQ yang terdaftar.",
-      "`/faq_add` - Tambah artikel FAQ baru *(Staff/Admin)*.",
-      "`/faq_edit` - Ubah isi artikel FAQ yang ada *(Staff/Admin)*.",
-      "`/faq_delete` - Hapus artikel FAQ *(Staff/Admin)*.",
-      "`/faq_panel` - Kirim panel pencarian FAQ interaktif *(Staff/Admin)*."
+      "`/faq_view <tag>` - View FAQ answers by key tag.",
+      "`/faq_search <query>` - Search for relevant FAQ articles.",
+      "`/faq_list` - Display the full list of registered FAQs.",
+      "`/faq_add` - Add a new FAQ article *(Staff/Admin)*.",
+      "`/faq_edit` - Modify an existing FAQ article *(Staff/Admin)*.",
+      "`/faq_delete` - Remove an FAQ article *(Staff/Admin)*.",
+      "`/faq_panel` - Send the interactive FAQ search panel *(Staff/Admin)*."
     ]
   },
   moderation: {
     emoji: "🛡️",
     label: "Moderation Shield",
-    description: "Fitur keamanan, sanksi, dan warning member.",
+    description: "Security features, warnings, and moderating members.",
     commands: [
-      "`/warn` - Berikan sanksi peringatan (warning) kepada member.",
-      "`/warnings` - Periksa riwayat peringatan seorang member.",
-      "`/clearwarn` - Bersihkan sanksi peringatan dari member.",
-      "`/unwarn` - Tarik kembali warning terakhir seorang member.",
-      "`/timeout` - Bisukan (timeout) member untuk durasi tertentu.",
-      "`/untimeout` - Batalkan bisukan member sebelum durasinya habis.",
-      "`/mute` / `/unmute` - Matikan/aktifkan suara member di voice channel.",
-      "`/kick` - Mengeluarkan member dari server akademi.",
-      "`/ban` / `/unban` - Cekal/batalkan cekal akun member dari server."
+      "`/warn` - Warn a member with a recorded infraction.",
+      "`/warnings` - Check warnings history of a member.",
+      "`/clearwarn` - Clear all warnings from a member.",
+      "`/unwarn` - Revoke the last warning of a member.",
+      "`/timeout` - Timeout a member for a specified duration.",
+      "`/untimeout` - Remove timeout from a member early.",
+      "`/mute` / `/unmute` - Server-mute/unmute a member in voice.",
+      "`/kick` - Kick a member from the academy server.",
+      "`/ban` / `/unban` - Ban/unban a member from the server."
     ]
   },
   admin: {
     emoji: "🔐",
     label: "Admin & Owner Tools",
-    description: "Sistem role panel, backup data, dan embed builder.",
+    description: "Role panels, data backups, and custom embed builders.",
     commands: [
-      "`/selfrolespanel` - Kirim panel pengaturan role mandiri.",
-      "`/idcard_export` - Ekspor database ID Card ke format JSON.",
-      "`/backup_now` - Lakukan backup basis data SQLite secara instan.",
-      "`/tod_add` - Tambah pertanyaan Truth/Dare ke database bawaan.",
-      "`/sendembed` / `/sendembedv2` - Kirim pesan embed kustom."
+      "`/selfrolespanel` - Send the self-assignable roles setup panel.",
+      "`/idcard_export` - Export ID Card database to JSON format.",
+      "`/backup_now` - Perform an instant backup of the SQLite database.",
+      "`/tod_add` - Add custom Truth/Dare questions to the database.",
+      "`/sendembed` / `/sendembedv2` - Send custom embed messages."
     ]
   },
   prefix: {
     emoji: "⌨️",
     label: "Prefix Shortcuts",
-    description: "Daftar command cepat dengan awalan prefix 'c'.",
+    description: "Quick commands using the prefix 'c'.",
     commands: [
-      "`chelp` - Bantuan interaktif ini.",
-      "`cping` - Ping latensi bot.",
-      "`chalo` - Menyapa bot secara cepat.",
-      "`ccalc <ekspresi>` - Hitung matematika cepat.",
-      "`cta` - Mulai game tebak angka.",
-      "`chint` - Petunjuk tebak angka.",
-      "`cstopgame` - Berhentikan tebak angka.",
-      "`clb angka` - Leaderboard tebak angka.",
-      "`ctarot` - Buka tarot harian.",
-      "`ctranslate` / `cts` - Terjemah cepat.",
-      "`cweather <lokasi>` - Cek cuaca cepat.",
-      "`cqrcode <teks>` - Generasi QR Code cepat.",
-      "`cshorturl` / `csurl` - Singkat link URL cepat."
+      "`chelp` - This interactive help menu.",
+      "`cping` - Fast ping check.",
+      "`chalo` - Quick greet.",
+      "`ccalc <expression>` - Secure calculator.",
+      "`cta` - Start a number guessing game.",
+      "`chint` - Get a guessing game hint.",
+      "`cstopgame` - End the guessing game.",
+      "`clb angka` - Guessing game leaderboard.",
+      "`ctarot` - Open daily tarot card.",
+      "`ctranslate` / `cts` - Fast translation.",
+      "`cweather <location>` - Quick weather check.",
+      "`cqrcode <text>` - Fast QR Code generation.",
+      "`cshorturl` / `csurl` - Fast URL shortening.",
+      "`cmedia` - Quick media settings check."
     ]
   }
 };
 
-function buildHelpUI(selectedCategory = "home", userId = null) {
-  const embed = new EmbedBuilder().setColor(EMBED_COLOR).setTimestamp();
-
-  if (selectedCategory === "home" || !HELP_CATEGORIES[selectedCategory]) {
-    embed
-      .setTitle("📚 Mystral Assistant — Command Grimoire")
-      .setDescription(
-        [
-          "Selamat datang di pusat komando **Mystral Academy**.",
-          "Gunakan slash command `/...` untuk fitur utama, atau prefix `c...` untuk beberapa command cepat.",
-          "",
-          "🔮 **Pilih kategori fitur di bawah untuk melihat daftar command lengkap.**"
-        ].join("\n")
-      )
-      .setFooter({ text: "Mystral Academy • Gunakan menu di bawah untuk bernavigasi" });
-
-    // Show summary categories in fields
-    for (const [key, cat] of Object.entries(HELP_CATEGORIES)) {
-      embed.addFields({
-        name: `${cat.emoji} ${cat.label}`,
-        value: cat.description,
-        inline: true
-      });
-    }
-  } else {
-    const cat = HELP_CATEGORIES[selectedCategory];
-    embed
-      .setTitle(`${cat.emoji} Kategori: ${cat.label}`)
-      .setDescription(
-        [
-          `*${cat.description}*`,
-          "",
-          cat.commands.join("\n")
-        ].join("\n")
-      )
-      .setFooter({ text: `Mystral Academy • Kategori: ${cat.label} • slash / prefix c` });
-  }
-
+function buildHelpUI(selectedCategory = "home", userId = null, isSlash = true) {
   // Create Select Menu
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`help:menu:${userId || "any"}`)
-    .setPlaceholder("📖 Pilih Kategori Fitur...")
+    .setPlaceholder("📖 Choose a Feature Category...")
     .addOptions(
       {
-        label: "Menu Utama",
+        label: "Main Menu",
         value: "home",
-        description: "Kembali ke halaman depan grimoire.",
+        description: "Return to the front page of the grimoire.",
         emoji: "🏠",
         default: selectedCategory === "home"
       },
@@ -4511,52 +4740,162 @@ function buildHelpUI(selectedCategory = "home", userId = null) {
     );
 
   const row = new ActionRowBuilder().addComponents(selectMenu);
-  return { embeds: [embed], components: [row] };
-}
 
-function buildHelpEmbed() {
-  const ui = buildHelpUI("home", null);
-  return ui.embeds[0];
+  if (isSlash) {
+    const container = new ContainerBuilder();
+    if (selectedCategory === "home" || !HELP_CATEGORIES[selectedCategory]) {
+      const categoriesDesc = Object.entries(HELP_CATEGORIES)
+        .map(([key, cat]) => `${cat.emoji} **${cat.label}**\n*${cat.description}*`)
+        .join("\n\n");
+
+      container
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent("# 📚 Mystral Assistant — Command Grimoire"),
+          new TextDisplayBuilder().setContent(
+            [
+              "Welcome to the **Mystral** help center.",
+              "Use slash commands `/...` for main features, or prefix `c...` for quick commands.",
+              "",
+              "> **Select a feature category below to view the full command list.**",
+              "",
+              categoriesDesc
+            ].join("\n")
+          )
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addActionRowComponents(row)
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent("Mystral   Use the menu below to navigate")
+        );
+    } else {
+      const cat = HELP_CATEGORIES[selectedCategory];
+      container
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(`# ${cat.emoji} Category: ${cat.label}`),
+          new TextDisplayBuilder().setContent(
+            [
+              `*${cat.description}*`,
+              "",
+              cat.commands.join("\n")
+            ].join("\n")
+          )
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addActionRowComponents(row)
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(`Mystral   Category: ${cat.label}   slash / prefix c`)
+        );
+    }
+
+    return {
+      components: [container],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { parse: [] }
+    };
+  } else {
+    // Return standard EmbedBuilder for prefix commands
+    const embed = new EmbedBuilder()
+      .setColor(EMBED_COLOR)
+      .setTimestamp();
+
+    if (selectedCategory === "home" || !HELP_CATEGORIES[selectedCategory]) {
+      embed
+        .setTitle("📚 Mystral Assistant — Command Grimoire")
+        .setDescription(
+          [
+            "Welcome to the **Mystral** help center.",
+            "Use slash commands `/...` for main features, or prefix `c...` for quick commands.",
+            "",
+            "> **Select a feature category below to view the full command list.**"
+          ].join("\n")
+        );
+
+      for (const [key, cat] of Object.entries(HELP_CATEGORIES)) {
+        embed.addFields({
+          name: `${cat.emoji} ${cat.label}`,
+          value: cat.description,
+          inline: true
+        });
+      }
+      embed.setFooter({ text: "Mystral • Use the menu below to navigate" });
+    } else {
+      const cat = HELP_CATEGORIES[selectedCategory];
+      embed
+        .setTitle(`${cat.emoji} Category: ${cat.label}`)
+        .setDescription(
+          [
+            `*${cat.description}*`,
+            "",
+            cat.commands.join("\n")
+          ].join("\n")
+        )
+        .setFooter({ text: `Mystral • Category: ${cat.label} • slash / prefix c` });
+    }
+
+    return {
+      embeds: [embed],
+      components: [row],
+      allowedMentions: { parse: [] }
+    };
+  }
 }
 
 function ticketPanelComponentsV2() {
-  const row = ticketPanelRow();
+  const rows = ticketPanelRows();
+
   const container = new ContainerBuilder()
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("# 🎫 Arcane Support Desk — Mystral Academy"),
+      new TextDisplayBuilder().setContent("# <a:G_moonfo:1523238023750352947> Mystral Support Desk"),
       new TextDisplayBuilder().setContent(
         [
-          "Jika kau mengalami gangguan, kebingungan, atau membutuhkan bantuan resmi dari akademi buka ticket secara privat di sini.",
+          "Butuh bantuan atau ingin menghubungi **Staff Mystral**?",
           "",
-          "🕯️ **Keluhan** — pengalaman tidak nyaman / konflik / hal pribadi",
-          "⚠️ **Report** — pelanggaran aturan / tindakan meresahkan",
-          "💠 **Donasi** — dukungan untuk pengembangan akademi",
-          "🤝 **Partnership** — kerja sama komunitas / event",
-          "✅ **Verifikasi** — pengajuan atau kendala role Verified dan role Real Female",
+          "Pilih salah satu kategori di bawah untuk membuat **ticket privat** sesuai dengan kebutuhanmu.",
           "",
-          "🔐 Ticket bersifat **rahasia**: hanya kamu & staff yang dapat melihatnya.",
-          "Tolong tulis kronologi atau kebutuhanmu dengan jelas agar cepat ditangani.",
+          "<:Administrator:1523387282248171560> **Support** — Bantuan umum, bot, role, atau kendala server.",
+          "<a:lightred:1523182352702898258> **Report** — Melaporkan pelanggaran atau perilaku yang mengganggu.",
+          "<a:blue_diamond:1523181238154956956> **Donasi** — Informasi, konfirmasi, atau dukungan untuk MYSTRAL.",
+          "🤝 **Partnership** — Kerja sama komunitas, sponsor, maupun kolaborasi event.",
+          "<a:VerifiedUser:1384396379102908416> **Verifikasi** — Pengajuan atau kendala role Verified dan Real Female.",
+          "<:a1_heart:1510056894889463969> **Ask** — Pertanyaan, saran, atau kebutuhan lainnya.",
+          "",
+          "> <:visitor:1523182956493930567> Semua ticket bersifat **rahasia** dan hanya dapat diakses oleh kamu serta Tim Staff MYSTRAL.",
+          "> 📝 Mohon jelaskan kronologi atau kebutuhanmu secara lengkap agar kami dapat membantu lebih cepat."
         ].join("\n")
       )
     )
-    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-    .addActionRowComponents(row)
-    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addSeparatorComponents(
+      new SeparatorBuilder().setDivider(true)
+    )
+    .addActionRowComponents(rows[0])
+    .addActionRowComponents(rows[1])
+    .addSeparatorComponents(
+      new SeparatorBuilder().setDivider(true)
+    )
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("Mystral Academy • Speak freely, we will listen.")
+      new TextDisplayBuilder().setContent(
+        "<a:G_moonfo:1523238023750352947> **Mystral District**  • *Your comfort is our priority.*"
+      )
     );
 
   return [container];
 }
 
-function ticketPanelRow() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("ticket:open:complaint").setLabel("Keluhan").setStyle(ButtonStyle.Primary).setEmoji("🕯"),
-    new ButtonBuilder().setCustomId("ticket:open:report").setLabel("Report").setStyle(ButtonStyle.Danger).setEmoji("⚠"),
-    new ButtonBuilder().setCustomId("ticket:open:donate").setLabel("Donate").setStyle(ButtonStyle.Success).setEmoji("💠"),
-    new ButtonBuilder().setCustomId("ticket:open:partnership").setLabel("Partnership").setStyle(ButtonStyle.Primary).setEmoji("🤝"),
-    new ButtonBuilder().setCustomId("ticket:open:verification").setLabel("Verification").setStyle(ButtonStyle.Success).setEmoji("✅")
-  );
+function ticketPanelRows() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("ticket:open:support").setLabel("Support").setStyle(ButtonStyle.Primary).setEmoji("1523387282248171560"),
+      new ButtonBuilder().setCustomId("ticket:open:report").setLabel("Report").setStyle(ButtonStyle.Danger).setEmoji("1523182352702898258"),
+      new ButtonBuilder().setCustomId("ticket:open:donation").setLabel("Donasi").setStyle(ButtonStyle.Success).setEmoji("1523181238154956956"),
+      new ButtonBuilder().setCustomId("ticket:open:partnership").setLabel("Partnership").setStyle(ButtonStyle.Primary).setEmoji("🤝")
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("ticket:open:verification").setLabel("Verifikasi").setStyle(ButtonStyle.Success).setEmoji("1384396379102908416"),
+      new ButtonBuilder().setCustomId("ticket:open:ask").setLabel("Ask").setStyle(ButtonStyle.Secondary).setEmoji("1510056894889463969")
+    )
+  ];
 }
 
 // ===================== HOUSECARD POST =====================
@@ -4573,14 +4912,14 @@ async function postHouseCard(guild, user, choice) {
     name: idData.name || user.username,
     gender: idData.gender || "—",
     hovId: idData.number || "—",
-    avatarUrl: user.displayAvatarURL({ extension: "png", size: 256 }),
+    avatarUrl: (member ?? user).displayAvatarURL({ extension: "png", size: 256 }),
   });
 
   const filename = `house_card_${user.id}.png`;
   const file = new AttachmentBuilder(png, { name: filename });
 
   const embed = new EmbedBuilder()
-    .setTitle("🪪 Mystral Academy Card")
+    .setTitle("🪪 Mystral Card")
     .setColor(EMBED_COLOR)
     .setDescription(
       [
@@ -4589,7 +4928,7 @@ async function postHouseCard(guild, user, choice) {
       ].join("\n")
     )
     .setImage(`attachment://${filename}`)
-    .setFooter({ text: "Mystral Academy • Student Registry" })
+    .setFooter({ text: "Mystral • Student Registry" })
     .setTimestamp();
 
   const payload = {
@@ -4613,7 +4952,7 @@ async function postHouseCard(guild, user, choice) {
         .filter((msg) =>
           msg.author?.id === client.user?.id &&
           msg.content?.includes(`<@${user.id}>`) &&
-          msg.embeds?.[0]?.title === "🪪 Mystral Academy Card"
+          msg.embeds?.[0]?.title === "🪪 Mystral Card"
         )
         .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
       : [];
@@ -4672,6 +5011,1483 @@ function registryRow(pageIndex, totalPages) {
 
 // ===================== VOICE TRACKING SYSTEM =====================
 const voiceSessions = new Map(); // userId -> joinTimestamp
+const pendingConfirmations = new Map();
+const autoresponseCooldowns = new Map();
+
+// Sticky Message System Cache
+const stickyCache = new Map(); // channelId -> { content, lastMessageId }
+const stickyLocks = new Set();  // channelId
+const stickyDebounces = new Map(); // channelId -> Timeout
+
+// Universal Media Embed Cache
+const mediaSettingsCache = new Map(); // guildId -> settings object
+
+function findRoleFuzzy(guild, roleQuery) {
+  const query = roleQuery.toLowerCase().trim();
+  let role = guild.roles.cache.find(r => r.name.toLowerCase() === query);
+  if (!role) {
+    role = guild.roles.cache.find(r => r.name.toLowerCase().includes(query));
+  }
+  return role;
+}
+
+async function findMemberFuzzy(guild, userQuery) {
+  const query = userQuery.replace(/[<@!>]/g, "").trim();
+  if (/^\d{17,20}$/.test(query)) {
+    return await guild.members.fetch(query).catch(() => null);
+  }
+  await guild.members.fetch().catch(() => { });
+  const lowQuery = query.toLowerCase();
+  let member = guild.members.cache.find(m => m.user.username.toLowerCase() === lowQuery || m.displayName.toLowerCase() === lowQuery);
+  if (!member) {
+    member = guild.members.cache.find(m => m.user.username.toLowerCase().includes(lowQuery) || m.displayName.toLowerCase().includes(lowQuery));
+  }
+  return member;
+}
+
+async function safeCtxReply(ctx, payload) {
+  try {
+    if (ctx.isInteraction?.()) {
+      if (ctx.deferred || ctx.replied) {
+        return await ctx.editReply(payload);
+      }
+      if (typeof payload === 'object') {
+        payload.fetchReply = true;
+      } else {
+        payload = { content: payload, fetchReply: true };
+      }
+      return await ctx.reply(payload);
+    }
+    return await ctx.reply(payload);
+  } catch (e) {
+    console.error("[CTX REPLY ERROR]", e);
+  }
+}
+
+function validateModAction(ctx, targetMember, requiredBotPerm, requiredUserPerm) {
+  const guild = ctx.guild;
+  const me = guild.members.me;
+  const member = ctx.member;
+  const authorId = ctx.author ? ctx.author.id : ctx.user.id;
+  if (requiredUserPerm && !member.permissions.has(requiredUserPerm)) {
+    return { ok: false, error: `❌ Anda tidak memiliki izin (\`${requiredUserPerm}\`) untuk melakukan tindakan ini.` };
+  }
+  if (requiredBotPerm && !me.permissions.has(requiredBotPerm)) {
+    return { ok: false, error: `❌ Bot tidak memiliki izin (\`${requiredBotPerm}\`) di server ini.` };
+  }
+  if (targetMember) {
+    if (targetMember.id === guild.ownerId) {
+      return { ok: false, error: `❌ Tidak dapat melakukan tindakan pada Owner Server.` };
+    }
+    const botHighest = me.roles.highest.position;
+    const userHighest = member.roles.highest.position;
+    const targetHighest = targetMember.roles.highest.position;
+    if (botHighest <= targetHighest) {
+      return { ok: false, error: `❌ Peran bot tidak cukup tinggi untuk memodifikasi member ini.` };
+    }
+    if (userHighest <= targetHighest && authorId !== guild.ownerId) {
+      return { ok: false, error: `❌ Peran Anda tidak cukup tinggi untuk memodifikasi member ini.` };
+    }
+  }
+  return { ok: true };
+}
+
+function formatVoiceDuration(ms) {
+  if (!ms || ms < 0) return "0m";
+  const totalMin = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  if (hours > 0) return `${hours}h ${String(mins).padStart(2, '0')}m`;
+  return `${mins}m`;
+}
+
+function formatVoiceDurationIndo(ms) {
+  if (!ms || ms < 0) return "0 menit";
+  const totalMin = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  let res = [];
+  if (hours > 0) res.push(`${hours} jam`);
+  if (mins > 0 || res.length === 0) res.push(`${mins} menit`);
+  return res.join(" ");
+}
+
+function parseKeyValueArgs(text) {
+  const args = {};
+  const regex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const key = match[1].toLowerCase();
+    const val = match[2] || match[3] || match[4];
+    args[key] = val;
+  }
+  return args;
+}
+
+async function checkAutoresponses(message) {
+  const guildId = message.guild.id;
+  const responses = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=? AND is_enabled=1`, [guildId]);
+  const now = Date.now();
+  for (const r of responses) {
+    const cooldownKey = `${message.author.id}:${r.id}`;
+    const lastUsed = autoresponseCooldowns.get(cooldownKey) || 0;
+    if (r.cooldown && (now - lastUsed) < r.cooldown * 1000) continue;
+    let isMatch = false;
+    const trigger = r.trigger_text;
+    const msgContent = r.ignore_case ? message.content.toLowerCase() : message.content;
+    const compTrigger = r.ignore_case ? trigger.toLowerCase() : trigger;
+    if (r.match_type === 'exact') {
+      isMatch = (msgContent.trim() === compTrigger.trim());
+    } else if (r.match_type === 'contains') {
+      isMatch = msgContent.includes(compTrigger);
+    } else if (r.match_type === 'regex') {
+      try {
+        const flags = r.ignore_case ? 'i' : '';
+        const rx = new RegExp(trigger, flags);
+        isMatch = rx.test(message.content);
+      } catch {
+        isMatch = false;
+      }
+    }
+    if (isMatch) {
+      autoresponseCooldowns.set(cooldownKey, now);
+      let finalResponse = r.response_text;
+      if (r.random_responses) {
+        try {
+          const opts = JSON.parse(r.random_responses);
+          if (opts.length) finalResponse = opts[Math.floor(Math.random() * opts.length)];
+        } catch { }
+      }
+      finalResponse = finalResponse
+        .replace(/{mention}/g, `<@${message.author.id}>`)
+        .replace(/{user}/g, `<@${message.author.id}>`)
+        .replace(/{username}/g, message.author.username)
+        .replace(/{displayName}/g, message.member ? message.member.displayName : message.author.username)
+        .replace(/{channel}/g, `<#${message.channel.id}>`);
+
+      const payload = {};
+      const embeds = [];
+      const components = [];
+      if (r.embed_response) {
+        const embed = new EmbedBuilder().setColor(EMBED_COLOR).setDescription(finalResponse);
+        embeds.push(embed);
+      } else {
+        payload.content = finalResponse;
+      }
+      if (r.attachment_url) {
+        const val = validateDirectImageUrl(r.attachment_url);
+        if (!val) payload.files = [r.attachment_url];
+      }
+      if (r.button_label && r.button_url) {
+        const button = new ButtonBuilder().setLabel(r.button_label).setURL(r.button_url).setStyle(ButtonStyle.Link);
+        components.push(new ActionRowBuilder().addComponents(button));
+      }
+      if (r.select_menu_options) {
+        try {
+          const opts = JSON.parse(r.select_menu_options);
+          if (opts.length) {
+            const select = new StringSelectMenuBuilder().setCustomId(`ar_select_${r.id}`).setPlaceholder('Pilih opsi...').addOptions(opts.map(o => ({ label: o, value: o })));
+            components.push(new ActionRowBuilder().addComponents(select));
+          }
+        } catch { }
+      }
+      if (embeds.length) payload.embeds = embeds;
+      if (components.length) payload.components = components;
+      if (r.reply_mode === 'reply') {
+        payload.allowedMentions = { repliedUser: !!r.mention_user };
+        await message.reply(payload).catch(() => null);
+      } else {
+        payload.allowedMentions = { parse: r.mention_user ? ['users'] : [] };
+        await message.channel.send(payload).catch(() => null);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+async function handleVoiceCheck(ctx) {
+  const guild = ctx.guild;
+  const channels = guild.channels.cache.filter(c => c.type === 2);
+  const activeChannels = [];
+  for (const [id, ch] of channels) {
+    if (ch.members.size > 0) activeChannels.push(ch);
+  }
+  if (activeChannels.length === 0) {
+    const embed = new EmbedBuilder()
+      .setTitle("🎤 Voice Channel Inspector")
+      .setColor(0xe74c3c)
+      .setDescription("❌ Tidak ada voice channel aktif saat ini.")
+      .setFooter({ text: BRAND_NAME })
+      .setTimestamp();
+    return safeCtxReply(ctx, { embeds: [embed] });
+  }
+  const embed = new EmbedBuilder()
+    .setTitle("🎤 Voice Channel Inspector")
+    .setColor(EMBED_COLOR)
+    .setDescription(`Menampilkan **${activeChannels.length}** voice channel aktif saat ini.`)
+    .setFooter({ text: BRAND_NAME })
+    .setTimestamp();
+
+  for (const ch of activeChannels) {
+    let list = "";
+    for (const [memberId, member] of ch.members) {
+      const joinTime = voiceSessions.get(memberId);
+      const duration = joinTime ? Date.now() - joinTime : 0;
+      list += `• **${member.displayName}** — \`${formatVoiceDuration(duration)}\`\n`;
+    }
+    embed.addFields({
+      name: `🔊 ${ch.name} (${ch.members.size} Member)`,
+      value: list || "_Tidak ada member_",
+      inline: false
+    });
+  }
+  return safeCtxReply(ctx, { embeds: [embed] });
+}
+
+async function handleServerStats(ctx) {
+  const guild = ctx.guild;
+  await guild.members.fetch().catch(() => { });
+  const total = guild.memberCount;
+  const humans = guild.members.cache.filter(m => !m.user.bot).size;
+  const bots = guild.members.cache.filter(m => m.user.bot).size;
+  let online = 0, idle = 0, dnd = 0, offline = 0;
+  guild.members.cache.forEach(m => {
+    const status = m.presence?.status;
+    if (status === "online") online++;
+    else if (status === "idle") idle++;
+    else if (status === "dnd") dnd++;
+    else offline++;
+  });
+  const totalRoles = guild.roles.cache.size;
+  const totalChannels = guild.channels.cache.size;
+  const textChannels = guild.channels.cache.filter(c => c.type === 0).size;
+  const voiceChannels = guild.channels.cache.filter(c => c.type === 2).size;
+  const categories = guild.channels.cache.filter(c => c.type === 4).size;
+  const emojis = guild.emojis.cache.size;
+  const stickers = guild.stickers.cache.size;
+  const boostLevel = guild.premiumTier;
+  const totalBoost = guild.premiumSubscriptionCount || 0;
+  const owner = await guild.fetchOwner().catch(() => null);
+  const ownerText = owner ? `<@${owner.id}> (${owner.user.tag})` : "Unknown";
+  const createdAt = guild.createdAt.toLocaleDateString("id-ID", {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+  const embed = new EmbedBuilder()
+    .setTitle(`📊 Server Statistics — ${guild.name}`)
+    .setColor(EMBED_COLOR)
+    .setThumbnail(guild.iconURL({ extension: "png", size: 256 }))
+    .addFields([
+      { name: "👥 Members", value: `• Total: **${total}**\n• Human: **${humans}**\n• Bot: **${bots}**`, inline: true },
+      { name: "🟢 Presences", value: `• Online: **${online}**\n• Idle: **${idle}**\n• DND: **${dnd}**\n• Offline: **${offline}**`, inline: true },
+      { name: "💬 Channels", value: `• Total: **${totalChannels}**\n• Text: **${textChannels}**\n• Voice: **${voiceChannels}**\n• Category: **${categories}**`, inline: true },
+      { name: "✨ Features", value: `• Roles: **${totalRoles}**\n• Emojis: **${emojis}**\n• Stickers: **${stickers}**`, inline: true },
+      { name: "🚀 Boost Status", value: `• Level: **${boostLevel}**\n• Boosts: **${totalBoost}**`, inline: true },
+      { name: "👑 Ownership & Creation", value: `• Owner: ${ownerText}\n• Created At: **${createdAt}**`, inline: false }
+    ])
+    .setFooter({ text: BRAND_NAME })
+    .setTimestamp();
+  return safeCtxReply(ctx, { embeds: [embed] });
+}
+
+function startTimedRolesLoop(client) {
+  setInterval(async () => {
+    try {
+      const now = Date.now();
+      const expired = await safeAll(`SELECT id, guild_id, user_id, role_id FROM timed_roles WHERE expire_at <= ?`, [now]);
+      for (const row of expired) {
+        const guild = client.guilds.cache.get(row.guild_id);
+        if (guild) {
+          const member = await guild.members.fetch(row.user_id).catch(() => null);
+          const role = guild.roles.cache.get(row.role_id);
+          if (member && role) await member.roles.remove(role).catch(() => null);
+        }
+        await safeRun(`DELETE FROM timed_roles WHERE id=?`, [row.id]);
+      }
+    } catch (e) {
+      console.error("[TIMED ROLES] Error checking expired roles:", e);
+    }
+  }, 60 * 1000);
+}
+
+async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
+  // Prefix sticky commands
+  if (cmd === "sticky" || cmd === "stset" || cmd === "strem" || cmd === "stickyset" || cmd === "stickyremove" || cmd === "stedit" || cmd === "stickyedit" || cmd === "stlist" || cmd === "stickylist") {
+    const member = ctx.member;
+    if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+      const embed = new EmbedBuilder().setTitle("❌ Permission Denied").setColor(0xe74c3c).setDescription("You need `Manage Messages` permission to use sticky commands.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    const sub = args[0]?.toLowerCase();
+    if (cmd === "stset" || sub === "set") {
+      const content = (cmd === "stset" ? args.join(" ") : args.slice(1).join(" ")).trim();
+      if (!content) {
+        const embed = new EmbedBuilder().setTitle("❌ Format Error").setColor(0xe74c3c).setDescription(`Usage: \`${PREFIX} sticky set <content>\` or \`${PREFIX} stset <content>\``).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+
+      await safeRun(
+        "INSERT INTO sticky_messages (channel_id, content, last_message_id) VALUES (?, ?, NULL) ON CONFLICT(channel_id) DO UPDATE SET content=excluded.content",
+        [ctx.channel.id, content]
+      );
+
+      const cache = stickyCache.get(ctx.channel.id);
+      if (cache?.lastMessageId) {
+        const oldMsg = await ctx.channel.messages.fetch(cache.lastMessageId).catch(() => null);
+        if (oldMsg) await oldMsg.delete().catch(() => null);
+      }
+
+      const sent = await ctx.channel.send({ content }).catch(() => null);
+      const lastMessageId = sent ? sent.id : null;
+      if (sent) {
+        await safeRun("UPDATE sticky_messages SET last_message_id=? WHERE channel_id=?", [lastMessageId, ctx.channel.id]);
+      }
+
+      stickyCache.set(ctx.channel.id, { content, lastMessageId });
+
+      const embed = new EmbedBuilder().setTitle("✅ Sticky Message Set").setColor(0x2ecc71).setDescription(`Successfully set sticky message for <#${ctx.channel.id}>.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (cmd === "stedit" || sub === "edit" || cmd === "stickyedit") {
+      const content = (cmd === "stedit" ? args.join(" ") : args.slice(1).join(" ")).trim();
+      if (!content) {
+        const embed = new EmbedBuilder().setTitle("❌ Format Error").setColor(0xe74c3c).setDescription(`Usage: \`${PREFIX} sticky edit <content>\` or \`${PREFIX} stedit <content>\``).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+
+      const exists = stickyCache.has(ctx.channel.id);
+      if (!exists) {
+        const embed = new EmbedBuilder().setTitle("❌ Error").setColor(0xe74c3c).setDescription(`No sticky message is currently set in this channel. Use \`${PREFIX} sticky set\` first.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+
+      await safeRun(
+        "UPDATE sticky_messages SET content=? WHERE channel_id=?",
+        [content, ctx.channel.id]
+      );
+
+      const cache = stickyCache.get(ctx.channel.id);
+      if (cache?.lastMessageId) {
+        const oldMsg = await ctx.channel.messages.fetch(cache.lastMessageId).catch(() => null);
+        if (oldMsg) await oldMsg.delete().catch(() => null);
+      }
+
+      const sent = await ctx.channel.send({ content }).catch(() => null);
+      const lastMessageId = sent ? sent.id : null;
+      if (sent) {
+        await safeRun("UPDATE sticky_messages SET last_message_id=? WHERE channel_id=?", [lastMessageId, ctx.channel.id]);
+      }
+
+      stickyCache.set(ctx.channel.id, { content, lastMessageId });
+
+      const embed = new EmbedBuilder().setTitle("✅ Sticky Message Edited").setColor(0x2ecc71).setDescription(`Successfully updated sticky message for <#${ctx.channel.id}>.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (cmd === "strem" || sub === "remove" || sub === "delete" || cmd === "stickyremove") {
+      const cache = stickyCache.get(ctx.channel.id);
+      if (cache?.lastMessageId) {
+        const oldMsg = await ctx.channel.messages.fetch(cache.lastMessageId).catch(() => null);
+        if (oldMsg) await oldMsg.delete().catch(() => null);
+      }
+
+      await safeRun("DELETE FROM sticky_messages WHERE channel_id=?", [ctx.channel.id]);
+      stickyCache.delete(ctx.channel.id);
+
+      const embed = new EmbedBuilder().setTitle("✅ Sticky Message Removed").setColor(0x2ecc71).setDescription(`Successfully removed sticky message from <#${ctx.channel.id}>.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (cmd === "stlist" || sub === "list" || cmd === "stickylist") {
+      const stickies = await safeAll("SELECT * FROM sticky_messages").catch(() => []);
+      const guildChannels = await ctx.guild.channels.fetch().catch(() => null);
+      if (!guildChannels) {
+        const embed = new EmbedBuilder().setTitle("❌ Error").setColor(0xe74c3c).setDescription("Failed to fetch channels list.").setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+
+      const activeInGuild = [];
+      for (const row of stickies) {
+        if (guildChannels.has(row.channel_id)) {
+          const snippet = row.content.length > 50 ? row.content.slice(0, 50) + "..." : row.content;
+          activeInGuild.push(`• <#${row.channel_id}>: \`${snippet}\``);
+        }
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle("📌 Active Sticky Messages")
+        .setColor(EMBED_COLOR)
+        .setDescription(activeInGuild.length > 0 ? activeInGuild.join("\n") : "No active sticky messages in this server.")
+        .setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    const embed = new EmbedBuilder().setTitle("❌ Format Error").setColor(0xe74c3c).setDescription(`Usage:\n• \`${PREFIX} sticky set <content>\`\n• \`${PREFIX} sticky edit <content>\`\n• \`${PREFIX} sticky remove\`\n• \`${PREFIX} sticky list\``).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (cmd === "media") {
+    const member = ctx.member;
+    if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+      const embed = new EmbedBuilder().setTitle("❌ Permission Denied").setColor(0xe74c3c).setDescription("You need `Manage Messages` permission to use media settings.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    const sub = args[0]?.toLowerCase();
+    const settings = await getOrInitMediaSettings(ctx.guild.id);
+
+    if (sub === "enable") {
+      const plat = args[1]?.toLowerCase();
+      if (plat) {
+        // Toggle specific platform (e.g. c media enable tiktok)
+        if (!settings.platforms) settings.platforms = {};
+        settings.platforms[plat] = true;
+        await saveMediaSettings(ctx.guild.id, settings);
+        const embed = new EmbedBuilder().setTitle("✅ Platform Enabled").setColor(0x2ecc71).setDescription(`Platform **${plat.toUpperCase()}** is now **enabled**.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      settings.enabled = 1;
+      await saveMediaSettings(ctx.guild.id, settings);
+      const embed = new EmbedBuilder().setTitle("✅ Media Embed Enabled").setColor(0x2ecc71).setDescription("Universal Media Embed features are now **enabled** globally in this server.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (sub === "disable") {
+      const plat = args[1]?.toLowerCase();
+      if (plat) {
+        // Toggle specific platform (e.g. c media disable twitter)
+        if (!settings.platforms) settings.platforms = {};
+        settings.platforms[plat] = false;
+        await saveMediaSettings(ctx.guild.id, settings);
+        const embed = new EmbedBuilder().setTitle("✅ Platform Disabled").setColor(0xe74c3c).setDescription(`Platform **${plat.toUpperCase()}** is now **disabled**.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      settings.enabled = 0;
+      await saveMediaSettings(ctx.guild.id, settings);
+      const embed = new EmbedBuilder().setTitle("✅ Media Embed Disabled").setColor(0xe74c3c).setDescription("Universal Media Embed features are now **disabled** globally in this server.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (sub === "delete-original") {
+      const valStr = args[1]?.toLowerCase();
+      if (valStr !== "true" && valStr !== "false") {
+        const embed = new EmbedBuilder().setTitle("❌ Format Error").setColor(0xe74c3c).setDescription(`Usage: \`${PREFIX} media delete-original <true/false>\``).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const val = valStr === "true";
+      settings.deleteOriginal = val ? 1 : 0;
+      await saveMediaSettings(ctx.guild.id, settings);
+      const embed = new EmbedBuilder()
+        .setTitle("✅ Setting Updated")
+        .setColor(0x2ecc71)
+        .setDescription(`Auto-delete of original links is now set to **${val ? "enabled (true)" : "disabled (false)"}**.`)
+        .setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (sub === "quality") {
+      const pref = args[1]?.toLowerCase();
+      if (pref !== "auto" && pref !== "720p" && pref !== "1080p") {
+        const embed = new EmbedBuilder().setTitle("❌ Format Error").setColor(0xe74c3c).setDescription(`Usage: \`${PREFIX} media quality <auto/720p/1080p>\``).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      settings.quality = pref;
+      await saveMediaSettings(ctx.guild.id, settings);
+      const embed = new EmbedBuilder()
+        .setTitle("✅ Quality Set")
+        .setColor(0x2ecc71)
+        .setDescription(`Video quality preference set to **${pref}**.`)
+        .setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (sub === "status") {
+      const platList = [
+        "tiktok", "instagram", "twitter", "reddit", "threads",
+        "youtube", "facebook", "twitch", "kick", "bilibili",
+        "pinterest", "bluesky", "imgur", "streamable", "vimeo"
+      ];
+      const statuses = platList.map(p => {
+        const isPlatEnabled = settings.platforms && settings.platforms[p] !== undefined ? settings.platforms[p] : true;
+        return `• **${p.toUpperCase()}**: ${isPlatEnabled ? "🟢 Enabled" : "🔴 Disabled"}`;
+      }).join("\n");
+
+      const embed = new EmbedBuilder()
+        .setTitle("⚙️ Universal Media Embed Settings")
+        .setColor(EMBED_COLOR)
+        .addFields(
+          { name: "Global Status", value: settings.enabled ? "🟢 Enabled" : "🔴 Disabled", inline: true },
+          { name: "Auto-Delete Original", value: settings.deleteOriginal ? "🟢 True" : "🔴 False", inline: true },
+          { name: "Quality Preference", value: `\`${settings.quality}\``, inline: true },
+          { name: "Supported Platforms Status", value: statuses }
+        )
+        .setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("❌ Format Error")
+      .setColor(0xe74c3c)
+      .setDescription(`Usage:\n• \`${PREFIX} media enable [platform]\`\n• \`${PREFIX} media disable [platform]\`\n• \`${PREFIX} media delete-original <true/false>\`\n• \`${PREFIX} media quality <auto/720p/1080p>\`\n• \`${PREFIX} media status\``)
+      .setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  let isAddRole = false;
+  let isRemoveRole = false;
+  let roleQuery = "";
+  let userQuery = "";
+
+  const authorId = ctx.author ? ctx.author.id : ctx.user.id;
+  const authorTag = ctx.author ? ctx.author.tag : ctx.user.tag;
+
+  let durationDays = null;
+  const durationMatch = cleanInput.match(/(?:for\s+)?(\d+)\s*(?:days?|hari|h)$/i);
+  let cleanInputWithoutDuration = cleanInput;
+  if (durationMatch) {
+    durationDays = parseInt(durationMatch[1]);
+    cleanInputWithoutDuration = cleanInput.slice(0, durationMatch.index).trim();
+  }
+
+  let m = cleanInputWithoutDuration.match(/^add\s+(.+?)\s+to\s+(.+)$/i);
+  if (m) { isAddRole = true; roleQuery = m[1]; userQuery = m[2]; }
+
+  if (!isAddRole) {
+    m = cleanInputWithoutDuration.match(/^kasih\s+role\s+(.+?)\s+ke\s+(.+)$/i);
+    if (m) { isAddRole = true; roleQuery = m[1]; userQuery = m[2]; }
+  }
+  if (!isAddRole) {
+    m = cleanInputWithoutDuration.match(/^give\s+(.+?)\s+role\s+to\s+(.+)$/i);
+    if (m) { isAddRole = true; roleQuery = m[1]; userQuery = m[2]; }
+  }
+  if (!isAddRole) {
+    m = cleanInputWithoutDuration.match(/^give\s+role\s+(.+?)\s+to\s+(.+)$/i);
+    if (m) { isAddRole = true; roleQuery = m[1]; userQuery = m[2]; }
+  }
+
+  if (!isAddRole) {
+    m = cleanInputWithoutDuration.match(/^remove\s+(.+?)\s+from\s+(.+)$/i);
+    if (m) { isRemoveRole = true; roleQuery = m[1]; userQuery = m[2]; }
+  }
+  if (!isAddRole && !isRemoveRole) {
+    m = cleanInputWithoutDuration.match(/^cabut\s+(.+?)\s+dari\s+(.+)$/i);
+    if (m) { isRemoveRole = true; roleQuery = m[1]; userQuery = m[2]; }
+  }
+  if (!isAddRole && !isRemoveRole) {
+    m = cleanInputWithoutDuration.match(/^delete\s+role\s+(.+?)\s+(.+)$/i);
+    if (m) { isRemoveRole = true; roleQuery = m[1]; userQuery = m[2]; }
+  }
+
+  if (isAddRole || isRemoveRole) {
+    const role = findRoleFuzzy(ctx.guild, roleQuery);
+    if (!role) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Role **${roleQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const isAll = /^(everyone|semua member|all users|all members|seluruh member|all user|semua)$/i.test(userQuery.trim());
+    if (isAll) {
+      await ctx.guild.members.fetch().catch(() => { });
+      const targets = isAddRole
+        ? ctx.guild.members.cache.filter(m => !m.roles.cache.has(role.id))
+        : role.members;
+
+      if (targets.size === 0) {
+        const embed = new EmbedBuilder()
+          .setTitle("✅ Informasi")
+          .setColor(0x3498db)
+          .setDescription(isAddRole
+            ? `Seluruh member server sudah memiliki role **${role.name}**.`
+            : `Tidak ada member server yang memiliki role **${role.name}**.`
+          )
+          .setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+
+      const actionText = isAddRole ? `memberikan role **${role.name}** kepada` : `menghapus role **${role.name}** dari`;
+      const targetText = isAddRole ? `member yang belum memilikinya` : `member yang memilikinya`;
+
+      const embedConfirm = new EmbedBuilder()
+        .setTitle("⚠️ Konfirmasi Tindakan")
+        .setColor(0xffaa00)
+        .setDescription(`Anda akan ${actionText} **${targets.size}** ${targetText}.`)
+        .addFields({ name: "Aksi Konfirmasi", value: "Ketik `confirm` untuk melanjutkan." })
+        .setFooter({ text: "Expired dalam 60 detik" })
+        .setTimestamp();
+
+      const action = async () => {
+        const statusEmbed = new EmbedBuilder()
+          .setTitle("⚙️ Memproses Perubahan Role")
+          .setColor(0x3498db)
+          .setDescription(`Sedang memproses perubahan role **${role.name}** untuk seluruh target...`)
+          .setTimestamp();
+        const statusMsg = await safeCtxReply(ctx, { embeds: [statusEmbed] });
+        let success = 0;
+        let failed = 0;
+        for (const [id, m] of targets) {
+          try {
+            if (isAddRole) await m.roles.add(role);
+            else await m.roles.remove(role);
+            success++;
+          } catch { failed++; }
+        }
+        const embedResult = new EmbedBuilder()
+          .setTitle("✅ Proses Selesai")
+          .setColor(0x2ecc71)
+          .setDescription(`Berhasil memproses **${success}** member.\nGagal/Lewat: **${failed}** member.`)
+          .setTimestamp();
+        await statusMsg.edit({ content: null, embeds: [embedResult] });
+      };
+      pendingConfirmations.set(authorId, { expires: Date.now() + 60000, action, message: { embeds: [embedConfirm] } });
+      await safeCtxReply(ctx, { embeds: [embedConfirm] });
+      return true;
+    } else {
+      const userQueries = userQuery.split(',').map(u => u.trim()).filter(Boolean);
+      if (userQueries.length === 1) {
+        const member = await findMemberFuzzy(ctx.guild, userQueries[0]);
+        if (!member) {
+          const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${userQueries[0]}** tidak ditemukan.`).setTimestamp();
+          await safeCtxReply(ctx, { embeds: [embed] });
+          return true;
+        }
+        const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.ManageRoles, PermissionsBitField.Flags.ManageRoles);
+        if (!permCheck.ok) {
+          const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+          await safeCtxReply(ctx, { embeds: [embed] });
+          return true;
+        }
+        if (isAddRole) {
+          await member.roles.add(role);
+          if (durationDays) {
+            const expireAt = Date.now() + durationDays * 86400 * 1000;
+            await safeRun(`INSERT INTO timed_roles (guild_id, user_id, role_id, expire_at) VALUES (?, ?, ?, ?)`, [ctx.guild.id, member.id, role.id, expireAt]);
+            const embed = new EmbedBuilder()
+              .setTitle("✅ Peran Ditambahkan")
+              .setColor(0x2ecc71)
+              .setDescription(`Berhasil menambahkan role **${role.name}** ke <@${member.id}> selama **${durationDays} hari**.`)
+              .setTimestamp();
+            await safeCtxReply(ctx, { embeds: [embed] });
+          } else {
+            const embed = new EmbedBuilder()
+              .setTitle("✅ Peran Ditambahkan")
+              .setColor(0x2ecc71)
+              .setDescription(`Berhasil menambahkan role **${role.name}** ke <@${member.id}>.`)
+              .setTimestamp();
+            await safeCtxReply(ctx, { embeds: [embed] });
+          }
+        } else {
+          await member.roles.remove(role);
+          await safeRun(`DELETE FROM timed_roles WHERE guild_id=? AND user_id=? AND role_id=?`, [ctx.guild.id, member.id, role.id]);
+          const embed = new EmbedBuilder()
+            .setTitle("✅ Peran Dihapus")
+            .setColor(0x2ecc71)
+            .setDescription(`Berhasil menghapus role **${role.name}** dari <@${member.id}>.`)
+            .setTimestamp();
+          await safeCtxReply(ctx, { embeds: [embed] });
+        }
+      } else {
+        const statusEmbed = new EmbedBuilder()
+          .setTitle("⚙️ Memproses Perubahan Role")
+          .setColor(0x3498db)
+          .setDescription(`Sedang memproses perubahan role untuk **${userQueries.length}** member...`)
+          .setTimestamp();
+        const statusMsg = await safeCtxReply(ctx, { embeds: [statusEmbed] });
+        let success = [];
+        let failed = [];
+
+        for (const uQuery of userQueries) {
+          const member = await findMemberFuzzy(ctx.guild, uQuery);
+          if (!member) {
+            failed.push(`\`${uQuery}\` (Tidak ditemukan)`);
+            continue;
+          }
+          const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.ManageRoles, PermissionsBitField.Flags.ManageRoles);
+          if (!permCheck.ok) {
+            failed.push(`<@${member.id}> (Izin tidak cukup)`);
+            continue;
+          }
+          try {
+            if (isAddRole) {
+              await member.roles.add(role);
+              if (durationDays) {
+                const expireAt = Date.now() + durationDays * 86400 * 1000;
+                await safeRun(`INSERT INTO timed_roles (guild_id, user_id, role_id, expire_at) VALUES (?, ?, ?, ?)`, [ctx.guild.id, member.id, role.id, expireAt]);
+              }
+            } else {
+              await member.roles.remove(role);
+              await safeRun(`DELETE FROM timed_roles WHERE guild_id=? AND user_id=? AND role_id=?`, [ctx.guild.id, member.id, role.id]);
+            }
+            success.push(`<@${member.id}>`);
+          } catch {
+            failed.push(`<@${member.id}> (Gagal mengeksekusi)`);
+          }
+        }
+
+        const embedResult = new EmbedBuilder()
+          .setTitle("✅ Proses Selesai")
+          .setColor(0x2ecc71)
+          .setDescription([
+            `**Peran:** **${role.name}**`,
+            `**Aksi:** ${isAddRole ? 'Penambahan' : 'Penghapusan'}`,
+            durationDays ? `**Durasi:** ${durationDays} hari` : null,
+            "",
+            success.length ? `🟢 **Berhasil (${success.length}):**\n${success.join(', ')}` : null,
+            failed.length ? `🔴 **Gagal (${failed.length}):**\n${failed.join('\n')}` : null,
+          ].filter(Boolean).join('\n'))
+          .setTimestamp();
+        await statusMsg.edit({ content: null, embeds: [embedResult] });
+      }
+      return true;
+    }
+  }
+
+  let lookupRoleQuery = null;
+  const lowerClean = cleanInput.toLowerCase();
+  if (lowerClean.startsWith("siapa aja ")) lookupRoleQuery = cleanInput.slice(10).trim();
+  else if (lowerClean.startsWith("who ")) lookupRoleQuery = cleanInput.slice(4).trim();
+  else if (lowerClean.startsWith("list ") && !lowerClean.endsWith("autoresponse") && !lowerClean.endsWith("ar")) lookupRoleQuery = cleanInput.slice(5).trim();
+  else if (lowerClean.startsWith("siapa yang punya role ")) lookupRoleQuery = cleanInput.slice(22).trim();
+  else if (lowerClean.startsWith("member ")) lookupRoleQuery = cleanInput.slice(7).trim();
+  else if (lowerClean.endsWith(" members")) lookupRoleQuery = cleanInput.slice(0, -8).trim();
+  else if (lowerClean.startsWith("show ")) lookupRoleQuery = cleanInput.slice(5).trim();
+
+  if (lookupRoleQuery) {
+    const role = findRoleFuzzy(ctx.guild, lookupRoleQuery);
+    if (role) {
+      await ctx.guild.members.fetch().catch(() => { });
+      const membersWithRole = role.members;
+      if (membersWithRole.size === 0) {
+        const embed = new EmbedBuilder().setTitle(`👤 Role Lookup: ${role.name}`).setColor(EMBED_COLOR).setDescription(`Tidak ada member yang memiliki role **${role.name}**.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const lines = Array.from(membersWithRole.values()).map(m => {
+        const joinedDate = m.joinedAt ? m.joinedAt.toLocaleDateString("id-ID") : "Unknown";
+        return `- <@${m.id}> (\`${m.user.username}\`) - ID: \`${m.id}\` (Join: ${joinedDate})`;
+      });
+      const chunks = [];
+      let currentChunk = "";
+      for (const line of lines) {
+        if ((currentChunk + line).length > 1900) {
+          chunks.push(currentChunk);
+          currentChunk = "";
+        }
+        currentChunk += line + "\n";
+      }
+      if (currentChunk) chunks.push(currentChunk);
+      const buildEmbed = (index) => {
+        return new EmbedBuilder()
+          .setAuthor({ name: "👥 Role Member Directory", iconURL: ctx.guild.iconURL({ extension: "png" }) || undefined })
+          .setTitle(role.name)
+          .setDescription([
+            `**Role Mention:** <@&${role.id}>`,
+            `**Warna Hex:** \`${role.hexColor}\` • **Total:** **${membersWithRole.size}** member`,
+            "",
+            chunks[index]
+          ].join("\n"))
+          .setColor(role.color || 0x5865F2)
+          .setFooter({ text: `Halaman ${index + 1}/${chunks.length} • Requested by ${authorTag}`, iconURL: ctx.member?.user?.displayAvatarURL({ extension: "png" }) || undefined })
+          .setTimestamp();
+      };
+
+      if (chunks.length === 1) {
+        await safeCtxReply(ctx, { embeds: [buildEmbed(0)] });
+        return true;
+      }
+
+      const buildRow = (index, disabled = false) => {
+        return new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("prev")
+            .setLabel("⬅")
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(disabled || index <= 0),
+          new ButtonBuilder()
+            .setCustomId("next")
+            .setLabel("➡")
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(disabled || index >= chunks.length - 1)
+        );
+      };
+
+      const msg = await safeCtxReply(ctx, {
+        embeds: [buildEmbed(0)],
+        components: [buildRow(0)]
+      });
+
+      if (!msg) return true;
+
+      const collector = msg.createMessageComponentCollector({
+        filter: i => i.user.id === authorId,
+        time: 120000
+      });
+
+      let currentPage = 0;
+      collector.on("collect", async i => {
+        if (i.customId === "prev") {
+          currentPage--;
+        } else if (i.customId === "next") {
+          currentPage++;
+        }
+        await i.update({
+          embeds: [buildEmbed(currentPage)],
+          components: [buildRow(currentPage)]
+        }).catch(() => { });
+      });
+
+      collector.on("end", () => {
+        msg.edit({
+          components: [buildRow(currentPage, true)]
+        }).catch(() => { });
+      });
+      return true;
+    }
+  }
+
+  if (/^(voice check|cek voice|siapa di voice|voice status|vc|vcc)$/i.test(cleanInput)) {
+    await handleVoiceCheck(ctx);
+    return true;
+  }
+
+  let userVoiceQuery = null;
+  if (lowerClean.startsWith("vc ")) userVoiceQuery = cleanInput.slice(3).trim();
+  else if (lowerClean.startsWith("cv ")) userVoiceQuery = cleanInput.slice(3).trim();
+  else if (lowerClean.startsWith("voice ")) userVoiceQuery = cleanInput.slice(6).trim();
+  else if (lowerClean.startsWith("cek voice ")) userVoiceQuery = cleanInput.slice(10).trim();
+  else if (["vc", "cv", "find", "voice", "cvc", "ccv", "cfind"].includes(cmd) && args.length > 0) {
+    userVoiceQuery = args.join(" ");
+  }
+
+  if (userVoiceQuery) {
+    const member = await findMemberFuzzy(ctx.guild, userVoiceQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ State Lookup").setColor(0xe74c3c).setDescription(`Member **${userVoiceQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const voiceState = member.voice;
+    if (!voiceState?.channel) {
+      const embed = new EmbedBuilder().setTitle("❌ Voice State").setColor(0xe74c3c).setDescription(`**${member.displayName}** tidak sedang berada di voice channel.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const vc = voiceState.channel;
+    const joinTime = voiceSessions.get(member.id);
+    const durationMs = joinTime ? Date.now() - joinTime : 0;
+    const durationText = formatVoiceDurationIndo(durationMs);
+    const colleaguesList = vc.members.filter(m => m.id !== member.id).map(m => `<@${m.id}>`).join(", ");
+    const embed = new EmbedBuilder()
+      .setAuthor({ name: "🎙️ Status Voice Member", iconURL: ctx.guild.iconURL({ extension: "png" }) || undefined })
+      .setTitle(member.displayName)
+      .setDescription(`Informasi aktivitas voice chat aktif member di server **${ctx.guild.name}**.`)
+      .setColor(0x5865F2)
+      .setThumbnail(member.user.displayAvatarURL({ extension: "png", size: 256 }))
+      .addFields([
+        { name: "📍 Voice Channel", value: `<#${vc.id}>`, inline: true },
+        { name: "⏱️ Mulai Aktif", value: durationText, inline: true },
+        { name: "📊 Kapasitas", value: `**${vc.members.size}** / **${vc.userLimit || '∞'}** User`, inline: true },
+        { name: `👥 Teman Voice (${vc.members.size - 1})`, value: colleaguesList.length > 0 ? colleaguesList : "_Sendirian (Tidak ada member lain)_", inline: false }
+      ])
+      .setFooter({ text: `Requested by ${authorTag}`, iconURL: ctx.member?.user?.displayAvatarURL({ extension: "png" }) || undefined })
+      .setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (/^(server stats|statistik server|ss|stats)$/i.test(cleanInput)) {
+    await handleServerStats(ctx);
+    return true;
+  }
+
+  if (cmd === "add_autoresponse" || cmd === "create_autoresponse" || cmd === "aar" || ((cmd === "add" || cmd === "create") && (args[0] === "autoresponse" || args[0] === "ar"))) {
+    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const startIdx = (cmd === "add" || cmd === "create") ? 1 : 0;
+    const text = args.slice(startIdx).join(" ");
+    const parsed = parseKeyValueArgs(text);
+    if (!parsed.trigger || !parsed.response) {
+      const embed = new EmbedBuilder()
+        .setTitle("💡 Cara Menambahkan Autoresponse")
+        .setColor(EMBED_COLOR)
+        .setDescription(`Format:\n\`${PREFIX} add autoresponse trigger="keyword" response="balasan" [opsi]\``)
+        .addFields({
+          name: "Opsi Tambahan",
+          value: "• `match=exact|contains|regex`\n• `ignore_case=1|0`\n• `cooldown=detik`\n• `embed=1|0`\n• `reply=1|0`\n• `mention=1|0`\n• `random=\"hai;halo\"`\n• `attachment=\"https://...\"`\n• `button=\"Label\" button_url=\"https://...\"`\n• `select=\"Opsi A;Opsi B\"`"
+        })
+        .setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const trigger = parsed.trigger;
+    const response = parsed.response;
+    const matchType = parsed.match || 'exact';
+    const ignoreCase = parsed.ignore_case !== undefined ? parseInt(parsed.ignore_case) : 1;
+    const cooldown = parsed.cooldown ? parseInt(parsed.cooldown) : 0;
+    const embed = parsed.embed !== undefined ? parseInt(parsed.embed) : 0;
+    const replyMode = (parsed.reply !== undefined && parseInt(parsed.reply) === 0) ? 'send' : 'reply';
+    const mentionUser = parsed.mention !== undefined ? parseInt(parsed.mention) : 0;
+    const randomResponses = parsed.random ? JSON.stringify(parsed.random.split(";")) : null;
+    const attachmentUrl = parsed.attachment || null;
+    const buttonLabel = parsed.button || null;
+    const buttonUrl = parsed.button_url || null;
+    const selectMenuOptions = parsed.select ? JSON.stringify(parsed.select.split(";")) : null;
+    await safeRun(
+      `INSERT INTO autoresponses (guild_id, trigger_text, response_text, match_type, ignore_case, cooldown, reply_mode, mention_user, embed_response, random_responses, attachment_url, button_label, button_url, select_menu_options)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [ctx.guild.id, trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embed, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions]
+    );
+    const embedSuccess = new EmbedBuilder()
+      .setTitle("✅ Autoresponse Ditambahkan")
+      .setColor(0x2ecc71)
+      .setDescription(`Autoresponse untuk trigger \`${trigger}\` berhasil disimpan.`)
+      .setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embedSuccess] });
+    return true;
+  }
+
+  if (cmd === "edit_autoresponse" || cmd === "ear" || (cmd === "edit" && (args[0] === "autoresponse" || args[0] === "ar"))) {
+    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const startIdx = (cmd === "edit") ? 1 : 0;
+    const text = args.slice(startIdx).join(" ");
+    const parsed = parseKeyValueArgs(text);
+
+    let arId = null;
+    const idArg = args.find(x => /^\d+$/.test(x));
+    if (idArg) {
+      arId = parseInt(idArg);
+    } else if (parsed.id && /^\d+$/.test(parsed.id)) {
+      arId = parseInt(parsed.id);
+    }
+
+    if (!arId) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse yang ingin diedit.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const ar = await safeGet(`SELECT * FROM autoresponses WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
+    if (!ar) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const trigger = parsed.trigger !== undefined ? parsed.trigger : ar.trigger_text;
+    const response = parsed.response !== undefined ? parsed.response : ar.response_text;
+    const matchType = parsed.match !== undefined ? parsed.match : ar.match_type;
+    const ignoreCase = parsed.ignore_case !== undefined ? parseInt(parsed.ignore_case) : ar.ignore_case;
+    const cooldown = parsed.cooldown !== undefined ? parseInt(parsed.cooldown) : ar.cooldown;
+    const embedVal = parsed.embed !== undefined ? parseInt(parsed.embed) : ar.embed_response;
+    const replyMode = parsed.reply !== undefined ? (parseInt(parsed.reply) === 0 ? 'send' : 'reply') : ar.reply_mode;
+    const mentionUser = parsed.mention !== undefined ? parseInt(parsed.mention) : ar.mention_user;
+    const randomResponses = parsed.random !== undefined ? JSON.stringify(parsed.random.split(";")) : ar.random_responses;
+    const attachmentUrl = parsed.attachment !== undefined ? parsed.attachment : ar.attachment_url;
+    const buttonLabel = parsed.button !== undefined ? parsed.button : ar.button_label;
+    const buttonUrl = parsed.button_url !== undefined ? parsed.button_url : ar.button_url;
+    const selectMenuOptions = parsed.select !== undefined ? JSON.stringify(parsed.select.split(";")) : ar.select_menu_options;
+    await safeRun(
+      `UPDATE autoresponses SET trigger_text=?, response_text=?, match_type=?, ignore_case=?, cooldown=?, reply_mode=?, mention_user=?, embed_response=?, random_responses=?, attachment_url=?, button_label=?, button_url=?, select_menu_options=? WHERE id=? AND guild_id=?`,
+      [trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, arId, ctx.guild.id]
+    );
+    const embedSuccess = new EmbedBuilder()
+      .setTitle("✅ Autoresponse Diperbarui")
+      .setColor(0x2ecc71)
+      .setDescription(`Autoresponse ID \`${arId}\` berhasil diperbarui.`)
+      .setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embedSuccess] });
+    return true;
+  }
+
+  if (cmd === "delete_autoresponse" || cmd === "dar" || ((cmd === "delete" || cmd === "del") && (args[0] === "autoresponse" || args[0] === "ar"))) {
+    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const startIdx = (cmd === "delete" || cmd === "del") ? 1 : 0;
+    const text = args.slice(startIdx).join(" ");
+    const parsed = parseKeyValueArgs(text);
+
+    let arId = null;
+    const idArg = args.find(x => /^\d+$/.test(x));
+    if (idArg) {
+      arId = parseInt(idArg);
+    } else if (parsed.id && /^\d+$/.test(parsed.id)) {
+      arId = parseInt(parsed.id);
+    }
+
+    if (!arId) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse yang ingin dihapus.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const ar = await safeGet(`SELECT * FROM autoresponses WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
+    if (!ar) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const action = async () => {
+      await safeRun(`DELETE FROM autoresponses WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
+      const embedSuccess = new EmbedBuilder().setTitle("✅ Autoresponse Dihapus").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${arId}\` berhasil dihapus.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embedSuccess] });
+    };
+    const embedConfirm = new EmbedBuilder()
+      .setTitle("⚠️ Konfirmasi Hapus Autoresponse")
+      .setColor(0xffaa00)
+      .setDescription(`Anda akan menghapus autoresponse ID \`${arId}\` (Trigger: \`${ar.trigger_text}\`).`)
+      .addFields({ name: "Aksi Konfirmasi", value: "Ketik `confirm` untuk melanjutkan." })
+      .setFooter({ text: "Expired dalam 60 detik" })
+      .setTimestamp();
+    pendingConfirmations.set(authorId, { expires: Date.now() + 60000, action, message: { embeds: [embedConfirm] } });
+    await safeCtxReply(ctx, { embeds: [embedConfirm] });
+    return true;
+  }
+
+  if (cmd === "list_autoresponse" || cmd === "lar" || (cmd === "list" && (args[0] === "autoresponse" || args[0] === "ar"))) {
+    const list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+    if (!list.length) {
+      const embed = new EmbedBuilder().setTitle("📋 Daftar Autoresponse").setColor(EMBED_COLOR).setDescription("Belum ada autoresponse di server ini.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const lines = list.map(r => `\`[ID ${r.id}]\` **${r.trigger_text}** ➔ \`${r.response_text.slice(0, 50)}\` (${r.is_enabled ? 'Aktif' : 'Nonaktif'})`);
+    const embed = new EmbedBuilder()
+      .setTitle("📋 Daftar Autoresponse")
+      .setColor(EMBED_COLOR)
+      .setDescription(lines.join("\n"))
+      .setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (cmd === "enable_autoresponse" || cmd === "enar" || (cmd === "enable" && (args[0] === "autoresponse" || args[0] === "ar"))) {
+    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const idArg = args.find(x => /^\d+$/.test(x));
+    if (!idArg) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const arId = parseInt(idArg);
+    const r = await safeRun(`UPDATE autoresponses SET is_enabled=1 WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
+    if (r.changes === 0) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+    } else {
+      const embed = new EmbedBuilder().setTitle("✅ Autoresponse Diaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${arId}\` berhasil diaktifkan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+    }
+    return true;
+  }
+
+  if (cmd === "disable_autoresponse" || cmd === "disar" || (cmd === "disable" && (args[0] === "autoresponse" || args[0] === "ar"))) {
+    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const idArg = args.find(x => /^\d+$/.test(x));
+    if (!idArg) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const arId = parseInt(idArg);
+    const r = await safeRun(`UPDATE autoresponses SET is_enabled=0 WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
+    if (r.changes === 0) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+    } else {
+      const embed = new EmbedBuilder().setTitle("✅ Autoresponse Dinonaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${arId}\` berhasil dinonaktifkan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+    }
+    return true;
+  }
+
+  if (cmd === "timeout" || cmd === "to" || ((cmd === "timeout" || cmd === "to") && args[0] === "member")) {
+    let roleQuery = null;
+    let durationStr = null;
+    let targetQuery = null;
+    const startIdx = (cmd === "timeout" || cmd === "to") && args[0] === "member" ? 1 : 0;
+    const cleanArgs = args.slice(startIdx);
+    const fullText = cleanArgs.join(" ");
+    if (fullText.toLowerCase().startsWith("all role ") || fullText.toLowerCase().startsWith("all member dengan role ")) {
+      const parts = fullText.split(/\s+/);
+      durationStr = parts.pop();
+      let temp = fullText.slice(fullText.toLowerCase().startsWith("all role ") ? 9 : 23).trim();
+      roleQuery = temp.slice(0, temp.lastIndexOf(durationStr)).trim();
+    } else {
+      const parts = fullText.split(/\s+/);
+      durationStr = parts.pop();
+      targetQuery = parts.join(" ");
+    }
+    const ms = parseDurationToMs(durationStr);
+    if (!ms) {
+      const embed = new EmbedBuilder().setTitle("❌ Format Durasi Salah").setColor(0xe74c3c).setDescription("Format durasi tidak valid (contoh: 10m, 2h, 1d).").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    if (roleQuery) {
+      const role = findRoleFuzzy(ctx.guild, roleQuery);
+      if (!role) {
+        const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Role **${roleQuery}** tidak ditemukan.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const action = async () => {
+        await ctx.guild.members.fetch().catch(() => { });
+        const members = role.members;
+        let success = 0;
+        let failed = 0;
+        for (const [id, m] of members) {
+          const permCheck = validateModAction(ctx, m, PermissionsBitField.Flags.ModerateMembers, PermissionsBitField.Flags.ModerateMembers);
+          if (permCheck.ok) {
+            try {
+              await m.timeout(ms, `Bulk Timeout by ${authorTag}`);
+              success++;
+            } catch { failed++; }
+          } else { failed++; }
+        }
+        const embedResult = new EmbedBuilder().setTitle("✅ Bulk Timeout Selesai").setColor(0x2ecc71).setDescription(`Berhasil: **${success}** member.\nGagal/Lewat: **${failed}** member.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embedResult] });
+      };
+      const embedConfirm = new EmbedBuilder()
+        .setTitle("⚠️ Konfirmasi Bulk Timeout")
+        .setColor(0xffaa00)
+        .setDescription(`Anda akan memberikan timeout kepada seluruh member dengan role **${role.name}** selama **${durationStr}**.`)
+        .addFields({ name: "Aksi Konfirmasi", value: "Ketik `confirm` untuk melanjutkan." })
+        .setFooter({ text: "Expired dalam 60 detik" })
+        .setTimestamp();
+      pendingConfirmations.set(authorId, { expires: Date.now() + 60000, action, message: { embeds: [embedConfirm] } });
+      await safeCtxReply(ctx, { embeds: [embedConfirm] });
+      return true;
+    } else {
+      const member = await findMemberFuzzy(ctx.guild, targetQuery);
+      if (!member) {
+        const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.ModerateMembers, PermissionsBitField.Flags.ModerateMembers);
+      if (!permCheck.ok) {
+        const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      await member.timeout(ms, `Timeout by ${authorTag}`);
+      const embed = new EmbedBuilder().setTitle("✅ Timeout Berhasil").setColor(0x2ecc71).setDescription(`Berhasil memberikan timeout kepada <@${member.id}> selama **${durationStr}**.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+  }
+
+  if (cmd === "untimeout" || cmd === "unto" || ((cmd === "remove" || cmd === "del" || cmd === "cabut") && (args[0] === "timeout" || args[0] === "to"))) {
+    const startIdx = (cmd === "remove" || cmd === "del" || cmd === "cabut") ? 1 : 0;
+    const targetQuery = args.slice(startIdx).join(" ");
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.ModerateMembers, PermissionsBitField.Flags.ModerateMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await member.timeout(null, `Untimeout by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Timeout Dihapus").setColor(0x2ecc71).setDescription(`Berhasil menghapus timeout dari <@${member.id}>.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (cmd === "kick") {
+    const targetQuery = args.join(" ");
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.KickMembers, PermissionsBitField.Flags.KickMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await member.kick(`Kicked by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Kick Berhasil").setColor(0x2ecc71).setDescription(`Berhasil me-kick <@${member.id}>.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (cmd === "ban") {
+    const targetQuery = args.join(" ");
+    if (targetQuery.toLowerCase() === "all") {
+      const action = async () => {
+        await ctx.guild.members.fetch().catch(() => { });
+        let success = 0;
+        let failed = 0;
+        for (const [id, m] of ctx.guild.members.cache) {
+          const permCheck = validateModAction(ctx, m, PermissionsBitField.Flags.BanMembers, PermissionsBitField.Flags.BanMembers);
+          if (permCheck.ok) {
+            try {
+              await m.ban({ reason: `Ban All by ${authorTag}` });
+              success++;
+            } catch { failed++; }
+          } else { failed++; }
+        }
+        const embedResult = new EmbedBuilder().setTitle("✅ Ban All Selesai").setColor(0x2ecc71).setDescription(`Berhasil mem-ban **${success}** member.\nGagal/Lewat: **${failed}** member.`).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embedResult] });
+      };
+      const embedConfirm = new EmbedBuilder()
+        .setTitle("⚠️ PERINGATAN BAHAYA: Ban All")
+        .setColor(0xff0000)
+        .setDescription(`Anda akan melakukan BAN kepada **SELURUH MEMBER** yang bisa di-ban.`)
+        .addFields({ name: "Aksi Konfirmasi", value: "Ketik `confirm` untuk melanjutkan." })
+        .setFooter({ text: "Expired dalam 60 detik" })
+        .setTimestamp();
+      pendingConfirmations.set(authorId, { expires: Date.now() + 60000, action, message: { embeds: [embedConfirm] } });
+      await safeCtxReply(ctx, { embeds: [embedConfirm] });
+      return true;
+    }
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.BanMembers, PermissionsBitField.Flags.BanMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await member.ban({ reason: `Banned by ${authorTag}` });
+    const embed = new EmbedBuilder().setTitle("✅ Ban Berhasil").setColor(0x2ecc71).setDescription(`Berhasil mem-ban <@${member.id}>.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (cmd === "unban") {
+    const targetQuery = args.join(" ");
+    const bans = await ctx.guild.bans.fetch().catch(() => null);
+    if (!bans) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Gagal mengambil daftar ban.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    let banEntry = bans.find(b => b.user.id === targetQuery || b.user.username.toLowerCase() === targetQuery.toLowerCase());
+    if (!banEntry) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`User **${targetQuery}** tidak ditemukan di daftar ban.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, null, PermissionsBitField.Flags.BanMembers, PermissionsBitField.Flags.BanMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await ctx.guild.bans.remove(banEntry.user.id, `Unbanned by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Unban Berhasil").setColor(0x2ecc71).setDescription(`Berhasil me-unban **${banEntry.user.tag}**.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (cmd === "nickname" || cmd === "nick") {
+    const targetQuery = args[0];
+    const newNick = args.slice(1).join(" ").replace(/^["']|["']$/g, "").trim();
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.ManageNicknames, PermissionsBitField.Flags.ManageNicknames);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const finalNick = (newNick.toLowerCase() === "reset") ? null : newNick;
+    await member.setNickname(finalNick, `Nickname changed by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Nickname Diubah").setColor(0x2ecc71).setDescription(`Berhasil mengubah nickname <@${member.id}> menjadi **${finalNick || 'Default'}**.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if ((cmd === "move" || cmd === "mv") && (args[0] === "voice" || args[0] === "vc")) {
+    const targetQuery = args[1];
+    const channelQuery = args.slice(2).join(" ").trim();
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    if (!member.voice.channel) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member <@${member.id}> tidak berada di voice channel.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const channels = ctx.guild.channels.cache.filter(c => c.type === 2);
+    let targetCh = channels.find(c => c.name.toLowerCase() === channelQuery.toLowerCase());
+    if (!targetCh) targetCh = channels.find(c => c.name.toLowerCase().includes(channelQuery.toLowerCase()));
+    if (!targetCh) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Voice channel **${channelQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.MoveMembers, PermissionsBitField.Flags.MoveMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await member.voice.setChannel(targetCh, `Moved by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Pemindahan Berhasil").setColor(0x2ecc71).setDescription(`Berhasil memindahkan <@${member.id}> ke voice channel **${targetCh.name}**.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if ((cmd === "disconnect" || cmd === "dc") && (args[0] === "voice" || args[0] === "vc")) {
+    const targetQuery = args.slice(1).join(" ");
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    if (!member.voice.channel) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member <@${member.id}> tidak berada di voice channel.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.MoveMembers, PermissionsBitField.Flags.MoveMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await member.voice.setChannel(null, `Disconnected by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Disconnect Berhasil").setColor(0x2ecc71).setDescription(`Berhasil mengeluarkan <@${member.id}> dari voice channel.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if ((cmd === "mute" || cmd === "mu") && (args[0] === "voice" || args[0] === "vc")) {
+    const targetQuery = args.slice(1).join(" ");
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    if (!member.voice.channel) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member <@${member.id}> tidak berada di voice channel.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.MuteMembers, PermissionsBitField.Flags.MuteMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await member.voice.setMute(true, `Server Muted by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Mute Berhasil").setColor(0x2ecc71).setDescription(`Berhasil melakukan mute suara <@${member.id}>.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if ((cmd === "deafen" || cmd === "df") && (args[0] === "voice" || args[0] === "vc")) {
+    const targetQuery = args.slice(1).join(" ");
+    const member = await findMemberFuzzy(ctx.guild, targetQuery);
+    if (!member) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member **${targetQuery}** tidak ditemukan.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    if (!member.voice.channel) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Member <@${member.id}> tidak berada di voice channel.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const permCheck = validateModAction(ctx, member, PermissionsBitField.Flags.DeafenMembers, PermissionsBitField.Flags.DeafenMembers);
+    if (!permCheck.ok) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription(permCheck.error).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    await member.voice.setDeafen(true, `Server Deafened by ${authorTag}`);
+    const embed = new EmbedBuilder().setTitle("✅ Deafen Berhasil").setColor(0x2ecc71).setDescription(`Berhasil mematikan pendengaran <@${member.id}>.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
+    return true;
+  }
+
+  if (cmd === "purge" || cmd === "clear" || cmd === "pg" || cmd === "cl") {
+    const amount = parseInt(args[0]);
+    if (isNaN(amount) || amount < 1 || amount > 100) {
+      const embed = new EmbedBuilder().setTitle("❌ Format Salah").setColor(0xe74c3c).setDescription("Contoh: `c purge 50` (maksimal 100 pesan).").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const action = async () => {
+      await ctx.channel.bulkDelete(amount, true).catch(() => null);
+      const embedResult = new EmbedBuilder().setTitle("✅ Purge Selesai").setColor(0x2ecc71).setDescription(`Berhasil menghapus **${amount}** pesan.`).setTimestamp();
+      const rep = await ctx.channel.send({ embeds: [embedResult] }).catch(() => null);
+      if (rep) setTimeout(() => rep.delete().catch(() => { }), 5000);
+    };
+    const embedConfirm = new EmbedBuilder()
+      .setTitle("⚠️ Konfirmasi Purge Pesan")
+      .setColor(0xffaa00)
+      .setDescription(`Anda akan menghapus **${amount}** pesan di channel ini.`)
+      .addFields({ name: "Aksi Konfirmasi", value: "Ketik `confirm` untuk melanjutkan." })
+      .setFooter({ text: "Expired dalam 60 detik" })
+      .setTimestamp();
+    pendingConfirmations.set(authorId, { expires: Date.now() + 60000, action, message: { embeds: [embedConfirm] } });
+    await safeCtxReply(ctx, { embeds: [embedConfirm] });
+    return true;
+  }
+
+  return false;
+}
 
 async function saveVoiceActivity(userId, seconds) {
   try {
@@ -4706,7 +6522,7 @@ function joinTargetVoice(client) {
       return;
     }
 
-    console.log(` ├── [VOICE 24/7] Attempting to connect to: ${channel.name} (${channel.id})`);
+    // console.log(` ├── [VOICE 24/7] Attempting to connect to: ${channel.name} (${channel.id})`);
     const connection = joinVoiceChannel({
       channelId: channel.id,
       guildId: channel.guild.id,
@@ -4714,6 +6530,9 @@ function joinTargetVoice(client) {
       selfMute: true,
       selfDeaf: true,
     });
+
+    connection.removeAllListeners('stateChange');
+    connection.removeAllListeners('error');
 
     connection.on('stateChange', (oldState, newState) => {
       if (newState.status === VoiceConnectionStatus.Ready) {
@@ -4742,89 +6561,178 @@ function joinTargetVoice(client) {
   }
 }
 
-function initVoiceTracking(client) {
+async function initVoiceTracking(client) {
   try {
     const now = Date.now();
     let count = 0;
+
+    const rows = await safeAll("SELECT * FROM active_voice_sessions").catch(() => []);
+    const dbSessions = new Map(rows.map(r => [r.user_id, r.join_timestamp]));
+    const activeUserIds = new Set();
+
+    const processGuild = async (guild) => {
+      for (const [memberId, vs] of guild.voiceStates.cache) {
+        const member = vs.member;
+        if (!member || member.user.bot) continue;
+        const vc = vs.channel;
+        if (vc && vc.id !== guild.afkChannelId) {
+          activeUserIds.add(memberId);
+          if (dbSessions.has(memberId)) {
+            voiceSessions.set(memberId, dbSessions.get(memberId));
+          } else {
+            voiceSessions.set(memberId, now);
+            await safeRun("INSERT OR REPLACE INTO active_voice_sessions (user_id, join_timestamp) VALUES (?, ?)", [memberId, now]).catch(() => null);
+          }
+          count++;
+        }
+      }
+    };
+
     const targetGuildId = process.env.GUILD_ID;
     if (targetGuildId) {
       const guild = client.guilds.cache.get(targetGuildId);
       if (guild) {
-        guild.members.cache.forEach((member) => {
-          if (member.user.bot) return;
-          const vc = member.voice?.channel;
-          if (vc && vc.id !== guild.afkChannelId) {
-            voiceSessions.set(member.id, now);
-            count++;
-          }
-        });
+        await processGuild(guild);
       }
     } else {
-      client.guilds.cache.forEach((guild) => {
-        guild.members.cache.forEach((member) => {
-          if (member.user.bot) return;
-          const vc = member.voice?.channel;
-          if (vc && vc.id !== guild.afkChannelId) {
-            voiceSessions.set(member.id, now);
-            count++;
-          }
-        });
-      });
+      for (const guild of client.guilds.cache.values()) {
+        await processGuild(guild);
+      }
     }
+
+    for (const storedUserId of dbSessions.keys()) {
+      if (!activeUserIds.has(storedUserId)) {
+        await safeRun("DELETE FROM active_voice_sessions WHERE user_id = ?", [storedUserId]).catch(() => null);
+      }
+    }
+
     console.log(` ├── [VOICE] Tracking initialized: ${count} active users`);
   } catch (err) {
     console.error("[VOICE] Error initializing voice tracking:", err);
   }
 }
 
-async function buildSupportEmbed() {
-  const sponsors = await safeAll(
-    "SELECT * FROM support_leaderboard WHERE type = 'sponsor' ORDER BY amount DESC, updated_at ASC LIMIT 5"
+function leaderboardPayload(components) {
+  return {
+    components,
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  };
+}
+
+function leaderboardEditPayload(components) {
+  return {
+    content: null,
+    embeds: [],
+    components,
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  };
+}
+
+function formatRankLine(rank, name, value, icon = "◆") {
+  const rankText = String(rank).padStart(2, "0");
+  return `**${rankText}** ${icon} ${name} — ${value}`;
+}
+
+async function isLeaderboardStaff(guild, userId) {
+  if (!guild || !/^\d{17,20}$/.test(String(userId))) return false;
+
+  const staffRoleIds = String(process.env.STAFF_ROLE_ID || process.env.TICKET_STAFF_ROLE_ID || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+  if (!member) return false;
+
+  if (staffRoleIds.some((roleId) => member.roles.cache.has(roleId))) return true;
+
+  return member.permissions.has(PermissionsBitField.Flags.Administrator) ||
+    member.permissions.has(PermissionsBitField.Flags.ManageGuild);
+}
+
+async function takeNonStaffRows(guild, rows, limit = 5) {
+  // User IDs to exclude from leaderboards (voice and chat)
+  const EXCLUDED_IDS = ['832152158841208844', '836645359467102218'];
+  const out = [];
+  for (const row of rows) {
+    // Skip excluded users
+    if (EXCLUDED_IDS.includes(row.user_id)) continue;
+    if (await isLeaderboardStaff(guild, row.user_id)) continue;
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+async function buildSupportPayload(guild = null) {
+  const sponsorRows = await safeAll(
+    "SELECT * FROM support_leaderboard WHERE type = 'sponsor' ORDER BY amount DESC, updated_at ASC LIMIT 50"
   );
-  const donaturs = await safeAll(
-    "SELECT * FROM support_leaderboard WHERE type = 'donatur' ORDER BY amount DESC, updated_at ASC LIMIT 5"
+  const donaturRows = await safeAll(
+    "SELECT * FROM support_leaderboard WHERE type = 'donatur' ORDER BY amount DESC, updated_at ASC LIMIT 50"
   );
+  const sponsors = await takeNonStaffRows(guild, sponsorRows, 5);
+  const donaturs = await takeNonStaffRows(guild, donaturRows, 5);
 
   const formatUser = (row) => {
     const isSnowflake = /^\d{17,20}$/.test(row.user_id);
     return isSnowflake ? `<@${row.user_id}>` : row.user_id;
   };
 
-  const formatRankEmoji = (rank, isSponsor) => {
-    if (rank === 1) return isSponsor ? "👑" : "🥇";
-    if (rank === 2) return "🥈";
-    if (rank === 3) return "🥉";
-    if (rank === 4) return "🎖️";
-    return "🔹";
+  const formatAmount = (amount) => `\`Rp ${Number(amount || 0).toLocaleString("id-ID")}\``;
+  const formatSupportRows = (rows, icon) => {
+    if (!rows.length) return "_Belum ada data._";
+    return rows
+      .map((row, index) => formatRankLine(index + 1, formatUser(row), formatAmount(row.amount), icon))
+      .join("\n");
   };
 
-  const sponsorList = sponsors.length
-    ? sponsors.map((r, i) => `${formatRankEmoji(i + 1, true)} **#${i + 1}** ${formatUser(r)} — \`Rp ${Number(r.amount).toLocaleString("id-ID")}\``).join("\n")
-    : "Belum ada sponsor.";
+  const totalSponsor = sponsors.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const totalDonatur = donaturs.reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
-  const donaturList = donaturs.length
-    ? donaturs.map((r, i) => `${formatRankEmoji(i + 1, false)} **#${i + 1}** ${formatUser(r)} — \`Rp ${Number(r.amount).toLocaleString("id-ID")}\``).join("\n")
-    : "Belum ada donatur.";
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent("# <a:champions:1523182563332718767> The Nobles of Mystral"),
+      new TextDisplayBuilder().setContent(
+        [
+          "Para pendukung non-staff yang menjaga Mystral tetap hidup, hangat, dan terus berkembang.",
+          `Sponsor tercatat: **${sponsors.length}** • Donatur tercatat: **${donaturs.length}**`,
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          "## <a:ja_1roll3yellow:1516080291209285672> Sponsor Circle",
+          formatSupportRows(sponsors, "👑"),
+          "",
+          `Total sponsor top list: ${formatAmount(totalSponsor)}`,
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          "## <a:blue_diamond:1523181238154956956> Donatur Circle",
+          formatSupportRows(donaturs, "💎"),
+          "",
+          `Total donatur top list: ${formatAmount(totalDonatur)}`,
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`Mystral • Support Leaderboard • <t:${Math.floor(Date.now() / 1000)}:R>`)
+    );
 
-  const desc = [
-    "Terima kasih kepada para jiwa mulia yang mendukung perkembangan dan kelangsungan Mystral Academy. ✨",
-    "",
-    "⭐ **SPONSOR TOP 5**",
-    sponsorList,
-    "",
-    "💎 **DONATUR TOP 5**",
-    donaturList
-  ].join("\n");
-
-  return new EmbedBuilder()
-    .setTitle("🏆 THE NOBLES OF MYSTRAL ACADEMY")
-    .setColor(0xffd700)
-    .setDescription(desc)
-    .setFooter({ text: "Mystral Academy • Support Leaderboard" })
-    .setTimestamp();
+  return leaderboardPayload([container]);
 }
 
-async function buildMonthlyRecapEmbed(month, year) {
+async function buildMonthlyRecapPayload(guild, month, year) {
   const now = Date.now();
   const wib = new Date(now + 7 * 60 * 60 * 1000);
   const currentMonth = wib.getMonth() + 1;
@@ -4846,7 +6754,7 @@ async function buildMonthlyRecapEmbed(month, year) {
      WHERE day LIKE ?
      GROUP BY user_id
      ORDER BY total DESC
-     LIMIT 5`,
+     LIMIT 50`,
     [datePattern]
   );
 
@@ -4884,18 +6792,12 @@ async function buildMonthlyRecapEmbed(month, year) {
     }
   }
 
-  const topVoice = Array.from(voiceMap.entries())
+  const topVoiceRaw = Array.from(voiceMap.entries())
     .map(([user_id, total]) => ({ user_id, total }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 5);
+    .sort((a, b) => b.total - a.total);
 
-  const formatRankEmoji = (rank) => {
-    if (rank === 1) return "🥇";
-    if (rank === 2) return "🥈";
-    if (rank === 3) return "🥉";
-    if (rank === 4) return "🎖️";
-    return "🔹";
-  };
+  const topChatPublic = await takeNonStaffRows(guild, topChat, 10);
+  const topVoice = await takeNonStaffRows(guild, topVoiceRaw, 10);
 
   const formatVoiceDuration = (sec) => {
     const s = Number(sec || 0);
@@ -4907,30 +6809,55 @@ async function buildMonthlyRecapEmbed(month, year) {
     return `${h} jam ${remMin} menit`;
   };
 
-  const chatList = topChat.length
-    ? topChat.map((r, i) => `${formatRankEmoji(i + 1)} **#${i + 1}** <@${r.user_id}> — \`${Number(r.total).toLocaleString("id-ID")} msg\``).join("\n")
-    : "Belum ada aktivitas chat.";
+  const chatList = topChatPublic.length
+    ? topChatPublic.map((r, i) => formatRankLine(i + 1, `<@${r.user_id}>`, `\`${Number(r.total).toLocaleString("id-ID")} pesan\``, "💬")).join("\n")
+    : "_Belum ada aktivitas chat non-staff._";
 
   const voiceList = topVoice.length
-    ? topVoice.map((r, i) => `${formatRankEmoji(i + 1)} **#${i + 1}** <@${r.user_id}> — \`${formatVoiceDuration(r.total)}\``).join("\n")
-    : "Belum ada aktivitas voice.";
+    ? topVoice.map((r, i) => formatRankLine(i + 1, `<@${r.user_id}>`, `\`${formatVoiceDuration(r.total)}\``, "🎙️")).join("\n")
+    : "_Belum ada aktivitas voice non-staff._";
 
-  const desc = [
-    "**TOP CHAT BULAN INI**",
-    "",
-    chatList,
-    "",
-    "**TOP VOICE BULAN INI**",
-    "",
-    voiceList
-  ].join("\n");
+  const totalChat = topChatPublic.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const totalVoice = topVoice.reduce((sum, row) => sum + Number(row.total || 0), 0);
 
-  return new EmbedBuilder()
-    .setTitle("🏆 MONTHLY RECAP MYSTRAL ACADEMY")
-    .setColor(0x77d0d7)
-    .setDescription(desc)
-    .setFooter({ text: `Mystral Academy • Monthly Recap • ${monthLabel} ${targetYear}` })
-    .setTimestamp();
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent("# <a:champions:1523182563332718767> Monthly Recap Mystral"),
+      new TextDisplayBuilder().setContent(
+        [
+          `Periode: **${monthLabel} ${targetYear}**`,
+          "Peringkat ini menampilkan aktivitas member non-staff.",
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          "## 💬 Top Chat",
+          chatList,
+          "",
+          `Total top chat: \`${Number(totalChat).toLocaleString("id-ID")} pesan\``,
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          "## 🎙️ Top Voice",
+          voiceList,
+          "",
+          `Total top voice: \`${formatVoiceDuration(totalVoice)}\``,
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`Mystral • Monthly Recap • ${monthLabel} ${targetYear} • <t:${Math.floor(Date.now() / 1000)}:R>`)
+    );
+
+  return leaderboardPayload([container]);
 }
 
 async function updateLiveLeaderboards(client) {
@@ -4942,8 +6869,8 @@ async function updateLiveLeaderboards(client) {
       if (channel && channel.isTextBased()) {
         const message = await channel.messages.fetch(recapMsgId).catch(() => null);
         if (message) {
-          const embed = await buildMonthlyRecapEmbed();
-          await message.edit({ embeds: [embed] }).catch(() => null);
+          const payload = await buildMonthlyRecapPayload(message.guild || channel.guild);
+          await message.edit(leaderboardEditPayload(payload.components)).catch(() => null);
         }
       }
     }
@@ -4955,8 +6882,8 @@ async function updateLiveLeaderboards(client) {
       if (channel && channel.isTextBased()) {
         const message = await channel.messages.fetch(supportMsgId).catch(() => null);
         if (message) {
-          const embed = await buildSupportEmbed();
-          await message.edit({ embeds: [embed] }).catch(() => null);
+          const payload = await buildSupportPayload(message.guild || channel.guild);
+          await message.edit(leaderboardEditPayload(payload.components)).catch(() => null);
         }
       }
     }
@@ -4967,7 +6894,28 @@ async function updateLiveLeaderboards(client) {
 
 // ===================== READY =====================
 client.once(Events.ClientReady, async (c) => {
-  initVoiceTracking(c);
+  await initVoiceTracking(c);
+
+  // Load sticky messages
+  const stickies = await safeAll("SELECT * FROM sticky_messages").catch(() => []);
+  for (const row of stickies) {
+    stickyCache.set(row.channel_id, {
+      content: row.content,
+      lastMessageId: row.last_message_id
+    });
+  }
+
+  // Load media settings
+  const mediaSettings = await safeAll("SELECT * FROM media_settings").catch(() => []);
+  for (const row of mediaSettings) {
+    mediaSettingsCache.set(row.guild_id, {
+      enabled: row.enabled,
+      deleteOriginal: row.delete_original,
+      nsfwFilter: row.nsfw_filter,
+      quality: row.quality,
+      platforms: JSON.parse(row.platforms || "{}")
+    });
+  }
 
   // Join target voice channel 24/7
   joinTargetVoice(c);
@@ -4976,6 +6924,7 @@ client.once(Events.ClientReady, async (c) => {
   }, 5 * 60 * 1000);
 
   startGiveawayLoop(c); // ✅ sekarang pasti kebaca (global)
+  startTimedRolesLoop(c);
 
 
   // ===================== AUTO BACKUP =====================
@@ -4998,11 +6947,15 @@ client.once(Events.ClientReady, async (c) => {
   }
 
   const statuses = [
-    "🌙 menjaga gerbang realm",
-    "🔮 membisikkan mantra penyambutan",
-    "🕯️ menjaga cahaya di Aula Academy Mystral",
-    "✨ panggil aku dengan mantra /halo",
+    "Managing Mystral District",
+    "Assisting Mystralians",
+    "Monitoring the community",
+    "Keeping the District online",
+    "Powering community features",
+    "Serving Mystral District",
+    "Need help? • /help",
   ];
+
   let i = 0;
   const setStatus = () => {
     const text = statuses[i % statuses.length];
@@ -5119,7 +7072,7 @@ function giveawayEmbed({ prize, winners, hostId, endAt, entries, ended }) {
         ended ? "This giveaway has ended." : "Press **Join** to enter the giveaway.",
       ].join("\n")
     )
-    .setFooter({ text: "Mystral Academy • Giveaway" })
+    .setFooter({ text: "Mystral • Giveaway" })
     .setTimestamp();
 }
 
@@ -5164,7 +7117,7 @@ async function finalizeGiveaway(g, guild) {
         `**Total entries** \`${entries}\``,
       ].join("\n")
     )
-    .setFooter({ text: "Mystral Academy • Giveaway" })
+    .setFooter({ text: "Mystral • Giveaway" })
     .setTimestamp();
 
   await ch.send({
@@ -5383,32 +7336,15 @@ client.on(Events.GuildMemberAdd, async (member) => {
   updateStatsChannels(member.guild);
 
   try {
-    const channel = await getTextChannelOrNull(member.guild, requireEnv("WELCOME_CHANNEL_ID") || requireEnv("GENERAL_CHANNEL_ID"));
-    if (!channel) return;
+    const welcomeChannel = await getTextChannelOrNull(member.guild, requireEnv("WELCOME_CHANNEL_ID") || requireEnv("GENERAL_CHANNEL_ID"));
+    const lobbyChannel = await getTextChannelOrNull(member.guild, requireEnv("LOBBY_CHANNEL_ID"));
+    if (!welcomeChannel && !lobbyChannel) return;
 
     const memberCount = member.guild.memberCount;
 
-    // Resolve channel mentions dynamically
-    const rulesMention = resolveChannelMention(member.guild, "RULES_CHANNEL_ID", ["rules", "peraturan"], "rules");
-    const selfRoleMention = resolveChannelMention(member.guild, "SELF_ROLE_CHANNEL_ID", ["self-role", "selfrole", "pilih-peran"], "self-role");
-    const announceMention = resolveChannelMention(member.guild, "ANNOUNCEMENTS_CHANNEL_ID", ["announcements", "pengumuman"], "announcements");
-    const idCardMention = resolveChannelMention(member.guild, "IDCARD_CHANNEL_ID", ["idcard", "id-card", "registrasi"], "idcard");
-    const lobbyMention = resolveChannelMention(member.guild, "LOBBY_CHANNEL_ID", ["lobby", "lobby-chat", "berkenalan"], "lobby");
+    const welcomeText = buildWelcomeText(member, memberCount);
 
-    const welcomeText = [
-      `<:profile:1510055150486814853> **A new student has arrived**`,
-      ``,
-      `╭・📖 **Peraturan** ${rulesMention}`,
-      `├・🎭 **Pilih Role** ${selfRoleMention}`,
-      `├・📢 **Pengumuman** ${announceMention}`,
-      `├・<:pink_cards1:1510057886795956235> **Registrasi** ${idCardMention}`,
-      `╰・💬 **Lobby** ${lobbyMention}`,
-      ``, `🎓 Kamu adalah pelajar ke-**${memberCount}** di Mystral Academy.`,
-      ``,
-      `Semoga betah dan selamat menikmati perjalananmu bersama kami!`
-    ].join("\n");
-
-    const avatarUrl = member.user.displayAvatarURL({ extension: "png", size: 256 });
+    const avatarUrl = member.displayAvatarURL({ extension: "png", size: 256 });
     const buffer = await renderWelcomeCard({
       username: member.displayName,
       avatarUrl,
@@ -5431,9 +7367,20 @@ client.on(Events.GuildMemberAdd, async (member) => {
       files.push(attachment);
     }
 
-    await channel.send({ content: `***Selamat datang, <@${member.id}>!***`, embeds: [embed], files }).catch((e) => {
-      console.error("[Welcome] Failed sending welcome message:", e?.message || e);
-    });
+    if (welcomeChannel) {
+      await welcomeChannel.send({ content: `***Selamat datang, <@${member.id}>!***`, embeds: [embed], files }).catch((e) => {
+        console.error("[Welcome] Failed sending welcome card message:", e?.message || e);
+      });
+    }
+
+    if (lobbyChannel) {
+      await lobbyChannel.send({
+        content: buildLobbyWelcomeText(member),
+        allowedMentions: { users: [member.id], roles: [], repliedUser: false },
+      }).catch((e) => {
+        console.error("[Welcome] Failed sending lobby welcome message:", e?.message || e);
+      });
+    }
   } catch (err) {
     console.error("[Welcome] Error handling GuildMemberAdd:", err);
   }
@@ -5448,10 +7395,10 @@ client.on(Events.GuildMemberRemove, async (member) => {
 
     const leaveText = [
       `👋 **A Student Has Departed**`,
-      `**${member.displayName}** has left Mystral Academy.`,
+      `**${member.displayName}** has left Mystral.`,
     ].join("\n");
 
-    const avatarUrl = member.user.displayAvatarURL({ extension: "png", size: 256 });
+    const avatarUrl = member.displayAvatarURL({ extension: "png", size: 256 });
     const buffer = await renderLeaveCard({
       username: member.displayName,
       avatarUrl,
@@ -5529,10 +7476,12 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           }
           voiceSessions.delete(userId);
         }
+        await safeRun("DELETE FROM active_voice_sessions WHERE user_id = ?", [userId]).catch(() => null);
       }
       // Case 2: Joined VC or moved from AFK channel
       else if (!isOldValid && isNewValid) {
         voiceSessions.set(userId, now);
+        await safeRun("INSERT OR REPLACE INTO active_voice_sessions (user_id, join_timestamp) VALUES (?, ?)", [userId, now]).catch(() => null);
       }
       // Case 3: Switched between two valid VCs
       else if (isOldValid && isNewValid && oldCh.id !== newCh.id) {
@@ -5545,6 +7494,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           }
         }
         voiceSessions.set(userId, now);
+        await safeRun("INSERT OR REPLACE INTO active_voice_sessions (user_id, join_timestamp) VALUES (?, ?)", [userId, now]).catch(() => null);
       }
     }
   } catch (err) {
@@ -5556,6 +7506,187 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     if (!message.guild) return;
     if (message.author.bot) return;
+
+    // Sticky Message Trigger
+    if (stickyCache.has(message.channel.id)) {
+      const channelId = message.channel.id;
+      if (stickyDebounces.has(channelId)) {
+        clearTimeout(stickyDebounces.get(channelId));
+      }
+      stickyDebounces.set(channelId, setTimeout(async () => {
+        stickyDebounces.delete(channelId);
+        if (stickyLocks.has(channelId)) return;
+        stickyLocks.add(channelId);
+        try {
+          const cache = stickyCache.get(channelId);
+          if (!cache) return;
+          if (cache.lastMessageId) {
+            const oldMsg = await message.channel.messages.fetch(cache.lastMessageId).catch(() => null);
+            if (oldMsg) await oldMsg.delete().catch(() => null);
+          }
+          const sent = await message.channel.send({ content: cache.content }).catch(() => null);
+          if (sent) {
+            cache.lastMessageId = sent.id;
+            await safeRun("UPDATE sticky_messages SET last_message_id=? WHERE channel_id=?", [sent.id, channelId]);
+          }
+        } finally {
+          stickyLocks.delete(channelId);
+        }
+      }, 1500));
+    }
+
+    // Universal Media Embed Handler
+    const mediaSettings = await getOrInitMediaSettings(message.guild.id);
+    if (mediaSettings && mediaSettings.enabled) {
+      const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
+      const urls = message.content.match(URL_REGEX);
+      if (urls && urls.length > 0) {
+        let hasConverted = false;
+        let convertedText = message.content;
+        const matchedPlatforms = new Set();
+        let firstOriginalUrl = "";
+        let firstPlatform = "";
+
+        for (const rawUrl of urls) {
+          let platform = "";
+          let fixedUrl = rawUrl;
+
+          // Check platforms
+          if (/tiktok\.com/i.test(rawUrl)) {
+            platform = "tiktok";
+            const cleaned = rawUrl.split('?')[0];
+            fixedUrl = cleaned.replace(/(?:www\.|vt\.|vm\.)?tiktok\.com/i, "tfxktok.com");
+          } else if (/instagram\.com\/(?:p|reel|tv|stories)/i.test(rawUrl)) {
+            platform = "instagram";
+            const cleaned = rawUrl.split('?')[0];
+            fixedUrl = cleaned.replace(/(?:www\.)?instagram\.com/i, "instagram7.com");
+          } else if (/(twitter|x)\.com\/[a-zA-Z0-9_]+\/status/i.test(rawUrl)) {
+            platform = "twitter";
+            const cleaned = rawUrl.split('?')[0];
+            fixedUrl = cleaned.replace(/(?:www\.)?(?:twitter|x)\.com/i, "fxtwitter.com");
+          } else if (/reddit\.com\/r\/[a-zA-Z0-9_]+\/comments/i.test(rawUrl)) {
+            platform = "reddit";
+            const cleaned = rawUrl.split('?')[0];
+            fixedUrl = cleaned.replace(/(?:www\.|old\.)?reddit\.com/i, "rxddit.com");
+          } else if (/threads\.net\/[@a-zA-Z0-9_.]+\/post/i.test(rawUrl)) {
+            platform = "threads";
+            const cleaned = rawUrl.split('?')[0];
+            fixedUrl = cleaned.replace(/(?:www\.)?threads\.net/i, "fixthreads.net");
+          } else if (/youtube\.com\/shorts/i.test(rawUrl)) {
+            platform = "youtube";
+            const cleaned = rawUrl.split('?')[0];
+            fixedUrl = cleaned.replace(/(?:www\.)?youtube\.com/i, "ddyoutube.com");
+          } else if (/youtube\.com\/watch/i.test(rawUrl) || /youtu\.be/i.test(rawUrl)) {
+            platform = "youtube";
+          } else if (/facebook\.com\/.*\/videos/i.test(rawUrl)) {
+            platform = "facebook";
+          } else if (/clips\.twitch\.tv/i.test(rawUrl) || /twitch\.tv\/.*\/clip/i.test(rawUrl)) {
+            platform = "twitch";
+          } else if (/kick\.com\/clip/i.test(rawUrl)) {
+            platform = "kick";
+          } else if (/bilibili\.com\/video/i.test(rawUrl)) {
+            platform = "bilibili";
+          } else if (/pinterest\.com\/pin/i.test(rawUrl)) {
+            platform = "pinterest";
+          } else if (/bsky\.app\/profile/i.test(rawUrl)) {
+            platform = "bluesky";
+          } else if (/imgur\.com/i.test(rawUrl)) {
+            platform = "imgur";
+          } else if (/streamable\.com/i.test(rawUrl)) {
+            platform = "streamable";
+          } else if (/vimeo\.com/i.test(rawUrl)) {
+            platform = "vimeo";
+          }
+
+          if (platform) {
+            const isPlatEnabled = mediaSettings.platforms && mediaSettings.platforms[platform] !== undefined ? mediaSettings.platforms[platform] : true;
+            if (isPlatEnabled) {
+              matchedPlatforms.add(platform);
+              if (fixedUrl !== rawUrl) {
+                convertedText = convertedText.replace(rawUrl, fixedUrl);
+                hasConverted = true;
+              }
+              if (!firstOriginalUrl) {
+                if (platform !== "youtube" || /shorts/i.test(rawUrl)) {
+                  firstOriginalUrl = rawUrl.split('?')[0];
+                } else {
+                  firstOriginalUrl = rawUrl;
+                }
+                firstPlatform = platform;
+              }
+            }
+          }
+        }
+
+        if (matchedPlatforms.size > 0) {
+          const isNsfwChannel = message.channel.nsfw === true;
+          const containsNsfwTerm = /nsfw|18\+|r18|porn/i.test(message.content);
+          if (mediaSettings.nsfwFilter && !isNsfwChannel && containsNsfwTerm) {
+            // Skip processing NSFW content in non-NSFW channel
+          } else {
+            const components = [];
+            const buttons = [];
+
+            if (firstOriginalUrl) {
+              let platformLabel = "Open Original";
+              if (firstPlatform === "tiktok") platformLabel = "Buka di TikTok";
+              else if (firstPlatform === "instagram") platformLabel = "Buka di Instagram";
+              else if (firstPlatform === "twitter") platformLabel = "Buka di X";
+              else if (firstPlatform === "reddit") platformLabel = "Buka di Reddit";
+              else if (firstPlatform === "threads") platformLabel = "Buka di Threads";
+              else if (firstPlatform === "youtube") platformLabel = "Buka di YouTube";
+              else if (firstPlatform === "facebook") platformLabel = "Buka di Facebook";
+              else if (firstPlatform === "twitch") platformLabel = "Buka di Twitch";
+              else if (firstPlatform === "kick") platformLabel = "Buka di Kick";
+              else if (firstPlatform === "bilibili") platformLabel = "Buka di Bilibili";
+              else if (firstPlatform === "pinterest") platformLabel = "Buka di Pinterest";
+              else if (firstPlatform === "bluesky") platformLabel = "Buka di Bluesky";
+              else if (firstPlatform === "imgur") platformLabel = "Buka di Imgur";
+              else if (firstPlatform === "streamable") platformLabel = "Buka di Streamable";
+              else if (firstPlatform === "vimeo") platformLabel = "Buka di Vimeo";
+
+              const btn = new ButtonBuilder()
+                .setLabel(platformLabel)
+                .setStyle(ButtonStyle.Link)
+                .setURL(firstOriginalUrl);
+
+              const emojiId = getPlatformEmoji(message.guild, firstPlatform);
+              if (emojiId) {
+                btn.setEmoji(emojiId);
+              } else {
+                btn.setEmoji("🔗");
+              }
+              buttons.push(btn);
+            }
+
+            const dlUrl = getDownloadUrl(firstOriginalUrl);
+            buttons.push(
+              new ButtonBuilder()
+                .setLabel("⬇ Download")
+                .setStyle(ButtonStyle.Link)
+                .setURL(dlUrl)
+            );
+
+            const row = new ActionRowBuilder().addComponents(buttons);
+
+            const canDelete = message.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageMessages);
+            if (mediaSettings.deleteOriginal && canDelete) {
+              await message.delete().catch(() => null);
+              await message.channel.send({
+                content: `Shared by ${message.author}:\n\n${convertedText}`,
+                components: [row]
+              });
+            } else {
+              await message.reply({
+                content: convertedText,
+                components: [row],
+                allowedMentions: { repliedUser: false }
+              }).catch(() => null);
+            }
+          }
+        }
+      }
+    }
 
     // ✅ ACTIVITY LOGGER (taruh di sini)
     const now = Date.now();
@@ -5576,12 +7707,15 @@ client.on(Events.MessageCreate, async (message) => {
         await trySetMemberNick(member, restored || null);
       }
 
-      await message
+      const welcomeBackMsg = await message
         .reply({
           content: `✅ welcome back <@${message.author.id}>! status AFK kamu sudah dihapus.`,
           allowedMentions: { repliedUser: false, parse: [] },
         })
-        .catch(() => { });
+        .catch(() => null);
+      if (welcomeBackMsg) {
+        setTimeout(() => welcomeBackMsg.delete().catch(() => { }), 15000);
+      }
     }
     if (message.content.startsWith("cs")) {
       if (!message.guild || message.author.bot) return;
@@ -5645,7 +7779,7 @@ client.on(Events.MessageCreate, async (message) => {
       if (lines.length) {
         await message
           .reply({
-            content: `🕯️ **AFK Notice**\n${lines.join("\n")}`,
+            content: `💤 **AFK Notice**\n${lines.join("\n")}`,
             allowedMentions: { repliedUser: false, parse: [] },
           })
           .catch(() => { });
@@ -5736,17 +7870,7 @@ client.on(Events.MessageCreate, async (message) => {
         // 3. Kirim DM ke Pengguna
         try {
           await message.author.send({
-            content: `⚠️ **Peringatan Resmi dari Mystral Academy**`,
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("SURAT PERINGATAN SISTEM")
-                .setColor(0xff5252)
-                .setThumbnail(message.guild.iconURL())
-                .setDescription(`Halo <@${message.author.id}>, kamu menerima peringatan otomatis di server **${message.guild.name}**.`)
-                .addFields({ name: "Pesan yang Dilanggar", value: `\`${safeText(message.content, 120)}\`` })
-                .setFooter({ text: "Harap gunakan bahasa yang sopan agar tidak terkena sanksi lebih lanjut." })
-                .setTimestamp()
-            ]
+            content: `⚠️ Kamu mendapatkan peringatan otomatis di server **${message.guild.name}** karena menggunakan kata terlarang: **${hit}**.\n*Pesan terdeteksi: "${safeText(message.content, 120)}"*`
           });
         } catch (e) {
           console.log(`[DM FAIL] Gagal mengirim DM ke ${message.author.tag}.`);
@@ -5761,6 +7885,21 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
+    // Check autoresponses
+    const handledByAR = await checkAutoresponses(message);
+    if (handledByAR) return;
+
+    // Check for pending confirmation
+    const textClean = message.content.trim().toLowerCase();
+    if (textClean === "confirm" || textClean === `${PREFIX} confirm` || textClean === `${PREFIX}confirm`) {
+      const pending = pendingConfirmations.get(message.author.id);
+      if (pending && Date.now() < pending.expires) {
+        pendingConfirmations.delete(message.author.id);
+        await pending.action();
+        return;
+      }
+    }
+
     // Prefix check
     if (!message.content.startsWith(PREFIX)) return;
 
@@ -5769,6 +7908,10 @@ client.on(Events.MessageCreate, async (message) => {
     const cmd = args.shift()?.toLowerCase();
     const command = cmd; // alias biar blok bawah yang pakai "command" tetap jalan
     const isMod = message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+
+    const cleanInput = message.content.slice(PREFIX.length).trim();
+    const handledByDMA = await handleDiscordManagementAssistant(message, cleanInput, cmd, args);
+    if (handledByDMA) return;
 
     // ===================== CHANNEL RESTRICTION (PREFIX) =====================
     // 1. Tarot commands (ctarot, ctarotprofile, ctarotlb, ctarotcollection) -> 1516259143994839050
@@ -5788,10 +7931,9 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // 2. AFK commands (cafk) -> 1466628064002707518
     if (cmd === "afk") {
       const targetCh = "1466628064002707518";
-      if (message.channel.id !== targetCh) {
+      if (message.channel.id !== targetCh && !isBotOwner(message.author.id)) {
         const warnMsg = await message.reply({
           content: `❌ **AFK** (\`${PREFIX}${cmd}\`) hanya dapat digunakan di channel <#${targetCh}>!`
         }).catch(() => null);
@@ -5813,26 +7955,9 @@ client.on(Events.MessageCreate, async (message) => {
       const channel = message.channel;
       const memberCount = message.guild.memberCount;
 
-      const rulesMention = resolveChannelMention(message.guild, "RULES_CHANNEL_ID", ["rules", "peraturan"], "rules");
-      const selfRoleMention = resolveChannelMention(message.guild, "SELF_ROLE_CHANNEL_ID", ["self-role", "selfrole", "pilih-peran"], "self-role");
-      const announceMention = resolveChannelMention(message.guild, "ANNOUNCEMENTS_CHANNEL_ID", ["announcements", "pengumuman"], "announcements");
-      const idCardMention = resolveChannelMention(message.guild, "IDCARD_CHANNEL_ID", ["idcard", "id-card", "registrasi"], "idcard");
-      const lobbyMention = resolveChannelMention(message.guild, "LOBBY_CHANNEL_ID", ["lobby", "lobby-chat", "berkenalan"], "lobby");
+      const welcomeText = buildWelcomeText(member, memberCount);
 
-      const welcomeText = [
-        `<:profile:1510055150486814853> **A new student has arrived**`,
-        ``,
-        `Gerbang Mystral Academy telah terbuka untukmu. Kamu adalah pelajar ke-**${memberCount}** yang bergabung bersama kami.`,
-        ``,
-        `🗺️ **Langkah Pertama**`,
-        `📜 Baca peraturan server • ${rulesMention}`,
-        `🎭 Tentukan Identitasmu • ${selfRoleMention}`,
-        `📢 Pantau informasi terbaru • ${announceMention}`,
-        `📝 Selesaikan Registrasi • ${idCardMention}`,
-        `💬 Bergabung di Lobby • ${lobbyMention}`,
-      ].join("\n");
-
-      const avatarUrl = member.user.displayAvatarURL({ extension: "png", size: 256 });
+      const avatarUrl = member.displayAvatarURL({ extension: "png", size: 256 });
       const buffer = await renderWelcomeCard({
         username: member.displayName,
         avatarUrl,
@@ -5870,7 +7995,7 @@ client.on(Events.MessageCreate, async (message) => {
 
       const leaveText = [
         `👋 **A Student Has Departed (LEAVE TEST)**`,
-        `**${member.displayName}** has left Mystral Academy.`,
+        `**${member.displayName}** has left Mystral.`,
       ].join("\n");
 
       const avatarUrl = member.user.displayAvatarURL({ extension: "png", size: 256 });
@@ -6006,7 +8131,7 @@ client.on(Events.MessageCreate, async (message) => {
         // Kirim DM
         try {
           await target.send({
-            content: `⚠️ **Peringatan Resmi dari Mystral Academy**`,
+            content: `⚠️ **Peringatan Resmi dari Mystral**`,
             embeds: [emb] // Pakai embed yang sama dengan log agar simpel
           });
         } catch (e) { }
@@ -6102,7 +8227,7 @@ client.on(Events.MessageCreate, async (message) => {
       // Kirim DM
       try {
         await targetMember.send({
-          content: `⚠️ **Peringatan Resmi dari Mystral Academy**`,
+          content: `⚠️ **Peringatan Resmi dari Mystral**`,
           embeds: [emb]
         });
       } catch (e) {
@@ -6460,8 +8585,8 @@ Enjoy your reward ✨`
     }
     // chelp / chalp
     if (cmd === "help" || cmd === "hai") {
-      const ui = buildHelpUI("home", message.author.id);
-      return message.reply({ embeds: ui.embeds, components: ui.components, allowedMentions: { repliedUser: false, parse: [] } });
+      const ui = buildHelpUI("home", message.author.id, false);
+      return message.reply({ ...ui, allowedMentions: { repliedUser: false, parse: [] } });
     }
 
     // chalo (prefix) tetap ada sebagai sapaan singkat
@@ -6644,7 +8769,7 @@ Enjoy your reward ✨`
         .setTitle(title)
         .setDescription(description)
         .setColor(color)
-        .setFooter({ text: "Mystral Academy • Arcane Notice" })
+        .setFooter({ text: "Mystral • Arcane Notice" })
         .setTimestamp();
 
       await message.channel.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => null);
@@ -6852,7 +8977,7 @@ Enjoy your reward ✨`
       const banner = g.bannerURL?.({ extension: "png", size: 1024 }) || null;
 
       const embed = new EmbedBuilder()
-        .setTitle("🏛️ Mystral Academy — Realm Dossier")
+        .setTitle("🏛️ Mystral — Realm Dossier")
         .setColor(EMBED_COLOR)
         .setThumbnail(icon)
         .setDescription(
@@ -6922,9 +9047,9 @@ Enjoy your reward ✨`
         await trySetMemberNick(member, withAfkPrefix(base));
       }
 
-      return message.reply({
-        content: `🕯️ <@${message.author.id}> kini berstatus **AFK** — ${safeText(reason, 80)}`,
-        allowedMentions: { repliedUser: false },
+      return message.channel.send({
+        content: `💤 <@${message.author.id}> **AFK** — ${safeText(reason, 100)}`,
+        allowedMentions: { parse: [] }
       });
     }
 
@@ -6959,10 +9084,11 @@ Enjoy your reward ✨`
       }
 
       const guildsList = client.guilds.cache.map(guild => {
-        return `• **${guild.name}** (\`${guild.id}\`) — ${guild.memberCount} member`;
+        return `• **${guild.name}** (\`${guild.id}\`) — ${guild.memberCount.toLocaleString("id-ID")} member`;
       }).join("\n");
 
-      const responseText = `📡 **Bot terhubung di ${client.guilds.cache.size} server:**\n\n${guildsList}`;
+      const totalUsers = client.guilds.cache.reduce((acc, g) => acc + g.memberCount, 0);
+      const responseText = `📡 **Bot terhubung di ${client.guilds.cache.size} server (Total: ${totalUsers.toLocaleString("id-ID")} users):**\n\n${guildsList}`;
       return message.reply({
         content: responseText.slice(0, 2000),
         allowedMentions: { repliedUser: false }
@@ -7003,12 +9129,12 @@ Enjoy your reward ✨`
             ? (await message.client.users.fetch(args[1]).catch(() => null)) || message.author
             : message.author);
 
-        const emb = await buildTarotProfileEmbed(targetUser, client);
+        const emb = await buildTarotProfileEmbed(targetUser, client, message.author);
         return message.reply({ embeds: [emb] });
       }
 
       if (sub === "lb" || sub === "leaderboard") {
-        const emb = await buildTarotLeaderboardEmbed(message.guild);
+        const emb = await buildTarotLeaderboardEmbed(message.guild, message.author);
         return message.reply({ embeds: [emb] });
       }
 
@@ -7019,7 +9145,7 @@ Enjoy your reward ✨`
             ? (await message.client.users.fetch(args[1]).catch(() => null)) || message.author
             : message.author);
 
-        const emb = await buildTarotCollectionEmbed(targetUser);
+        const emb = await buildTarotCollectionEmbed(targetUser, message.author);
         return message.reply({ embeds: [emb] });
       }
 
@@ -7051,12 +9177,12 @@ Enjoy your reward ✨`
           ? (await message.client.users.fetch(args[0]).catch(() => null)) || message.author
           : message.author);
 
-      const emb = await buildTarotProfileEmbed(targetUser, client);
+      const emb = await buildTarotProfileEmbed(targetUser, client, message.author);
       return message.reply({ embeds: [emb] });
     }
 
     if (cmd === "tarotlb") {
-      const emb = await buildTarotLeaderboardEmbed(message.guild);
+      const emb = await buildTarotLeaderboardEmbed(message.guild, message.author);
       return message.reply({ embeds: [emb] });
     }
 
@@ -7067,7 +9193,7 @@ Enjoy your reward ✨`
           ? (await message.client.users.fetch(args[0]).catch(() => null)) || message.author
           : message.author);
 
-      const emb = await buildTarotCollectionEmbed(targetUser);
+      const emb = await buildTarotCollectionEmbed(targetUser, message.author);
       return message.reply({ embeds: [emb] });
     }
 
@@ -7164,8 +9290,8 @@ Enjoy your reward ✨`
 
       const resultText = results.join("\n");
       const successCount = results.filter(r => r.includes("berhasil disalin")).length;
-      
-      const responseText = 
+
+      const responseText =
         `**Proses salin emoji selesai!**\n` +
         `Berhasil menyalin **${successCount}** dari **${matches.length}** emoji.\n\n` +
         `${resultText}`;
@@ -7190,6 +9316,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
 
+    // ===================== AUTORESPONSE STRING SELECT MENU =====================
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("ar_select_")) {
+      const choice = interaction.values[0];
+      await interaction.reply({ content: `Anda memilih: **${choice}**`, flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+
     // ===================== INTERACTIVE HELP CATEGORY CHANGE =====================
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith("help:menu:")) {
       const [, , commandCallerId] = interaction.customId.split(":");
@@ -7203,12 +9336,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const selectedCategory = interaction.values[0];
-      const ui = buildHelpUI(selectedCategory, commandCallerId);
+      const isOriginalV2 = interaction.message.flags?.has?.(MessageFlags.IsComponentsV2);
+      const ui = buildHelpUI(selectedCategory, commandCallerId, isOriginalV2);
 
-      await interaction.update({
-        embeds: ui.embeds,
-        components: ui.components
-      }).catch(() => { });
+      await interaction.update(ui).catch(() => { });
       return;
     }
 
@@ -7277,7 +9408,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `*${readingData.advice}*`
         ].join("\n"))
         .setColor(EMBED_COLOR)
-        .setFooter({ text: "Mystral Academy • Daily Tarot" })
+        .setFooter({ text: `Mystral • Daily Tarot | Requested by ${interaction.user.username}` })
         .setTimestamp();
 
       await interaction.editReply({
@@ -7339,9 +9470,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // ===================== MENFESS: BUTTON + MODAL HANDLERS (FINAL FIX) =====================
+    // ===================== MENFESS: BUTTON + MODAL HANDLERS (FIX) =====================
+
+    // BUTTON: buka modal
     if (interaction.isButton()) {
-      // 1) Kirim menfess (dari panel / dari tombol di post)
+      // 1) Kirim menfess
       if (interaction.customId === "menfess:new") {
         const modal = new ModalBuilder()
           .setCustomId("menfess:modal:new")
@@ -7366,231 +9499,395 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const imgInput = new TextInputBuilder()
           .setCustomId("image")
           .setLabel("Link Gambar/GIF (opsional)")
-          .setPlaceholder("https://... (Direct Link png/jpg/gif)")
+          .setPlaceholder("https://... direct link png/jpg/gif")
           .setStyle(TextInputStyle.Short)
           .setRequired(false)
           .setMaxLength(300);
 
+        const colorInput = new TextInputBuilder()
+          .setCustomId("warna")
+          .setLabel("Warna Embed Hex (opsional)")
+          .setPlaceholder("misal: #ff0000 atau #ffffff")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(7);
+
         modal.addComponents(
           new ActionRowBuilder().addComponents(toInput),
           new ActionRowBuilder().addComponents(msgInput),
-          new ActionRowBuilder().addComponents(imgInput)
+          new ActionRowBuilder().addComponents(imgInput),
+          new ActionRowBuilder().addComponents(colorInput)
         );
 
         return interaction.showModal(modal).catch((err) => {
-          console.error("❌ MODAL SHOW ERROR:", err);
+          console.error("[MENFESS SHOW NEW MODAL ERROR]", err);
         });
       }
 
-      // 2) Balas anonim ke menfess tertentu
-      if (interaction.customId.startsWith("menfess:reply:")) {
-        const targetId = interaction.customId.split(":")[2];
-
+      // 2) Balas dari panel utama
+      if (interaction.customId === "menfess:reply_panel") {
         const modal = new ModalBuilder()
-          .setCustomId(`menfess:modal:reply:${targetId}`)
-          .setTitle("💬 Balas Menfess (Anonim)");
+          .setCustomId("menfess:modal:reply_panel")
+          .setTitle("💬 Balas Menfess");
+
+        const idInput = new TextInputBuilder()
+          .setCustomId("target_id")
+          .setLabel("No Menfess / Message ID")
+          .setPlaceholder("Contoh: 1023 atau 123456789012345678")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(50);
 
         const msgInput = new TextInputBuilder()
           .setCustomId("msg")
-          .setLabel("Balasan kamu")
-          .setPlaceholder("tulis balasan anonim…")
+          .setLabel("Isi balasan")
+          .setPlaceholder("Tulis balasanmu di sini…")
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true)
           .setMaxLength(900);
 
-        modal.addComponents(new ActionRowBuilder().addComponents(msgInput));
-        return interaction.showModal(modal).catch(() => { });
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(idInput),
+          new ActionRowBuilder().addComponents(msgInput)
+        );
+
+        return interaction.showModal(modal).catch((err) => {
+          console.error("[MENFESS SHOW REPLY PANEL MODAL ERROR]", err);
+        });
+      }
+
+      // 3) Balas dari tombol di menfess/thread
+      if (interaction.customId.startsWith("menfess:reply:")) {
+        const targetId = interaction.customId.split(":")[2];
+
+        const modal = new ModalBuilder()
+          .setCustomId("menfess:modal:reply_panel")
+          .setTitle("💬 Balas Menfess");
+
+        const idInput = new TextInputBuilder()
+          .setCustomId("target_id")
+          .setLabel("No Menfess / Message ID")
+          .setPlaceholder(`Contoh: ${targetId}`)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(50)
+          .setValue(String(targetId));
+
+        const msgInput = new TextInputBuilder()
+          .setCustomId("msg")
+          .setLabel("Isi balasan")
+          .setPlaceholder("Tulis balasanmu di sini…")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(900);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(idInput),
+          new ActionRowBuilder().addComponents(msgInput)
+        );
+
+        return interaction.showModal(modal).catch((err) => {
+          console.error("[MENFESS SHOW REPLY BUTTON MODAL ERROR]", err);
+        });
       }
     }
 
+    // MODAL SUBMIT
     if (interaction.isModalSubmit()) {
-      // anti spam sederhana
       const cdKey = `${interaction.guildId}:${interaction.user.id}`;
       const now = Date.now();
       const last = menfessCooldown.get(cdKey) || 0;
       const cooldownMs = Number(process.env.MENFESS_COOLDOWN_MS || 15_000);
       const passCooldown = now - last >= cooldownMs;
 
-      // 3) SUBMIT: kirim menfess baru
+      // 4) Submit kirim menfess baru
       if (interaction.customId === "menfess:modal:new") {
         if (!interaction.guild) return;
 
-        if (!passCooldown) {
-          return interaction.reply({
-            content: `⏳ pelan dulu ya, coba lagi <t:${Math.floor((last + cooldownMs) / 1000)}:R>`,
-            flags: MessageFlags.Ephemeral,
-          }).catch(() => { });
-        }
-        menfessCooldown.set(cdKey, now);
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
 
-        const ch = await getTextChannelOrNull(interaction.guild, requireEnv("MENFESS_CHANNEL_ID"));
-        if (!ch) {
-          return interaction.reply({
-            content: "⚠️ MENFESS_CHANNEL_ID tidak ketemu / bot tidak punya akses / bukan text channel.",
-            flags: MessageFlags.Ephemeral,
-          }).catch(() => { });
-        }
-
-        const to = (interaction.fields.getTextInputValue("to") || "").trim().slice(0, 60);
-        const msg = (interaction.fields.getTextInputValue("msg") || "").trim().slice(0, 900);
-        const image = (interaction.fields.getTextInputValue("image") || "").trim();
-        if (!msg) {
-          return interaction.reply({ content: "⚠️ isi menfess nya kosong.", flags: MessageFlags.Ephemeral }).catch(() => { });
-        }
-
-        const anonLabel = await getAnonLabel(interaction.user.id);
-        const id = await nextMenfessId();
-
-        // simpan post dulu (message_id nanti di-update setelah send)
-        await insertMenfessPost({ id, messageId: null, channelId: ch.id }).catch(() => null);
-
-        const embed = new EmbedBuilder()
-          .setTitle(`🕯️ MENFESS #${id}`)
-          .setColor(EMBED_COLOR)
-          .setDescription(
-            [
-              to ? `**Untuk:** ${to}` : null,
-              msg,
-              `Menfess • <t:${Math.floor(Date.now() / 1000)}:f>`,
-            ].filter(Boolean).join("\n\n")
-          );
-
-        // Validasi: hanya terima direct image link
-        if (image) {
-          const directImageErr = validateDirectImageUrl(image);
-          if (directImageErr) {
-            return interaction.reply({
-              content: directImageErr,
-              flags: MessageFlags.Ephemeral,
-            }).catch(() => { });
+        try {
+          if (!passCooldown) {
+            return interaction.editReply(
+              `⏳ pelan dulu ya, coba lagi <t:${Math.floor((last + cooldownMs) / 1000)}:R>`
+            );
           }
-          embed.setImage(image);
-        }
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("menfess:new").setLabel("Kirim Baru").setStyle(ButtonStyle.Success).setEmoji("✉️"),
-          new ButtonBuilder().setCustomId(`menfess:reply:${id}`).setLabel("Balas Anonim").setStyle(ButtonStyle.Primary).setEmoji("🫧")
-        );
+          menfessCooldown.set(cdKey, now);
 
-        const sent = await ch.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
-        if (sent?.id) {
-          await updateMenfessPostLink(id, { messageId: sent.id, channelId: ch.id }).catch(() => null);
-        }
-
-        await sendMenfessLog(interaction.guild, {
-          kind: "post",
-          id,
-          senderId: interaction.user.id,
-          senderNick: interaction.member?.displayName || interaction.user.username,
-          anonLabel,
-          to,
-          channelId: ch.id,
-          messageId: sent?.id || null,
-          content: msg,
-          image: image || null,
-        }).catch(() => null);
-
-
-        return interaction.reply({ content: "✅ menfess terkirim.", flags: MessageFlags.Ephemeral }).catch(() => { });
-      }
-
-      // 4) SUBMIT: balas menfess (REPLY ke menfess aslinya)
-      if (interaction.customId.startsWith("menfess:modal:reply:")) {
-        if (!interaction.guild) return;
-
-        const targetId = interaction.customId.split(":")[3];
-        const msg = (interaction.fields.getTextInputValue("msg") || "").trim().slice(0, 900);
-        if (!msg) {
-          return interaction.reply({ content: "⚠️ balasan kosong.", flags: MessageFlags.Ephemeral }).catch(() => { });
-        }
-
-        const post = await getMenfessPostById(targetId).catch(() => null);
-        const chId = post?.channel_id || requireEnv("MENFESS_CHANNEL_ID");
-        const ch = await getTextChannelOrNull(interaction.guild, chId);
-        if (!ch) {
-          return interaction.reply({ content: "⚠️ channel menfess tidak ditemukan.", flags: MessageFlags.Ephemeral }).catch(() => { });
-        }
-
-        const anonLabel = await getAnonLabel(interaction.user.id);
-        const replyId = await nextMenfessId();
-
-        const embed = new EmbedBuilder()
-          .setTitle(`🤫 Balasan Anonim #${replyId}`)
-          .setColor(EMBED_COLOR)
-          .setDescription(
-            [
-              msg,
-              `Reply to menfess #${targetId} • <t:${Math.floor(Date.now() / 1000)}:f>`,
-            ].join("\n\n")
+          const ch = await getTextChannelOrNull(
+            interaction.guild,
+            requireEnv("MENFESS_CHANNEL_ID")
           );
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("menfess:new").setLabel("Kirim Baru").setStyle(ButtonStyle.Success).setEmoji("✉️"),
-          new ButtonBuilder().setCustomId(`menfess:reply:${targetId}`).setLabel("Balas Anonim").setStyle(ButtonStyle.Primary).setEmoji("🫧")
-        );
+          if (!ch) {
+            return interaction.editReply("⚠️ MENFESS_CHANNEL_ID tidak ketemu / bot tidak punya akses.");
+          }
 
-        const msgId = post?.message_id || post?.messageId;
+          const to = (interaction.fields.getTextInputValue("to") || "").trim().slice(0, 60);
+          const msg = (interaction.fields.getTextInputValue("msg") || "").trim().slice(0, 900);
+          const image = (interaction.fields.getTextInputValue("image") || "").trim().slice(0, 300);
+          const rawWarna = (interaction.fields.getTextInputValue("warna") || "").trim();
 
-        let targetMsg = null;
-        if (msgId) {
-          targetMsg = await ch.messages.fetch(msgId).catch(() => null);
-        }
+          if (!msg) {
+            return interaction.editReply("⚠️ isi menfess tidak boleh kosong.");
+          }
 
-        let replyThread = post?.thread_id
-          ? await ch.threads.fetch(post.thread_id).catch(() => null)
-          : null;
+          if (to && isBadAlias(to)) {
+            return interaction.editReply("⚠️ kolom `Untuk` tidak boleh mengandung mention/role/staff impersonation.");
+          }
 
-        if (!replyThread && targetMsg) {
-          replyThread = await targetMsg.startThread({
-            name: `menfess-${targetId}`,
-            autoArchiveDuration: 1440,
-            reason: `Thread balasan menfess #${targetId}`,
+          if (image) {
+            const directImageErr = validateDirectImageUrl(image);
+            if (directImageErr) {
+              return interaction.editReply(directImageErr);
+            }
+          }
+
+          let embedColor = EMBED_COLOR;
+          if (rawWarna) {
+            const cleanWarna = rawWarna.replace("#", "");
+            if (/^[0-9a-fA-F]{6}$/.test(cleanWarna)) {
+              embedColor = parseInt(cleanWarna, 16);
+            }
+          }
+
+          const anonLabel = await getAnonLabel(interaction.user.id);
+          const id = await nextMenfessId();
+
+          await insertMenfessPost({
+            id,
+            messageId: null,
+            channelId: ch.id,
           }).catch(() => null);
 
-          if (replyThread?.id) {
-            await updateMenfessPostLink(targetId, {
-              messageId: post.message_id,
-              channelId: post.channel_id,
-              threadId: replyThread.id,
+          const embed = new EmbedBuilder()
+            .setTitle(`<a:w_mail:1523235712168890390> MENFESS #${id}`)
+            .setColor(embedColor)
+            .setDescription(
+              [
+                to ? `**Untuk:** ${to}` : null,
+                msg,
+              ].filter(Boolean).join("\n\n")
+            );
+
+          if (image) embed.setImage(image);
+
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("menfess:new")
+              .setLabel("Kirim Baru")
+              .setStyle(ButtonStyle.Success)
+              .setEmoji("✉️"),
+
+            new ButtonBuilder()
+              .setCustomId(`menfess:reply:${id}`)
+              .setLabel("Balas Anonim")
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji("🫧")
+          );
+
+          const sent = await ch.send({
+            embeds: [embed],
+            components: [row],
+            allowedMentions: { parse: [] },
+          }).catch(() => null);
+
+          if (!sent?.id) {
+            return interaction.editReply("⚠️ gagal mengirim menfess. Cek permission bot.");
+          }
+
+          await updateMenfessPostLink(id, {
+            messageId: sent.id,
+            channelId: ch.id,
+          }).catch(() => null);
+
+          await handleMenfessButtonCleanup(interaction.client, sent).catch(() => null);
+
+          await sendMenfessLog(interaction.guild, {
+            kind: "post",
+            id,
+            senderId: interaction.user.id,
+            senderNick: interaction.member?.displayName || interaction.user.username,
+            anonLabel,
+            to,
+            channelId: ch.id,
+            messageId: sent.id,
+            content: msg,
+            image: image || null,
+          }).catch(() => null);
+
+          return interaction.editReply("✅ menfess terkirim.");
+        } catch (err) {
+          console.error("[MENFESS NEW ERROR]", err);
+          return interaction.editReply("⚠️ terjadi error saat mengirim menfess. Coba lagi nanti.").catch(() => { });
+        }
+      }
+
+      // 5) Submit balas menfess
+      if (interaction.customId === "menfess:modal:reply_panel") {
+        if (!interaction.guild) return;
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
+
+        try {
+          if (!passCooldown) {
+            return interaction.editReply(
+              `⏳ pelan dulu ya, coba lagi <t:${Math.floor((last + cooldownMs) / 1000)}:R>`
+            );
+          }
+
+          menfessCooldown.set(cdKey, now);
+
+          const targetIdInput = (interaction.fields.getTextInputValue("target_id") || "")
+            .trim()
+            .replace(/^#/, "");
+
+          const msg = (interaction.fields.getTextInputValue("msg") || "")
+            .trim()
+            .slice(0, 900);
+
+          if (!targetIdInput || !msg) {
+            return interaction.editReply("⚠️ input tidak valid.");
+          }
+
+          let post = await getMenfessPostById(targetIdInput).catch(() => null);
+
+          if (!post) {
+            post = await dbGet(
+              `SELECT id, message_id, channel_id, thread_id
+           FROM menfess_posts
+           WHERE message_id=?`,
+              [targetIdInput]
+            ).catch(() => null);
+          }
+
+          if (!post) {
+            return interaction.editReply("⚠️ menfess tidak ditemukan. Cek nomor menfess / message ID.");
+          }
+
+          const targetId = Number(post.id);
+          const chId = post.channel_id || requireEnv("MENFESS_CHANNEL_ID");
+          const ch = await getTextChannelOrNull(interaction.guild, chId);
+
+          if (!ch) {
+            return interaction.editReply("⚠️ channel menfess tidak ditemukan.");
+          }
+
+          const anonLabel = await getAnonLabel(interaction.user.id);
+          const replyId = await nextMenfessId();
+
+          const embed = new EmbedBuilder()
+            .setTitle(`🤫 Balasan Anonim #${replyId}`)
+            .setColor(EMBED_COLOR)
+            .setDescription(
+              [
+                msg,
+                `Reply to menfess #${targetId}`,
+              ].join("\n\n")
+            );
+
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("menfess:new")
+              .setLabel("Kirim Baru")
+              .setStyle(ButtonStyle.Success)
+              .setEmoji("✉️"),
+
+            new ButtonBuilder()
+              .setCustomId(`menfess:reply:${targetId}`)
+              .setLabel("Balas Anonim")
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji("🫧")
+          );
+
+          const msgId = post.message_id || post.messageId;
+
+          let targetMsg = null;
+          if (msgId) {
+            targetMsg = await ch.messages.fetch(msgId).catch(() => null);
+          }
+
+          let replyThread = null;
+
+          if (post.thread_id) {
+            replyThread = await ch.threads.fetch(post.thread_id).catch(() => null);
+          }
+
+          if (!replyThread && targetMsg) {
+            replyThread = await targetMsg.startThread({
+              name: `menfess-${targetId}`,
+              autoArchiveDuration: 1440,
+              reason: `Thread balasan menfess #${targetId}`,
+            }).catch(() => null);
+
+            if (replyThread?.id) {
+              await updateMenfessPostLink(targetId, {
+                messageId: msgId,
+                channelId: ch.id,
+                threadId: replyThread.id,
+              }).catch(() => null);
+            }
+          }
+
+          let sentReply = null;
+
+          if (replyThread) {
+            sentReply = await replyThread.send({
+              embeds: [embed],
+              components: [row],
+              allowedMentions: { parse: [] },
+            }).catch(() => null);
+          } else if (targetMsg) {
+            sentReply = await targetMsg.reply({
+              embeds: [embed],
+              components: [row],
+              allowedMentions: { parse: [] },
+            }).catch(() => null);
+          } else {
+            sentReply = await ch.send({
+              embeds: [embed],
+              components: [row],
+              allowedMentions: { parse: [] },
             }).catch(() => null);
           }
+
+          if (!sentReply?.id) {
+            return interaction.editReply("⚠️ gagal mengirim balasan. Cek permission bot.");
+          }
+
+          await sendMenfessLog(interaction.guild, {
+            kind: "reply",
+            id: replyId,
+            replyTo: targetId,
+            senderId: interaction.user.id,
+            senderNick: interaction.member?.displayName || interaction.user.username,
+            anonLabel,
+            channelId: ch.id,
+            messageId: sentReply.id,
+            content: msg,
+          }).catch(() => null);
+
+          return interaction.editReply("✅ balasan anonim terkirim.");
+        } catch (err) {
+          console.error("[MENFESS REPLY ERROR]", err);
+          return interaction.editReply("⚠️ terjadi error saat mengirim balasan. Coba lagi nanti.").catch(() => { });
         }
-
-        if (replyThread) {
-          await replyThread.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
-        } else if (targetMsg) {
-          await targetMsg.reply({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
-        } else {
-          await ch.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } }).catch(() => null);
-        }
-
-        await sendMenfessLog(interaction.guild, {
-          kind: "reply",
-          id: `#${replyId}`,
-          replyTo: targetId,
-          senderId: interaction.user.id,
-          senderNick: interaction.member?.displayName || interaction.user.username,
-          anonLabel,
-          channelId: ch.id,
-          messageId: null,
-          content: msg,
-        }).catch(() => null);
-
-        return interaction.reply({ content: "✅ balasan terkirim.", flags: MessageFlags.Ephemeral }).catch(() => { });
       }
     }
     // ===================== END MENFESS HANDLERS =====================
+
     if (interaction.isButton() && interaction.customId === "sorting:roll") {
       await safeDeferUpdate(interaction);
 
       if (!interaction.guild) {
-        await interaction.followUp({ content: "Guild only.", ephemeral: true }).catch(() => { });
+        await interaction.followUp({ content: "Guild only.", flags: MessageFlags.Ephemeral }).catch(() => { });
         return;
       }
 
       const sortingChannelId = process.env.SORTING_CHANNEL_ID;
       if (sortingChannelId && interaction.channelId !== sortingChannelId) {
-        await interaction.followUp({ content: `⚠️ ritual ini cuma bisa dilakukan di <#${sortingChannelId}> ya.`, ephemeral: true }).catch(() => { });
+        await interaction.followUp({ content: `⚠️ ritual ini cuma bisa dilakukan di <#${sortingChannelId}> ya.`, flags: MessageFlags.Ephemeral }).catch(() => { });
         return;
       }
 
@@ -7601,7 +9898,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             "🪪 **Segel Takdir tidak merespons.**\n" +
             "Identitas Mystral-mu belum terdaftar.\n\n" +
             "Buat **Mystral ID Card** terlebih dahulu dengan `/idcard` untuk melanjutkan ritual.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         }).catch(() => { });
         return;
       }
@@ -7611,7 +9908,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const label = already.choice === "dark"
           ? "<:dark:1459543141609771101> Dark Arcane"
           : "<:light:1459543076736336004> Light Arcane";
-        await interaction.followUp({ content: `Kamu telah menjalani ritual sekali. Hasil kamu: **${label}**`, ephemeral: true }).catch(() => { });
+        await interaction.followUp({ content: `Kamu telah menjalani ritual sekali. Hasil kamu: **${label}**`, flags: MessageFlags.Ephemeral }).catch(() => { });
         return;
       }
 
@@ -7693,10 +9990,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!roleOk) {
         await interaction.followUp({
           content: "⚠️ Ritual selesai, tapi bot gagal memberi role (cek permission / role hierarchy). Staff tolong fix posisi role bot.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         }).catch(() => { });
       } else {
-        await interaction.followUp({ content: "✅ Ritual berhasil.", ephemeral: true }).catch(() => { });
+        await interaction.followUp({ content: "✅ Ritual berhasil.", flags: MessageFlags.Ephemeral }).catch(() => { });
       }
 
       return;
@@ -7805,11 +10102,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const iStatus = new TextInputBuilder()
         .setCustomId("status")
-        .setLabel("Status (opsional: In Love | dark / | light)")
+        .setLabel("Status (Opsional, Default: Light)")
         .setStyle(TextInputStyle.Short)
         .setMaxLength(60)
         .setRequired(false)
-        .setPlaceholder("contoh: Single | dark")
+        .setPlaceholder("Contoh: In Love | Dark")
         .setValue(
           existingIdCard?.status
             ? `${existingIdCard.status}${existingIdCard.theme ? ` | ${existingIdCard.theme}` : ""}`
@@ -7884,7 +10181,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           domisili: saved?.domisili || "—",
           hobi: saved?.hobi || "—",
           status: saved?.status || "—",
-          avatarUrl: interaction.user.displayAvatarURL({ extension: "png", size: 256 }),
+          avatarUrl: (interaction.member ?? interaction.user).displayAvatarURL({ extension: "png", size: 256 }),
           createdAtText,
           arcanaChoice: sorted?.choice || null,
         });
@@ -7905,7 +10202,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setColor(EMBED_COLOR)
           .setDescription(`<@${interaction.user.id}>, berikut **${ID_CARD_TITLE}** kamu:`)
           .setImage(`attachment://${filename}`)
-          .setFooter({ text: "Mystral Academy • Verified in the arcane" })
+          .setFooter({ text: "Mystral • Verified in the arcane" })
           .setTimestamp();
 
         await interaction.channel.send({
@@ -7932,10 +10229,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isChatInputCommand() && interaction.commandName === "ticket_setup") {
       if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-        return interaction.reply({ content: "Admin only", ephemeral: true });
+        return interaction.reply({ content: "Admin only", flags: MessageFlags.Ephemeral });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const panelCh = interaction.options.getChannel("panel_channel", true);
       const category = interaction.options.getChannel("category");
@@ -8001,8 +10298,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.editReply(`✅ Warning **#${warnId}** berhasil dihapus.`);
     }
 
-    // ===================== TICKET: PANEL BUTTON -> OPEN MODAL
-
     // ===================== TICKET: PANEL BUTTON -> OPEN MODAL =====================
     if (interaction.isButton() && interaction.customId.startsWith("ticket:open:")) {
       if (!interaction.guild) {
@@ -8060,7 +10355,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         (interaction.user.username || "user").toLowerCase().replace(/[^a-z0-9-_]/g, "").slice(0, 12) || "user";
       const chName = `ticket-${type}-${safeUser}`.slice(0, 90);
 
-      const allowedTypes = ["complaint", "report", "donate", "partnership", "verification", "custom"];
+      const allowedTypes = ["complaint", "support", "report", "donate", "donation", "partnership", "verification", "ask", "custom"];
       const safeType = allowedTypes.includes(type) ? type : "custom";
 
       const channel = await interaction.guild.channels.create({
@@ -8372,39 +10667,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
           hasPerm(interaction.member, PermissionsBitField.Flags.Administrator));
 
       if (cmd === "faq_add" || cmd === "faq_add") {
-        if (!interaction.guild) return interaction.reply({ content: "Guild only.", ephemeral: true });
-        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", ephemeral: true });
+        if (!interaction.guild) return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
+        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", flags: MessageFlags.Ephemeral });
 
         const title = interaction.options.getString("title", true);
         const content = interaction.options.getString("content", true);
         const tags = interaction.options.getString("tags", false);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const id = await faqAdd(interaction.guild.id, title, content, tags, interaction.user.id);
         return interaction.editReply(`✅ Artikel faq Ditambahkan: **#${id}**`);
       }
 
       if (cmd === "faq_edit") {
-        if (!interaction.guild) return interaction.reply({ content: "Guild only.", ephemeral: true });
-        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", ephemeral: true });
+        if (!interaction.guild) return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
+        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", flags: MessageFlags.Ephemeral });
 
         const id = interaction.options.getInteger("id", true);
         const title = interaction.options.getString("title", false);
         const content = interaction.options.getString("content", false);
         const tags = interaction.options.getString("tags", false);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const ok = await faqUpdate(interaction.guild.id, id, { title, content, tags });
         if (!ok) return interaction.editReply("❌ Artikel Tidak Ditemukan.");
         return interaction.editReply(`✅ Artikel faq **#${id}** Berhasil Diperbarui.`);
       }
 
       if (cmd === "faq_delete") {
-        if (!interaction.guild) return interaction.reply({ content: "Guild only.", ephemeral: true });
-        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", ephemeral: true });
+        if (!interaction.guild) return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
+        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", flags: MessageFlags.Ephemeral });
 
         const id = interaction.options.getInteger("id", true);
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const cur = await faqGet(interaction.guild.id, id);
         if (!cur) return interaction.editReply("❌ Artikel Tidak Ditemukan.");
@@ -8418,7 +10713,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const item = await faqGet(interaction.guildId, id);
 
         if (!item) {
-          return interaction.reply({ content: "❌ FAQ Tidak Ditemukan.", ephemeral: true });
+          return interaction.reply({ content: "❌ FAQ Tidak Ditemukan.", flags: MessageFlags.Ephemeral });
         }
 
         const e = buildfaqItemEmbed(interaction.guild, item); // <-- PASTIIN INI
@@ -8426,10 +10721,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (cmd === "faq_search") {
-        if (!interaction.guild) return interaction.reply({ content: "Guild only.", ephemeral: true });
+        if (!interaction.guild) return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
         const query = interaction.options.getString("query", true);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const results = await faqSearch(interaction.guild.id, query, 15);
 
         if (!results.length) {
@@ -8452,10 +10747,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (cmd === "faq_list") {
-        if (!interaction.guild) return interaction.reply({ content: "Guild only.", ephemeral: true });
-        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", ephemeral: true });
+        if (!interaction.guild) return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
+        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", flags: MessageFlags.Ephemeral });
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const items = await faqListLatest(interaction.guild.id, 20);
         if (!items.length) return interaction.editReply("📚 Belum Ada Artikel faq.");
 
@@ -8469,10 +10764,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (cmd === "faq_panel") {
-        if (!interaction.guild) return interaction.reply({ content: "Guild only.", ephemeral: true });
-        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", ephemeral: true });
+        if (!interaction.guild) return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
+        if (!isfaqAdmin) return interaction.reply({ content: "❌ Admin/Staff Only.", flags: MessageFlags.Ephemeral });
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const targetCh =
           interaction.options.getChannel("channel", false) || interaction.channel;
@@ -8507,7 +10802,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // ===================== /giveaway_reroll =====================
     if (interaction.isChatInputCommand() && interaction.commandName === "giveaway_end") {
       if (!interaction.guild) {
-        return interaction.reply({ content: "Guild only.", ephemeral: true });
+        return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
       }
 
       const isAllowed =
@@ -8516,10 +10811,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         hasPerm(interaction.member, PermissionsBitField.Flags.Administrator);
 
       if (!isAllowed) {
-        return interaction.reply({ content: "❌ Tidak punya izin.", ephemeral: true });
+        return interaction.reply({ content: "❌ Tidak punya izin.", flags: MessageFlags.Ephemeral });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const gid = interaction.options.getInteger("id", true);
       const g = await getGiveaway(gid);
@@ -8536,7 +10831,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isChatInputCommand() && interaction.commandName === "giveaway_list") {
       if (!interaction.guild) {
-        return interaction.reply({ content: "Guild only.", ephemeral: true });
+        return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
       }
 
       const isAllowed =
@@ -8545,12 +10840,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         hasPerm(interaction.member, PermissionsBitField.Flags.Administrator);
 
       if (!isAllowed) {
-        return interaction.reply({ content: "❌ Tidak punya izin.", ephemeral: true });
+        return interaction.reply({ content: "❌ Tidak punya izin.", flags: MessageFlags.Ephemeral });
       }
 
       const rows = await listActiveGiveaways(interaction.guild.id);
       if (!rows.length) {
-        return interaction.reply({ content: "Belum ada giveaway yang aktif.", ephemeral: true });
+        return interaction.reply({ content: "Belum ada giveaway yang aktif.", flags: MessageFlags.Ephemeral });
       }
 
       const desc = rows
@@ -8561,14 +10856,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setTitle("🎁 Active Giveaways")
         .setColor(0x8b5cf6)
         .setDescription(desc)
-        .setFooter({ text: "Mystral Academy • Giveaway" });
+        .setFooter({ text: "Mystral • Giveaway" });
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === "giveaway_entries") {
       if (!interaction.guild) {
-        return interaction.reply({ content: "Guild only.", ephemeral: true });
+        return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
       }
 
       const isAllowed =
@@ -8577,18 +10872,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         hasPerm(interaction.member, PermissionsBitField.Flags.Administrator);
 
       if (!isAllowed) {
-        return interaction.reply({ content: "❌ Tidak punya izin.", ephemeral: true });
+        return interaction.reply({ content: "❌ Tidak punya izin.", flags: MessageFlags.Ephemeral });
       }
 
       const gid = interaction.options.getInteger("id", true);
       const g = await getGiveaway(gid);
       if (!g || g.guild_id !== interaction.guild.id) {
-        return interaction.reply({ content: "❌ Giveaway tidak ditemukan.", ephemeral: true });
+        return interaction.reply({ content: "❌ Giveaway tidak ditemukan.", flags: MessageFlags.Ephemeral });
       }
 
       const rows = await listGiveawayEntries(gid);
       if (!rows.length) {
-        return interaction.reply({ content: `Belum ada peserta di giveaway **#${gid}**.`, ephemeral: true });
+        return interaction.reply({ content: `Belum ada peserta di giveaway **#${gid}**.`, flags: MessageFlags.Ephemeral });
       }
 
       const shown = rows.slice(0, 50);
@@ -8603,12 +10898,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setDescription(`${desc}${extra}`)
         .setFooter({ text: `Total peserta: ${rows.length}` });
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === "giveaway_delete") {
       if (!interaction.guild) {
-        return interaction.reply({ content: "Guild only.", ephemeral: true });
+        return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
       }
 
       const isAllowed =
@@ -8617,10 +10912,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         hasPerm(interaction.member, PermissionsBitField.Flags.Administrator);
 
       if (!isAllowed) {
-        return interaction.reply({ content: "❌ Tidak punya izin.", ephemeral: true });
+        return interaction.reply({ content: "❌ Tidak punya izin.", flags: MessageFlags.Ephemeral });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const gid = interaction.options.getInteger("id", true);
       const g = await getGiveaway(gid);
@@ -8640,7 +10935,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isChatInputCommand() && interaction.commandName === "giveaway_reroll") {
       if (!interaction.guild) {
-        return interaction.reply({ content: "Guild only.", ephemeral: true });
+        return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
       }
 
       const isAllowed =
@@ -8648,7 +10943,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         hasPerm(interaction.member, PermissionsBitField.Flags.ManageGuild);
 
       if (!isAllowed) {
-        return interaction.reply({ content: "❌ Tidak punya izin.", ephemeral: true });
+        return interaction.reply({ content: "❌ Tidak punya izin.", flags: MessageFlags.Ephemeral });
       }
 
       await interaction.deferReply();
@@ -8793,10 +11088,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      // 2. AFK commands lock -> 1466628064002707518
       if (name === "afk") {
         const targetCh = "1466628064002707518";
-        if (interaction.channelId !== targetCh) {
+        if (interaction.channelId !== targetCh && !isBotOwner(interaction.user.id)) {
           return safeReply(interaction, {
             content: `❌ **/afk** hanya dapat digunakan di channel <#${targetCh}>!`,
             flags: MessageFlags.Ephemeral
@@ -8804,8 +11098,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-
       if (name === "ping") return safeReply(interaction, { content: `🏓 pong! ${client.ws.ping}ms` });
+
+      if (name === "serverstats") {
+        await interaction.deferReply();
+        await handleServerStats(interaction);
+        return;
+      }
+      if (name === "voicecheck") {
+        await interaction.deferReply();
+        await handleVoiceCheck(interaction);
+        return;
+      }
+      if (name === "c") {
+        const query = interaction.options.getString("query", true);
+        const args = query.trim().split(/\s+/);
+        const cmd = args.shift()?.toLowerCase();
+        await interaction.deferReply();
+        await handleDiscordManagementAssistant(interaction, query, cmd, args);
+        return;
+      }
 
       if (name === "tarot") {
         const sub = interaction.options.getSubcommand();
@@ -8839,21 +11151,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (sub === "profile") {
           const targetUser = interaction.options.getUser("user") || interaction.user;
           await safeDefer(interaction, false);
-          const emb = await buildTarotProfileEmbed(targetUser, client);
+          const emb = await buildTarotProfileEmbed(targetUser, client, interaction.user);
           return interaction.editReply({ embeds: [emb] });
         }
 
         if (sub === "leaderboard") {
           await safeDefer(interaction, false);
-          const emb = await buildTarotLeaderboardEmbed(interaction.guild);
+          const emb = await buildTarotLeaderboardEmbed(interaction.guild, interaction.user);
           return interaction.editReply({ embeds: [emb] });
         }
 
         if (sub === "collection") {
           const targetUser = interaction.options.getUser("user") || interaction.user;
           await safeDefer(interaction, false);
-          const emb = await buildTarotCollectionEmbed(targetUser);
+          const emb = await buildTarotCollectionEmbed(targetUser, interaction.user);
           return interaction.editReply({ embeds: [emb] });
+        }
+
+        if (sub === "recover") {
+          await safeDefer(interaction, false);
+          const res = await recoverTarotStreak(userId, username);
+          if (res.error) return interaction.editReply(`❌ ${res.error}`);
+          return interaction.editReply(`🩹 **Streak Tarot berhasil dipulihkan!**\nStreak kamu telah kembali aktif menjadi **${res.newStreak} Hari**! 🔥\n*(Sisa token pemulihan: **${res.recoveryLeft} / 3**)*`);
         }
       }
       if (name === "backup_now") {
@@ -8884,7 +11203,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `📅 **Timestamp:** \`${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB\``
           ].join("\n"))
           .setColor(0x2f3136)
-          .setFooter({ text: "Mystral Academy • Backup System" })
+          .setFooter({ text: "Mystral • Backup System" })
           .setTimestamp();
 
         const file = new AttachmentBuilder(result.path, { name: fileName });
@@ -9022,8 +11341,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           await safeDefer(interaction, true);
 
-          const embed = await buildSupportEmbed();
-          const msg = await destChannel.send({ embeds: [embed] });
+          const payload = await buildSupportPayload(interaction.guild);
+          const msg = await destChannel.send(payload);
 
           await setMetaText("support_live_channel_id", destChannel.id);
           await setMetaText("support_live_message_id", msg.id);
@@ -9067,8 +11386,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           ];
           const monthLabel = monthsIndo[month - 1] || `Bulan ${month}`;
 
-          const embed = await buildMonthlyRecapEmbed(month, year);
-          const msg = await destChannel.send({ embeds: [embed] });
+          const payload = await buildMonthlyRecapPayload(interaction.guild, month, year);
+          const msg = await destChannel.send(payload);
 
           if (month === currentMonth && year === currentYear) {
             await setMetaText("recap_live_channel_id", destChannel.id);
@@ -9218,7 +11537,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           // --- LOGIKA KIRIM DM ---
           try {
             await targetUser.send({
-              content: `⚠️ **Peringatan Resmi dari Mystral Academy**`,
+              content: `⚠️ **Peringatan Resmi dari Mystral**`,
               embeds: [
                 new EmbedBuilder()
                   .setTitle("SURAT PERINGATAN (DM)")
@@ -9399,11 +11718,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (name === "help") {
         const ui = buildHelpUI("home", interaction.user.id);
-        return safeReply(interaction, {
-          embeds: ui.embeds,
-          components: ui.components,
-          allowedMentions: { parse: [] },
-        });
+        return safeReply(interaction, { ...ui, allowedMentions: { parse: [] } });
       }
 
       // translate (slash)
@@ -9499,7 +11814,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         try {
           new URL(longUrl);
         } catch {
-          return interaction.reply({ content: "❌ Silakan masukkan URL yang valid (harus diawali http:// atau https://).", ephemeral: true });
+          return interaction.reply({ content: "❌ Silakan masukkan URL yang valid (harus diawali http:// atau https://).", flags: MessageFlags.Ephemeral });
         }
 
         await interaction.deferReply().catch(() => { });
@@ -9615,7 +11930,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setTimestamp();
 
         // lore footer default
-        embed.setFooter({ text: footerRaw?.trim() || "Mystral Academy • Arcane Notice" });
+        embed.setFooter({ text: footerRaw?.trim() || "Mystral • Arcane Notice" });
 
         if (thumb && isValidUrl(thumb)) embed.setThumbnail(thumb);
         if (img && isValidUrl(img)) embed.setImage(img);
@@ -9640,43 +11955,109 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (name === "sendembedv2") {
         if (!isBotOwner(interaction.user.id)) {
-          return safeReply(interaction, { content: "❌ khusus pembuat bot.", flags: MessageFlags.Ephemeral });
+          return safeReply(interaction, {
+            content: "❌ Command ini khusus pembuat bot.",
+            flags: MessageFlags.Ephemeral,
+          });
         }
 
         await safeDefer(interaction, true);
 
-        const title = safeText(interaction.options.getString("title"), 200) || "Panel";
-        const description = String(interaction.options.getString("description") || "").trim().slice(0, 3800);
-        const channel = interaction.options.getChannel("channel") || interaction.channel;
-        const colorRaw = interaction.options.getString("color");
-        const footerRaw = String(interaction.options.getString("footer") || "").trim().slice(0, 500);
-        const mentionUser = interaction.options.getUser("mention_user");
-        const mentionRole = interaction.options.getRole("mention_role");
+        const title =
+          safeText(interaction.options.getString("title"), 200) ||
+          "Panel";
 
-        if (!channel?.isTextBased?.()) {
-          return safeReply(interaction, { content: "⚠️ channel tujuan harus text channel.", flags: MessageFlags.Ephemeral });
+        const description = String(
+          interaction.options.getString("description") || ""
+        )
+          .trim()
+          .slice(0, 3800);
+
+        const channel =
+          interaction.options.getChannel("channel") ||
+          interaction.channel;
+
+        const colorRaw = interaction.options.getString("color");
+
+        const footerRaw = String(
+          interaction.options.getString("footer") || ""
+        )
+          .trim()
+          .slice(0, 500);
+
+        const mentionUser =
+          interaction.options.getUser("mention_user");
+
+        const mentionRole =
+          interaction.options.getRole("mention_role");
+
+        // Validasi channel
+        if (!channel?.isTextBased?.() || !channel?.send) {
+          return interaction.editReply({
+            content: "⚠️ Channel tujuan harus berupa text channel.",
+          });
         }
 
-        const mentionParts = [];
-        if (mentionRole) mentionParts.push(`<@&${mentionRole.id}>`);
-        if (mentionUser) mentionParts.push(`<@${mentionUser.id}>`);
+        // Validasi permission bot
+        if (interaction.guild) {
+          const botMember = interaction.guild.members.me;
+          const permissions = channel.permissionsFor(botMember);
 
+          if (
+            !permissions?.has([
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+            ])
+          ) {
+            return interaction.editReply({
+              content:
+                "❌ Bot tidak memiliki izin untuk melihat atau mengirim pesan di channel tersebut.",
+            });
+          }
+        }
+
+        // Daftar mention
+        const mentionParts = [];
+
+        if (mentionRole) {
+          mentionParts.push(`<@&${mentionRole.id}>`);
+        }
+
+        if (mentionUser) {
+          mentionParts.push(`<@${mentionUser.id}>`);
+        }
+
+        // Membuat Components V2
         const panel = new ContainerBuilder();
 
         panel.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`# ${title}`),
-          new TextDisplayBuilder().setContent(description || " ")
+          new TextDisplayBuilder().setContent(`# ${title}`)
         );
 
-        if (colorRaw) {
-          panel.setAccentColor(parseHexColor(colorRaw, EMBED_COLOR));
+        // Jangan menambahkan TextDisplay kosong
+        if (description) {
+          panel.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(description)
+          );
         }
 
-        panel
-          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-          .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(footerRaw?.trim() || "Mystral Academy • Arcane Notice")
+        // Accent color
+        if (colorRaw) {
+          panel.setAccentColor(
+            parseHexColor(colorRaw, EMBED_COLOR)
           );
+        }
+
+        // Separator dan footer
+        panel.addSeparatorComponents(
+          new SeparatorBuilder().setDivider(true)
+        );
+
+        panel.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            footerRaw || "Mystral • Official Notice"
+          )
+        );
 
         const payload = {
           components: [panel],
@@ -9684,7 +12065,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         };
 
         try {
-          if (mentionParts.length) {
+          // Mention dikirim terpisah karena Components V2
+          // tidak dapat digabung dengan content biasa.
+          if (mentionParts.length > 0) {
             await channel.send({
               content: mentionParts.join(" "),
               allowedMentions: {
@@ -9694,18 +12077,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
               },
             });
           }
+
           await channel.send(payload);
-        } catch (e) {
-          console.error("[sendembedv2] failed:", e?.rawError || e?.message || e);
-          return safeReply(interaction, {
-            content: `❌ gagal kirim panel v2: ${safeText(e?.rawError?.message || e?.message || "unknown error", 180)}`,
-            flags: MessageFlags.Ephemeral,
+
+          return interaction.editReply({
+            content: `✅ Panel V2 berhasil dikirim ke ${channel}.`,
+          });
+        } catch (error) {
+          console.error(
+            "[sendembedv2] failed:",
+            error?.rawError || error?.stack || error?.message || error
+          );
+
+          const errorMessage = safeText(
+            error?.rawError?.message ||
+            error?.message ||
+            "Unknown error",
+            180
+          );
+
+          return interaction.editReply({
+            content: `❌ Gagal mengirim panel V2: ${errorMessage}`,
           });
         }
-
-        return safeReply(interaction, { content: "✅ panel v2 terkirim.", flags: MessageFlags.Ephemeral });
       }
-
 
       //ticketpanel
       if (name === "ticketpanel") {
@@ -9720,13 +12115,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return safeReply(interaction, { content: "✅ panel ticket terkirim.", flags: MessageFlags.Ephemeral });
       }
 
+      if (name === "servers") {
+        if (!isBotOwner(interaction.user.id)) {
+          return safeReply(interaction, { content: "❌ Khusus Pembuat Bot.", flags: MessageFlags.Ephemeral });
+        }
+        const guilds = client.guilds.cache.map(g => `• **${g.name}** (\`${g.id}\`) — ${g.memberCount.toLocaleString("id-ID")} users`).join("\n");
+        const totalUsers = client.guilds.cache.reduce((acc, g) => acc + g.memberCount, 0);
+        return safeReply(interaction, {
+          content: `📊 **Bot Servers (${client.guilds.cache.size}):**\n${guilds}\n\n**Total Users:** ${totalUsers.toLocaleString("id-ID")}`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
       if (name === "halo") {
-        const serverName = interaction.guild?.name || "realm ini";
+        const serverName = interaction.guild?.name || "Mystral District";
+
         const replies = [
-          `✨ salam, **${interaction.user.username}**.\nsebuah jiwa baru menyapa di **${serverName}**.`,
-          `🌙 gerbang berpendar pelan saat **${interaction.user.username}** berbicara.\nselamat datang di **${serverName}**.`,
-          `🔮 suaramu menggema di dalam **${serverName}**, **${interaction.user.username}**.\nsemoga langkahmu di sini menyenangkan.`,
-          `🕯️ salam hangat, **${interaction.user.username}**.\n**${serverName}** menyambut kehadiranmu.`,
+          `👋 Halo, **${interaction.user.username}**!\nSelamat datang di **${serverName}**. Semoga harimu menyenangkan!`,
+          `🌙 Hai, **${interaction.user.username}**.\nSenang melihatmu hadir di **${serverName}**. Ada yang bisa kami bantu?`,
+          `✨ Halo, **${interaction.user.username}**!\nTerima kasih sudah mampir ke **${serverName}**. Semoga betah di sini.`,
+          `<a:SpinningPinkCrystalHeart:1444893614428786820> Selamat datang, **${interaction.user.username}**.\nNikmati waktu bersama komunitas **${serverName}**!`,
+          `🪄 Halo, **${interaction.user.username}**.\nSemoga harimu menyenangkan dan pengalamanmu di **${serverName}** semakin seru.`,
+          `🌌 Hai, **${interaction.user.username}**!\nTerima kasih telah menjadi bagian dari **${serverName}**.`,
+          `☕ Halo, **${interaction.user.username}**.\nIstirahat sejenak, ngobrol santai, dan nikmati suasana **${serverName}**.`,
+          `🚀 Halo, **${interaction.user.username}**!\nSemoga hari ini penuh ide, teman baru, dan pengalaman seru di **${serverName}**.`
         ];
         return safeReply(interaction, { content: replies[Math.floor(Math.random() * replies.length)] });
       }
@@ -9742,7 +12154,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const embed = new EmbedBuilder()
           .setTitle("🤖 About Bot")
           .setColor(EMBED_COLOR)
-          .setDescription("Aku penjaga gerbang realm yang menyambut jiwa-jiwa baru ✨")
+          .setDescription("Asisten resmi **MYSTRAL District** yang siap membantu mengelola komunitas, memberikan informasi, serta menjaga pengalaman server tetap nyaman dan terorganisir.")
           .addFields(
             { name: "🏷️ Name", value: `${client.user.tag}`, inline: true },
             { name: "📡 Ping", value: `${client.ws.ping}ms`, inline: true },
@@ -9751,9 +12163,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             { name: "👨‍💻 Developer", value: `<@${776022128092774410}>`, inline: true }
           )
           .setThumbnail(client.user.displayAvatarURL({ extension: "png", size: 256 }))
-          .setFooter({ text: `ID: ${client.user.id}` })
+          .setFooter({ text: "Developed with ❤️ for MYSTRAL District", })
           .setTimestamp();
-
         return safeReply(interaction, { embeds: [embed] });
       }
 
@@ -10280,7 +12691,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const banner = g.bannerURL?.({ extension: "png", size: 1024 }) || null;
 
         const embed = new EmbedBuilder()
-          .setTitle("🏛️ Mystral Academy — Realm Dossier")
+          .setTitle("🏛️ Mystral — Realm Dossier")
           .setColor(EMBED_COLOR)
           .setThumbnail(icon)
           .setDescription(
@@ -10418,7 +12829,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         return safeReply(interaction, {
-          content: `🕯️ <@${interaction.user.id}> kini berstatus **AFK** — ${safeText(reason, 80)}`,
+          content: `💤 <@${interaction.user.id}> **AFK** — ${safeText(reason, 100)}`,
           allowedMentions: { repliedUser: false, parse: [] },
         });
       }
@@ -10503,6 +12914,198 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return safeReply(interaction, { content: "✅ panel menfess terkirim ke channel menfess.", flags: MessageFlags.Ephemeral });
       }
 
+      if (name === "sticky") {
+        if (!interaction.guild) return;
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+          return safeReply(interaction, { content: "❌ You need `Manage Messages` permission to use this command.", flags: MessageFlags.Ephemeral });
+        }
+
+        const sub = interaction.options.getSubcommand();
+        if (sub === "set") {
+          const content = interaction.options.getString("content", true).trim();
+
+          await safeRun(
+            "INSERT INTO sticky_messages (channel_id, content, last_message_id) VALUES (?, ?, NULL) ON CONFLICT(channel_id) DO UPDATE SET content=excluded.content",
+            [interaction.channelId, content]
+          );
+
+          // Delete old message if any
+          const cache = stickyCache.get(interaction.channelId);
+          if (cache?.lastMessageId) {
+            const oldMsg = await interaction.channel.messages.fetch(cache.lastMessageId).catch(() => null);
+            if (oldMsg) await oldMsg.delete().catch(() => null);
+          }
+
+          // Send first sticky message
+          const sent = await interaction.channel.send({ content }).catch(() => null);
+          const lastMessageId = sent ? sent.id : null;
+          if (sent) {
+            await safeRun("UPDATE sticky_messages SET last_message_id=? WHERE channel_id=?", [lastMessageId, interaction.channelId]);
+          }
+
+          stickyCache.set(interaction.channelId, { content, lastMessageId });
+
+          const embed = new EmbedBuilder().setTitle("✅ Sticky Message Set").setColor(0x2ecc71).setDescription(`Successfully set sticky message for <#${interaction.channelId}>.`).setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "edit") {
+          const content = interaction.options.getString("content", true).trim();
+          const exists = stickyCache.has(interaction.channelId);
+          if (!exists) {
+            const embed = new EmbedBuilder().setTitle("❌ Error").setColor(0xe74c3c).setDescription(`No sticky message is currently set in <#${interaction.channelId}>. Use \`/sticky set\` first.`).setTimestamp();
+            return safeReply(interaction, { embeds: [embed], flags: MessageFlags.Ephemeral });
+          }
+
+          await safeRun(
+            "UPDATE sticky_messages SET content=? WHERE channel_id=?",
+            [content, interaction.channelId]
+          );
+
+          // Delete old message if any
+          const cache = stickyCache.get(interaction.channelId);
+          if (cache?.lastMessageId) {
+            const oldMsg = await interaction.channel.messages.fetch(cache.lastMessageId).catch(() => null);
+            if (oldMsg) await oldMsg.delete().catch(() => null);
+          }
+
+          // Send updated sticky message
+          const sent = await interaction.channel.send({ content }).catch(() => null);
+          const lastMessageId = sent ? sent.id : null;
+          if (sent) {
+            await safeRun("UPDATE sticky_messages SET last_message_id=? WHERE channel_id=?", [lastMessageId, interaction.channelId]);
+          }
+
+          stickyCache.set(interaction.channelId, { content, lastMessageId });
+
+          const embed = new EmbedBuilder().setTitle("✅ Sticky Message Edited").setColor(0x2ecc71).setDescription(`Successfully updated sticky message for <#${interaction.channelId}>.`).setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "remove") {
+          const cache = stickyCache.get(interaction.channelId);
+          if (cache?.lastMessageId) {
+            const oldMsg = await interaction.channel.messages.fetch(cache.lastMessageId).catch(() => null);
+            if (oldMsg) await oldMsg.delete().catch(() => null);
+          }
+
+          await safeRun("DELETE FROM sticky_messages WHERE channel_id=?", [interaction.channelId]);
+          stickyCache.delete(interaction.channelId);
+
+          const embed = new EmbedBuilder().setTitle("✅ Sticky Message Removed").setColor(0x2ecc71).setDescription(`Successfully removed sticky message from <#${interaction.channelId}>.`).setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "list") {
+          const stickies = await safeAll("SELECT * FROM sticky_messages").catch(() => []);
+          const guildChannels = await interaction.guild.channels.fetch().catch(() => null);
+          if (!guildChannels) {
+            return safeReply(interaction, { content: "❌ Failed to fetch channels list.", flags: MessageFlags.Ephemeral });
+          }
+
+          const activeInGuild = [];
+          for (const row of stickies) {
+            if (guildChannels.has(row.channel_id)) {
+              const snippet = row.content.length > 50 ? row.content.slice(0, 50) + "..." : row.content;
+              activeInGuild.push(`• <#${row.channel_id}>: \`${snippet}\``);
+            }
+          }
+
+          const embed = new EmbedBuilder()
+            .setTitle("📌 Active Sticky Messages")
+            .setColor(EMBED_COLOR)
+            .setDescription(activeInGuild.length > 0 ? activeInGuild.join("\n") : "No active sticky messages in this server.")
+            .setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+      }
+
+      if (name === "media") {
+        if (!interaction.guild) return;
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+          return safeReply(interaction, { content: "❌ You need `Manage Messages` permission to use this command.", flags: MessageFlags.Ephemeral });
+        }
+
+        const sub = interaction.options.getSubcommand();
+        const settings = await getOrInitMediaSettings(interaction.guildId);
+
+        if (sub === "enable") {
+          settings.enabled = 1;
+          await saveMediaSettings(interaction.guildId, settings);
+          const embed = new EmbedBuilder().setTitle("✅ Media Embed Enabled").setColor(0x2ecc71).setDescription("Universal Media Embed features are now **enabled** globally in this server.").setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "disable") {
+          settings.enabled = 0;
+          await saveMediaSettings(interaction.guildId, settings);
+          const embed = new EmbedBuilder().setTitle("✅ Media Embed Disabled").setColor(0xe74c3c).setDescription("Universal Media Embed features are now **disabled** globally in this server.").setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "delete-original") {
+          const val = interaction.options.getBoolean("value", true);
+          settings.deleteOriginal = val ? 1 : 0;
+          await saveMediaSettings(interaction.guildId, settings);
+          const embed = new EmbedBuilder()
+            .setTitle("✅ Setting Updated")
+            .setColor(0x2ecc71)
+            .setDescription(`Auto-delete of original links is now set to **${val ? "enabled (true)" : "disabled (false)"}**.`)
+            .setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "quality") {
+          const pref = interaction.options.getString("preference", true);
+          settings.quality = pref;
+          await saveMediaSettings(interaction.guildId, settings);
+          const embed = new EmbedBuilder()
+            .setTitle("✅ Quality Set")
+            .setColor(0x2ecc71)
+            .setDescription(`Video quality preference set to **${pref}**.`)
+            .setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "platform") {
+          const plat = interaction.options.getString("name", true).toLowerCase();
+          const platEnabled = interaction.options.getBoolean("enabled", true);
+          if (!settings.platforms) settings.platforms = {};
+          settings.platforms[plat] = platEnabled;
+          await saveMediaSettings(interaction.guildId, settings);
+          const embed = new EmbedBuilder()
+            .setTitle("✅ Platform Updated")
+            .setColor(0x2ecc71)
+            .setDescription(`Platform **${plat.toUpperCase()}** is now **${platEnabled ? "enabled" : "disabled"}**.`)
+            .setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+
+        if (sub === "status") {
+          const platList = [
+            "tiktok", "instagram", "twitter", "reddit", "threads",
+            "youtube", "facebook", "twitch", "kick", "bilibili",
+            "pinterest", "bluesky", "imgur", "streamable", "vimeo"
+          ];
+          const statuses = platList.map(p => {
+            const isPlatEnabled = settings.platforms && settings.platforms[p] !== undefined ? settings.platforms[p] : true;
+            return `• **${p.toUpperCase()}**: ${isPlatEnabled ? "🟢 Enabled" : "🔴 Disabled"}`;
+          }).join("\n");
+
+          const embed = new EmbedBuilder()
+            .setTitle("⚙️ Universal Media Embed Settings")
+            .setColor(EMBED_COLOR)
+            .addFields(
+              { name: "Global Status", value: settings.enabled ? "🟢 Enabled" : "🔴 Disabled", inline: true },
+              { name: "Auto-Delete Original", value: settings.deleteOriginal ? "🟢 True" : "🔴/False", inline: true },
+              { name: "Quality Preference", value: `\`${settings.quality}\``, inline: true },
+              { name: "Supported Platforms Status", value: statuses }
+            )
+            .setTimestamp();
+          return safeReply(interaction, { embeds: [embed] });
+        }
+      }
+
       if (name === "menfess") {
         if (!interaction.guild) return;
 
@@ -10532,6 +13135,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const msg = interaction.options.getString("pesan").trim().slice(0, 900);
         const to = (interaction.options.getString("untuk") || "").trim().slice(0, 60);
         const attachment = interaction.options.getAttachment("lampiran");
+        const rawWarna = interaction.options.getString("warna");
 
         if (attachment) {
           if (attachment.size > 50 * 1024 * 1024) {
@@ -10542,6 +13146,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
+        let embedColor = EMBED_COLOR;
+        if (rawWarna) {
+          const cleanWarna = rawWarna.trim().replace("#", "");
+          if (/^[0-9a-fA-F]{6}$/.test(cleanWarna)) {
+            embedColor = parseInt(cleanWarna, 16);
+          }
+        }
+
         const anonLabel = await getAnonLabel(interaction.user.id);
         const id = await nextMenfessId();
 
@@ -10549,13 +13161,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await insertMenfessPost({ id, messageId: null, channelId: ch.id }).catch(() => null);
 
         const embed = new EmbedBuilder()
-          .setTitle(`🕯️ MENFESS #${id}`)
-          .setColor(EMBED_COLOR)
+          .setTitle(`<a:w_mail:1523235712168890390> MENFESS #${id}`)
+          .setColor(embedColor)
           .setDescription(
             [
               to ? `**Untuk:** ${to}` : null,
               msg,
-              `Menfess • <t:${Math.floor(Date.now() / 1000)}:f>`,
             ].filter(Boolean).join("\n\n")
           );
 
@@ -10587,6 +13198,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const sent = await ch.send(sendOptions).catch(() => null);
         if (sent?.id) {
           await updateMenfessPostLink(id, { messageId: sent.id, channelId: ch.id }).catch(() => null);
+          await handleMenfessButtonCleanup(interaction.client, sent);
         }
 
         await sendMenfessLog(interaction.guild, {
@@ -10715,7 +13327,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!idData) {
           const idCh = requireEnv("IDCARD_CHANNEL_ID");
           const mention = idCh ? `<#${idCh}>` : "channel ID Card";
-          return safeReply(interaction, { content: `⚠️ ${targetUser.id === interaction.user.id ? "Kamu" : `<@${targetUser.id}>`} belum punya **Mystral Academy ID Card**.\nSilahkan buat dulu di ${mention} dengan command **/idcard**.`, allowedMentions: { parse: [] } });
+          return safeReply(interaction, { content: `⚠️ ${targetUser.id === interaction.user.id ? "Kamu" : `<@${targetUser.id}>`} belum punya **Mystral ID Card**.\nSilahkan buat dulu di ${mention} dengan command **/idcard**.`, allowedMentions: { parse: [] } });
         }
 
         await safeDefer(interaction, false);
@@ -10725,14 +13337,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           name: idData.name || targetUser.username,
           gender: idData.gender || "—",
           hovId: idData.number || "—",
-          avatarUrl: targetUser.displayAvatarURL({ extension: "png", size: 256 }),
+          avatarUrl: (targetMember ?? targetUser).displayAvatarURL({ extension: "png", size: 256 }),
         });
 
         const filename = `house_${targetUser.id}.png`;
         const file = new AttachmentBuilder(png, { name: filename });
 
         const embed = new EmbedBuilder()
-          .setTitle("🪪 Mystral Academy Card")
+          .setTitle("🪪 Mystral Card")
           .setColor(EMBED_COLOR)
           .setDescription(
             [
@@ -10741,7 +13353,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             ].join("\n")
           )
           .setImage(`attachment://${filename}`)
-          .setFooter({ text: "Mystral Academy • Student Registry" })
+          .setFooter({ text: "Mystral • Student Registry" })
           .setTimestamp();
 
         return safeReply(interaction, { embeds: [embed], files: [file], allowedMentions: { parse: [] } });
@@ -10938,7 +13550,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.isButton() && interaction.customId === "ticket:create") {
         const has = await userHasOpenTicket(interaction.guild.id, interaction.user.id);
         if (has) {
-          return interaction.reply({ content: "⚠️ Kamu masih punya ticket.", ephemeral: true });
+          return interaction.reply({ content: "⚠️ Kamu masih punya ticket.", flags: MessageFlags.Ephemeral });
         }
 
         const modal = new ModalBuilder()
@@ -10958,8 +13570,77 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.showModal(modal);
       }
 
+      // ================== QUOTES SYSTEM ==================
+      if (interaction.isButton() && interaction.customId === "add_quote") {
+        if (interaction.channelId !== QUOTES_CHANNEL_ID) {
+          return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", flags: MessageFlags.Ephemeral });
+        }
+
+        const modal = new ModalBuilder().setCustomId("add_quote_modal").setTitle("Add a Quote");
+
+        const quoteInput = new TextInputBuilder()
+          .setCustomId("quote_text")
+          .setLabel("Your quote")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setMaxLength(240);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(quoteInput));
+        return interaction.showModal(modal);
+      }
 
     } // close pending block
+
+    if (interaction.isModalSubmit() && interaction.customId === "add_quote_modal") {
+      if (interaction.channelId !== QUOTES_CHANNEL_ID) {
+        return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", ephemeral: true });
+      }
+
+      const quoteText = (interaction.fields.getTextInputValue("quote_text") || "").trim();
+      if (!quoteText) return interaction.reply({ content: "Quote kosong.", ephemeral: true });
+
+      try {
+        await interaction.deferReply({ ephemeral: true });
+
+        // Fetch full GuildMember to get the server-specific avatar
+        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+        const avatarURL = member?.displayAvatarURL?.({ extension: "png", size: 512 }) || interaction.user.displayAvatarURL({ extension: "png", size: 512 });
+
+        const buffer = await renderQuoteImage({
+          avatarURL,
+          quote: quoteText.length > 240 ? quoteText.slice(0, 240) + "…" : quoteText,
+          authorName: member?.displayName || interaction.user.username,
+          authorTag: `@${interaction.user.username}`,
+          watermark: WATERMARK_TEXT,
+          theme: QUOTES_THEME,
+        });
+
+        const fileName = `quote-${interaction.id}.png`;
+        const attachment = new AttachmentBuilder(buffer, { name: fileName });
+
+        const embed = new EmbedBuilder()
+          .setColor(0x111111)
+          .setTitle("**📩 𝐐𝐮𝐨𝐭𝐞𝐬**")
+          .setDescription(`Made by ${interaction.user}`)
+          .setImage(`attachment://${fileName}`)
+          .setFooter({ text: `Generated • ${formatQuoteTime(Date.now())}` });
+
+        await interaction.channel.send({
+          embeds: [embed],
+          files: [attachment],
+          components: [buildQuoteButtonRow()]
+        });
+
+        await interaction.deleteReply().catch(() => { });
+      } catch (err) {
+        console.error("[QUOTES] modal error:", err);
+        if (interaction.deferred || interaction.replied) {
+          return interaction.editReply(`Error bikin quote: ${err.message}`).catch(() => null);
+        } else {
+          return interaction.reply({ content: `Error bikin quote: ${err.message}`, ephemeral: true }).catch(() => null);
+        }
+      }
+    }
 
   } catch (err) {
     console.error("[INTERACTION ERROR]", err);
@@ -10981,10 +13662,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 // ================== QUOTES SYSTEM ================== //
 // NOTE: semua perubahan di bawah ini khusus untuk sistem Quotes (sesuai request).
-const QUOTES_CHANNEL_ID = process.env.QUOTES_CHANNEL_ID || "";
-const WATERMARK_TEXT = process.env.WATERMARK_TEXT || "Prophetia";
-const QUOTES_THEME = (process.env.THEME || "dark").toLowerCase(); // "dark" / "light"
-const QUOTES_TIMEZONE = process.env.TIMEZONE || "Asia/Jakarta";
 
 function formatQuoteTime(d) {
   const dt = new Date(d);
@@ -11133,7 +13810,7 @@ async function renderQuoteImage({ avatarURL, quote, authorName, authorTag, water
   ctx.textBaseline = "bottom";
   ctx.font = `16px ${uiFontFamily()}`;
   ctx.fillStyle = isDark ? "rgba(255,255,255,0.25)" : "rgba(20,20,20,0.25)";
-  ctx.fillText(`Mystral Academy • ${watermark}`, W - pad - 18, H - pad - 16);
+  ctx.fillText(`Mystral • ${watermark}`, W - pad - 18, H - pad - 16);
 
   addNoise(ctx, W, H, isDark ? 0.06 : 0.04);
 
@@ -11234,7 +13911,7 @@ if (QUOTES_CHANNEL_ID) {
       if (!raw) return;
 
       const text = raw.length > 240 ? raw.slice(0, 240) + "…" : raw;
-      const avatarURL = message.author.displayAvatarURL({ extension: "png", size: 512 });
+      const avatarURL = message.member?.displayAvatarURL?.({ extension: "png", size: 512 }) || message.author.displayAvatarURL({ extension: "png", size: 512 });
 
       const buffer = await renderQuoteImage({
         avatarURL,
@@ -11266,76 +13943,6 @@ if (QUOTES_CHANNEL_ID) {
       console.error("[QUOTES] message error:", err);
     }
   });
-
-  // ================== INTERACTIONS ================== //
-  client.on(Events.InteractionCreate, async (interaction) => {
-    // Button -> Modal
-    if (interaction.isButton() && interaction.customId === "add_quote") {
-      if (interaction.channelId !== QUOTES_CHANNEL_ID) {
-        return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", ephemeral: true });
-      }
-
-      const modal = new ModalBuilder().setCustomId("add_quote_modal").setTitle("Add a Quote");
-
-      const quoteInput = new TextInputBuilder()
-        .setCustomId("quote_text")
-        .setLabel("Your quote")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setMaxLength(240);
-
-      modal.addComponents(new ActionRowBuilder().addComponents(quoteInput));
-      await interaction.showModal(modal);
-      return;
-    }
-
-    // Modal submit -> generate
-    if (interaction.isModalSubmit() && interaction.customId === "add_quote_modal") {
-      if (interaction.channelId !== QUOTES_CHANNEL_ID) {
-        return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", ephemeral: true });
-      }
-
-      const quoteText = (interaction.fields.getTextInputValue("quote_text") || "").trim();
-      if (!quoteText) return interaction.reply({ content: "Quote kosong.", ephemeral: true });
-
-      await interaction.deferReply({ ephemeral: true });
-
-      try {
-        const avatarURL = interaction.user.displayAvatarURL({ extension: "png", size: 512 });
-
-        const buffer = await renderQuoteImage({
-          avatarURL,
-          quote: quoteText.length > 240 ? quoteText.slice(0, 240) + "…" : quoteText,
-          authorName: interaction.member?.displayName || interaction.user.username,
-          authorTag: `@${interaction.user.username}`,
-          watermark: WATERMARK_TEXT,
-          theme: QUOTES_THEME,
-        });
-
-        const fileName = `quote-${interaction.id}.png`;
-        const attachment = new AttachmentBuilder(buffer, { name: fileName });
-
-        const embed = new EmbedBuilder()
-          .setColor(0x111111)
-          .setTitle("**📩 𝐐𝐮𝐨𝐭𝐞𝐬**")
-          .setDescription(`Made by ${interaction.user}`)
-          .setImage(`attachment://${fileName}`)
-          .setFooter({ text: `Generated • ${formatQuoteTime(Date.now())}` });
-
-        await interaction.channel.send({
-          embeds: [embed],
-          files: [attachment],
-          components: [buildQuoteButtonRow()],
-        });
-
-        await interaction.editReply("Done.");
-      } catch (err) {
-        console.error("[QUOTES] modal error:", err);
-        await interaction.editReply("Error bikin quote.");
-      }
-      return;
-    }
-  });
 }
 
 // ===================== TICKET: CLEANUP ON MANUAL DELETE =====================
@@ -11354,9 +13961,6 @@ client.on("channelDelete", async (channel) => {
     console.error("[ticket][channelDelete cleanup]", e);
   }
 });
-
-
-
 
 // ===================== LOG TICKET HELPERS (ADD-ONLY) =====================
 function stripHtmlToText(input) {
@@ -11438,7 +14042,7 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
     const memoryUsage = `${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1)} MB`;
 
     console.log("┌────────────────────────────────────────────────────────┐");
-    console.log("│             🔮 MYSTRAL ACADEMY BOOTLOADER 🔮           │");
+    console.log("│             🔮 Mystral BOOTLOADER 🔮           │");
     console.log("└────────────────────────────────────────────────────────┘");
     console.log(` ├── [SYSTEM] Node: ${nodeVer} | Platform: ${platform} | Heap: ${memoryUsage}`);
 
@@ -11507,4 +14111,3 @@ process.on("unhandledRejection", async (err) => {
   console.error("[REJECT]", err);
   await backupDatabase("reject");
 });
-

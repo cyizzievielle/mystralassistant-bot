@@ -41,6 +41,12 @@ const modReasonOpt = (o) =>
 const { streakCommandBuilder } = require("./streak");
 
 const commands = [
+  new SlashCommandBuilder().setName("serverstats").setDescription("Lihat statistik server"),
+  new SlashCommandBuilder().setName("voicecheck").setDescription("Lihat status voice channel aktif"),
+  new SlashCommandBuilder()
+    .setName("c")
+    .setDescription("Kirim perintah teks ke asisten")
+    .addStringOption(o => o.setName("query").setDescription("Perintah (contoh: add owner to cisa)").setRequired(true)),
   streakCommandBuilder,
   // ===== BASIC =====
   new SlashCommandBuilder().setName("ping").setDescription("Cek ping bot"),
@@ -240,43 +246,43 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addIntegerOption((o) => o.setName("id").setDescription("ID giveaway").setRequired(true)),
 
-    new SlashCommandBuilder()
-  .setName("ticket_setup")
-  .setDescription("Setup panel ticket (1 button utama, opsional tambahan)")
-  .addChannelOption(o =>
-    o.setName("panel_channel")
-      .setDescription("Channel panel ticket")
-      .setRequired(true)
-  )
-  .addChannelOption(o =>
-    o.setName("category")
-      .setDescription("Category ticket")
-      .setRequired(false)
-  )
-  .addRoleOption(o =>
-    o.setName("staff_role")
-      .setDescription("Role staff ticket")
-      .setRequired(false)
-  )
-  .addStringOption(o =>
-    o.setName("title")
-      .setDescription("Judul embed")
-      .setRequired(false)
-  )
-  .addStringOption(o =>
-    o.setName("description")
-      .setDescription("Deskripsi embed")
-      .setRequired(false)
-  )
-  .addStringOption(o =>
-    o.setName("color")
-      .setDescription("Warna embed hex (#a78bfa)")
-      .setRequired(false)
-  )
-  .addStringOption(o =>
-    o.setName("main_button")
-      .setDescription("Label tombol utama")
-      .setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("ticket_setup")
+    .setDescription("Setup panel ticket (1 button utama, opsional tambahan)")
+    .addChannelOption(o =>
+      o.setName("panel_channel")
+        .setDescription("Channel panel ticket")
+        .setRequired(true)
+    )
+    .addChannelOption(o =>
+      o.setName("category")
+        .setDescription("Category ticket")
+        .setRequired(false)
+    )
+    .addRoleOption(o =>
+      o.setName("staff_role")
+        .setDescription("Role staff ticket")
+        .setRequired(false)
+    )
+    .addStringOption(o =>
+      o.setName("title")
+        .setDescription("Judul embed")
+        .setRequired(false)
+    )
+    .addStringOption(o =>
+      o.setName("description")
+        .setDescription("Deskripsi embed")
+        .setRequired(false)
+    )
+    .addStringOption(o =>
+      o.setName("color")
+        .setDescription("Warna embed hex (#a78bfa)")
+        .setRequired(false)
+    )
+    .addStringOption(o =>
+      o.setName("main_button")
+        .setDescription("Label tombol utama")
+        .setRequired(false)),
 
   new SlashCommandBuilder()
     .setName("afk")
@@ -297,7 +303,102 @@ const commands = [
     .setDescription("Kirim menfess anonim ke channel menfess")
     .addStringOption((o) => o.setName("pesan").setDescription("Isi pesan menfess").setRequired(true))
     .addStringOption((o) => o.setName("untuk").setDescription("Untuk siapa menfess ini (opsional)").setRequired(false))
-    .addAttachmentOption((o) => o.setName("lampiran").setDescription("Lampirkan Gambar atau GIF (opsional, maks 50MB)").setRequired(false)),
+    .addAttachmentOption((o) => o.setName("lampiran").setDescription("Lampirkan Gambar atau GIF (opsional, maks 50MB)").setRequired(false))
+    .addStringOption((o) => o.setName("warna").setDescription("Warna hex embed, contoh: #ff0000 (opsional)").setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("sticky")
+    .setDescription("Sticky Message management commands")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .addSubcommand((sub) =>
+      sub
+        .setName("set")
+        .setDescription("Set a sticky message for this channel")
+        .addStringOption((o) => o.setName("content").setDescription("Content of the sticky message").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("edit")
+        .setDescription("Edit the sticky message for this channel")
+        .addStringOption((o) => o.setName("content").setDescription("New content of the sticky message").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("Remove sticky message from this channel")
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("list")
+        .setDescription("List all active sticky messages in the server")
+    ),
+  new SlashCommandBuilder()
+    .setName("media")
+    .setDescription("Universal Media Embed / Smart Preview settings")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .addSubcommand((sub) =>
+      sub
+        .setName("enable")
+        .setDescription("Enable the Universal Media Embed feature globally")
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("disable")
+        .setDescription("Disable the Universal Media Embed feature globally")
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("status")
+        .setDescription("Show the current Universal Media Embed settings status")
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("delete-original")
+        .setDescription("Toggle auto-deletion of original link messages")
+        .addBooleanOption((o) => o.setName("value").setDescription("True to delete, false to keep").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("platform")
+        .setDescription("Enable or disable a specific media platform")
+        .addStringOption((o) =>
+          o.setName("name")
+            .setDescription("Platform name")
+            .setRequired(true)
+            .addChoices(
+              { name: "TikTok", value: "tiktok" },
+              { name: "Instagram", value: "instagram" },
+              { name: "Twitter / X", value: "twitter" },
+              { name: "Reddit", value: "reddit" },
+              { name: "Threads", value: "threads" },
+              { name: "YouTube", value: "youtube" },
+              { name: "Facebook", value: "facebook" },
+              { name: "Twitch", value: "twitch" },
+              { name: "Kick", value: "kick" },
+              { name: "Bilibili", value: "bilibili" },
+              { name: "Pinterest", value: "pinterest" },
+              { name: "Bluesky", value: "bluesky" },
+              { name: "Imgur", value: "imgur" },
+              { name: "Streamable", value: "streamable" },
+              { name: "Vimeo", value: "vimeo" }
+            )
+        )
+        .addBooleanOption((o) => o.setName("enabled").setDescription("True to enable, false to disable").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("quality")
+        .setDescription("Set video quality preference")
+        .addStringOption((o) =>
+          o.setName("preference")
+            .setDescription("Quality preference")
+            .setRequired(true)
+            .addChoices(
+              { name: "Auto", value: "auto" },
+              { name: "720p", value: "720p" },
+              { name: "1080p", value: "1080p" }
+            )
+        )
+    ),
   new SlashCommandBuilder().setName("sortingpanel").setDescription("kirim panel sorting (owner only)"),
   new SlashCommandBuilder().setName("idcard").setDescription("buka panel ID Card (owner only)"),
   new SlashCommandBuilder().setName("ticketpanel").setDescription("kirim panel ticket (owner only)"),
@@ -343,50 +444,53 @@ const commands = [
   new SlashCommandBuilder().setName("remind_list").setDescription("Lihat reminder aktif kamu"),
 
   // ===== FAQ =====
-new SlashCommandBuilder()
-  .setName("faq_add")
-  .setDescription("Tambah FAQ (Admin/Staff)")
-  .addStringOption((o) => o.setName("title").setDescription("Judul").setRequired(true))
-  .addStringOption((o) => o.setName("content").setDescription("Isi / Jawaban").setRequired(true))
-  .addStringOption((o) => o.setName("tags").setDescription("Tags (pisah koma, opsional)").setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("faq_add")
+    .setDescription("Tambah FAQ (Admin/Staff)")
+    .addStringOption((o) => o.setName("title").setDescription("Judul").setRequired(true))
+    .addStringOption((o) => o.setName("content").setDescription("Isi / Jawaban").setRequired(true))
+    .addStringOption((o) => o.setName("tags").setDescription("Tags (pisah koma, opsional)").setRequired(false)),
 
-new SlashCommandBuilder()
-  .setName("faq_edit")
-  .setDescription("Edit FAQ (Admin/Staff)")
-  .addIntegerOption((o) => o.setName("id").setDescription("ID FAQ").setRequired(true))
-  .addStringOption((o) => o.setName("title").setDescription("Judul (opsional)").setRequired(false))
-  .addStringOption((o) => o.setName("content").setDescription("Isi (opsional)").setRequired(false))
-  .addStringOption((o) => o.setName("tags").setDescription("Tags (opsional)").setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("faq_edit")
+    .setDescription("Edit FAQ (Admin/Staff)")
+    .addIntegerOption((o) => o.setName("id").setDescription("ID FAQ").setRequired(true))
+    .addStringOption((o) => o.setName("title").setDescription("Judul (opsional)").setRequired(false))
+    .addStringOption((o) => o.setName("content").setDescription("Isi (opsional)").setRequired(false))
+    .addStringOption((o) => o.setName("tags").setDescription("Tags (opsional)").setRequired(false)),
 
-new SlashCommandBuilder()
-  .setName("faq_delete")
-  .setDescription("Hapus FAQ (Admin/Staff)")
-  .addIntegerOption((o) => o.setName("id").setDescription("ID FAQ").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("faq_delete")
+    .setDescription("Hapus FAQ (Admin/Staff)")
+    .addIntegerOption((o) => o.setName("id").setDescription("ID FAQ").setRequired(true)),
 
-new SlashCommandBuilder()
-  .setName("faq_view")
-  .setDescription("Baca FAQ")
-  .addIntegerOption((o) => o.setName("id").setDescription("ID FAQ").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("faq_view")
+    .setDescription("Baca FAQ")
+    .addIntegerOption((o) => o.setName("id").setDescription("ID FAQ").setRequired(true)),
 
-new SlashCommandBuilder()
-  .setName("faq_search")
-  .setDescription("Cari FAQ")
-  .addStringOption((o) => o.setName("query").setDescription("Kata kunci").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("faq_search")
+    .setDescription("Cari FAQ")
+    .addStringOption((o) => o.setName("query").setDescription("Kata kunci").setRequired(true)),
 
-new SlashCommandBuilder()
-  .setName("faq_list")
-  .setDescription("Lihat daftar FAQ terbaru (Admin/Staff)"),
+  new SlashCommandBuilder()
+    .setName("faq_list")
+    .setDescription("Lihat daftar FAQ terbaru (Admin/Staff)"),
 
-new SlashCommandBuilder()
-  .setName("faq_panel")
-  .setDescription("Kirim panel dropdown FAQ (Admin/Staff)")
-  .addChannelOption((o) =>
-    o
-      .setName("channel")
-      .setDescription("Channel tujuan (opsional)")
-      .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
-      .setRequired(false)
-  ),
+  new SlashCommandBuilder()
+    .setName("faq_panel")
+    .setDescription("Kirim panel dropdown FAQ (Admin/Staff)")
+    .addChannelOption((o) =>
+      o
+        .setName("channel")
+        .setDescription("Channel tujuan (opsional)")
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("servers")
+    .setDescription("Cek daftar server yang menggunakan bot & total user (Developer Only)"),
 
   // ===== DAILY TAROT =====
   new SlashCommandBuilder()
@@ -405,7 +509,8 @@ new SlashCommandBuilder()
         .setName("collection")
         .setDescription("Lihat kartu tarot yang telah dikumpulkan")
         .addUserOption((o) => o.setName("user").setDescription("Pilih user (opsional)").setRequired(false))
-    ),
+    )
+    .addSubcommand((sc) => sc.setName("recover").setDescription("Pulihkan streak harian tarot kamu yang terputus")),
 
   // ===== MODERATION =====
   // FIX: required options dulu, baru reason optional

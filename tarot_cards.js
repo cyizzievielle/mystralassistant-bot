@@ -1,7 +1,7 @@
 /**
  * tarot_cards.js
  * 
- * Mystral Academy Daily Tarot Deck (300 Cards)
+ * Mystral Daily Tarot Deck (300 Cards)
  * Standard Tarot Names & Mystical Wording
  */
 

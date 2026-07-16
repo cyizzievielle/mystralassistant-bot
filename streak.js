@@ -1,5 +1,5 @@
 // streak.js
-const { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, PermissionFlagsBits, ChannelType, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, PermissionFlagsBits, ChannelType, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, MessageFlags } = require("discord.js");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const crypto = require("crypto");
 const path = require("path");
@@ -261,6 +261,58 @@ async function getLeaderboard(guildId, type, limit = 10) {
     default:
       return [];
   }
+}
+
+function buildStreakInfoEmbed(settings) {
+  return new EmbedBuilder()
+    .setTitle("🔥 Panduan Mystral Flame Streak")
+    .setDescription([
+      "Sistem streak api kebersamaan otomatis tanpa pairing manual! Saling berkirim pesan di channel khusus setiap hari untuk menjaga api tetap menyala.",
+      "",
+      "ℹ️ **Daftar Perintah (Shorthand / Slash):**",
+      "- **Profile:** `csp` / `/streak profile` — Menampilkan profil & kartu streak aktif kamu.",
+      "- **List:** `csl` / `/streak list` — Menampilkan semua daftar hubungan streak kamu.",
+      "- **Recover:** `csrec` / `/streak recover` — Memulihkan streak yang padam dengan token.",
+      "- **Break:** `cstreak break` / `/streak break` — Memutuskan/membubarkan hubungan streak.",
+      "- **Leaderboard:** `cstreak leaderboard` / `/streak leaderboard` — Peringkat streak terpanjang.",
+      "- **History:** `cstreak history` / `/streak history` — Riwayat logs aktivitas streak kamu.",
+      "",
+      "⚠️ **Aturan Penting:**",
+      `- **Channel:** Kirim pesan di channel <#${settings.chat_channel || "belum di-set"}>.`,
+      "- **Interaksi:** Harus dua arah (saling membalas/tag/mention).",
+      "- **Syarat Awal:** Saling mengobrol **3 hari berturut-turut** untuk membentuk streak.",
+      "- **Karakter:** Minimal pesan **5 karakter** dengan cooldown validasi **60 detik**.",
+      "- **Limit:** Maksimal **25 pasangan aktif** per user.",
+      "- **Reset:** Evaluasi harian dilakukan otomatis pukul **00:00 WIB**."
+    ].join("\n"))
+    .setColor(0xff7700)
+    .setFooter({ text: "Mystral Assistant • Flame Streak System" });
+}
+
+function buildMilestonesEmbed() {
+  return new EmbedBuilder()
+    .setTitle("🔥 Tingkatan Milestone Flame Streak")
+    .setDescription([
+      "Berikut adalah tingkatan Flame Streak berdasarkan jumlah hari interaksi berturut-turut:",
+      "",
+      "• `3 Hari` — <:3haritiktokorangeflame:1523332105319485562> **Orange Flame**",
+      "• `7 Hari` — <:7haribrightorangeflame:1523332107533811744> **Bright Orange Flame**",
+      "• `30 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> **Golden Orange Flame**",
+      "• `100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> **Royal Flame**",
+      "• `200 Hari` — <:200haricrystalflamegrey:1523332112030371940> **Crystal Flame**",
+      "• `300 Hari` — <:300hariemeralflame:1523332114819579944> **Emerald Flame**",
+      "• `400 Hari` — <:400harirubyredflame:1523332117193293966> **Ruby Flame**",
+      "• `500 Hari` — <:500600_blueroyalfame:1523332118917152779> **Diamond Flame (Blue)**",
+      "• `600 Hari` — <:500600_blueroyalfame:1523332118917152779> **Celestial Flame**",
+      "• `700 Hari` — <:700haridiamondflame:1523332121333334016> **Diamond Flame (Cyan)**",
+      "• `800 Hari` — <:800900hariauroraflame:1523332124667805746> **Aurora Flame**",
+      "• `900 Hari` — <:800900hariauroraflame:1523332124667805746> **Cosmic Aurora Flame**",
+      "• `1000 Hari` — <:1000haridanseterusnyalegendaryeternalflame:1523332127176003805> **Legendary Eternal Flame**",
+      "",
+      "*Jaga keaktifan setiap hari agar apimu tidak padam!*"
+    ].join("\n"))
+    .setColor(0xff7700)
+    .setTimestamp();
 }
 
 // ===================== CANVAS HELPER =====================
@@ -965,7 +1017,6 @@ async function logToGuild(client, guildId, messageText) {
     const channel = await client.channels.fetch(settings.log_channel).catch(() => null);
     if (channel && channel.isTextBased()) {
       const embed = new EmbedBuilder()
-        .setTitle("📜 Mystral Streak Audit Log")
         .setDescription(messageText)
         .setColor(0x77d0d7)
         .setTimestamp();
@@ -1046,7 +1097,7 @@ async function handleMessageActivity(client, message) {
       isCompletingMessage = true;
     }
     pair = reloadedPair;
-    await logToGuild(client, guildId, `<@${userA}> melakukan interaksi hari ini untuk streak dengan <@${userB}>.`);
+    // await logToGuild(client, guildId, `<@${userA}> melakukan interaksi hari ini untuk streak dengan <@${userB}>.`);
   }
 
   if (isCompletingMessage) {
@@ -1153,72 +1204,127 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
     const emoji = getMilestoneEmoji(pair.current_streak);
     const streak = pair.current_streak;
 
-    // Helper: teks berjenjang berdasarkan level/nama flame streak (variatif & jelas)
+    // Helper: Teks berjenjang dengan gaya elegan, premium, dan estetik
     function getTieredText() {
+      // Fungsi kecil untuk memilih kata-kata secara acak
+      const getRandomBody = (bodies) => bodies[Math.floor(Math.random() * bodies.length)];
+
       if (streak >= 1000) {
         return {
           title: `${emoji} Legendary Eternal Flame!`,
-          body: `Selamat <@${pair.user_one}> & <@${pair.user_two}>! Kalian telah mencapai milestone luar biasa **${streak} hari** bersama **Legendary Eternal Flame**. Tetap jaga api abadi ini!`
+          body: getRandomBody([
+            `Pencapaian yang sungguh berkesan. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas dedikasi luar biasa mempertahankan api abadi ini hingga **${streak} hari**.`,
+            `Sebuah jejak waktu yang istimewa. <@${pair.user_one}> & <@${pair.user_two}> telah merangkai kisah **${streak} hari** bersama kilau agung Legendary Eternal Flame.`,
+            `Keabadian yang nyata. Apresiasi tertinggi untuk <@${pair.user_one}> & <@${pair.user_two}> yang telah menjaga nyala Legendary Eternal Flame menembus **${streak} hari**.`
+          ])
         };
       } else if (streak >= 900) {
         return {
           title: `${emoji} Cosmic Aurora Flame!`,
-          body: `Luar biasa! Streak <@${pair.user_one}> & <@${pair.user_two}> kini menyentuh **${streak} hari** di tingkat **Cosmic Aurora Flame**.`
+          body: getRandomBody([
+            `Sangat memesona. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas perjalanan indah **${streak} hari** di bawah naungan Cosmic Aurora Flame.`,
+            `Konsistensi yang mengagumkan. <@${pair.user_one}> & <@${pair.user_two}> berhasil membawa pesonanya hingga ke angka **${streak} hari** bersama Cosmic Aurora Flame.`,
+            `Pencapaian yang melampaui ekspektasi. Langkah <@${pair.user_one}> & <@${pair.user_two}> kini bersinar anggun di angka **${streak} hari** dengan Cosmic Aurora Flame.`
+          ])
         };
       } else if (streak >= 800) {
         return {
           title: `${emoji} Aurora Flame!`,
-          body: `Selamat kepada <@${pair.user_one}> & <@${pair.user_two}> atas pencapaian **${streak} hari** dengan **Aurora Flame**.`
+          body: getRandomBody([
+            `Harmoni yang indah. Selamat kepada <@${pair.user_one}> & <@${pair.user_two}> karena telah merawat kehangatan Aurora Flame hingga **${streak} hari**.`,
+            `Dedikasi yang patut dirayakan. <@${pair.user_one}> & <@${pair.user_two}> sukses mempertahankan pesona Aurora Flame selama **${streak} hari** penuh.`,
+            `Sebuah pencapaian yang elegan. Kebersamaan <@${pair.user_one}> & <@${pair.user_two}> kini telah mengukir **${streak} hari** bersama kilau Aurora Flame.`
+          ])
         };
       } else if (streak >= 700) {
         return {
           title: `${emoji} Diamond Flame!`,
-          body: `Keren! Streak <@${pair.user_one}> & <@${pair.user_two}> telah resmi mencapai **${streak} hari** bersama **Diamond Flame**.`
+          body: getRandomBody([
+            `Berkilau dan tak lekang oleh waktu. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas pencapaian berharga **${streak} hari** dengan Diamond Flame.`,
+            `Kualitas yang sesungguhnya. <@${pair.user_one}> & <@${pair.user_two}> berhasil merawat keindahan Diamond Flame hingga genap **${streak} hari**.`,
+            `Semakin bersinar terang. Perjalanan <@${pair.user_one}> & <@${pair.user_two}> kini bersanding dengan keanggunan Diamond Flame di usia **${streak} hari**.`
+          ])
         };
       } else if (streak >= 600) {
         return {
           title: `${emoji} Celestial Flame!`,
-          body: `Hebat! Pasangan <@${pair.user_one}> & <@${pair.user_two}> berhasil mempertahankan streak hingga **${streak} hari** dengan **Celestial Flame**.`
+          body: getRandomBody([
+            `Keindahan yang luar biasa. Selamat <@${pair.user_one}> & <@${pair.user_two}> telah merawat pesona surgawi Celestial Flame hingga **${streak} hari**.`,
+            `Melangkah semakin tinggi. <@${pair.user_one}> & <@${pair.user_two}> berhasil mempertahankan keanggunan Celestial Flame selama **${streak} hari**.`,
+            `Harmoni yang sempurna. Apresiasi untuk <@${pair.user_one}> & <@${pair.user_two}> yang senantiasa menjaga Celestial Flame tetap benderang di angka **${streak} hari**.`
+          ])
         };
       } else if (streak >= 500) {
         return {
           title: `${emoji} Diamond Flame!`,
-          body: `Selamat! Perjalanan streak <@${pair.user_one}> & <@${pair.user_two}> telah berhasil menembus **${streak} hari** bersama **Diamond Flame**.`
+          body: getRandomBody([
+            `Setengah ribu langkah yang berkesan. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas **${streak} hari** perjalanan anggun bersama Diamond Flame.`,
+            `Sebuah milestone emas. <@${pair.user_one}> & <@${pair.user_two}> sukses merayakan **${streak} hari** yang penuh kemilau dengan Diamond Flame.`,
+            `Pesona yang tak tertandingi. Selamat kepada <@${pair.user_one}> & <@${pair.user_two}> karena konsisten menjaga Diamond Flame hingga **${streak} hari**.`
+          ])
         };
       } else if (streak >= 400) {
         return {
           title: `${emoji} Ruby Flame!`,
-          body: `Selamat <@${pair.user_one}> & <@${pair.user_two}>! Streak kalian kini resmi berada di angka **${streak} hari** dengan **Ruby Flame**.`
+          body: getRandomBody([
+            `Merona dengan kehangatan. Selamat <@${pair.user_one}> & <@${pair.user_two}>, perjalanan kalian terasa semakin bermakna di angka **${streak} hari** dengan Ruby Flame.`,
+            `Elegan dan memikat. <@${pair.user_one}> & <@${pair.user_two}> berhasil mempertahankan keindahan Ruby Flame selama **${streak} hari**.`,
+            `Konsistensi yang manis. Kebersamaan <@${pair.user_one}> & <@${pair.user_two}> resmi menyentuh **${streak} hari** diiringi pesona Ruby Flame.`
+          ])
         };
       } else if (streak >= 300) {
         return {
           title: `${emoji} Emerald Flame!`,
-          body: `Luar biasa! Streak <@${pair.user_one}> & <@${pair.user_two}> sukses berlanjut hingga **${streak} hari** dengan **Emerald Flame**.`
+          body: getRandomBody([
+            `Ketenangan yang memikat. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas harmoni menjaga Emerald Flame hingga **${streak} hari**.`,
+            `Semakin dalam dan berkesan. <@${pair.user_one}> & <@${pair.user_two}> sukses merawat cantiknya Emerald Flame hingga genap **${streak} hari**.`,
+            `Prestasi yang elegan. Perjalanan <@${pair.user_one}> & <@${pair.user_two}> kini bersinar tenang di angka **${streak} hari** bersama Emerald Flame.`
+          ])
         };
       } else if (streak >= 200) {
         return {
           title: `${emoji} Crystal Flame!`,
-          body: `Selamat kepada <@${pair.user_one}> & <@${pair.user_two}> atas keberhasilan mencapai **${streak} hari** dengan **Crystal Flame**.`
+          body: getRandomBody([
+            `Bening dan penuh makna. Apresiasi untuk <@${pair.user_one}> & <@${pair.user_two}> atas keberhasilan mencapai **${streak} hari** bersama Crystal Flame.`,
+            `Keindahan yang murni. <@${pair.user_one}> & <@${pair.user_two}> sukses mempertahankan kilau jernih Crystal Flame hingga **${streak} hari**.`,
+            `Teruslah bersinar. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas perayaan anggun **${streak} hari** dengan pesona Crystal Flame.`
+          ])
         };
       } else if (streak >= 100) {
         return {
           title: `${emoji} Royal Flame!`,
-          body: `Hebat! Streak <@${pair.user_one}> & <@${pair.user_two}> kini genap berjalan **${streak} hari** di tingkat **Royal Flame**.`
+          body: getRandomBody([
+            `Memasuki babak baru yang megah. Selamat <@${pair.user_one}> & <@${pair.user_two}> telah mengukir **${streak} hari** bersama keanggunan Royal Flame.`,
+            `Pencapaian yang berkelas. <@${pair.user_one}> & <@${pair.user_two}> berhasil menembus tiga digit, merawat Royal Flame hingga **${streak} hari**.`,
+            `Sebuah apresiasi untuk harmoni kalian. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas perjalanan **${streak} hari** yang menawan bersama Royal Flame.`
+          ])
         };
       } else if (streak >= 30) {
         return {
           title: `${emoji} Golden Orange Flame!`,
-          body: `Selamat! Pasangan <@${pair.user_one}> & <@${pair.user_two}> telah mencapai **${streak} hari** bersama **Golden Orange Flame**.`
+          body: getRandomBody([
+            `Hangat dan menyenangkan. Pasangan <@${pair.user_one}> & <@${pair.user_two}> berhasil mempertahankan nyala Golden Orange Flame hingga **${streak} hari**.`,
+            `Sebulan yang penuh warna. <@${pair.user_one}> & <@${pair.user_two}> sukses merawat pesona Golden Orange Flame genap selama **${streak} hari**.`,
+            `Terus bersinar dengan lembut. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas rutinitas manis **${streak} hari** bersama Golden Orange Flame.`
+          ])
         };
       } else if (streak >= 7) {
         return {
           title: `${emoji} Bright Orange Flame!`,
-          body: `Keren! Streak <@${pair.user_one}> & <@${pair.user_two}> berhasil dipertahankan hingga **${streak} hari** dengan **Bright Orange Flame**.`
+          body: getRandomBody([
+            `Awal perjalanan yang memukau. Selamat <@${pair.user_one}> & <@${pair.user_two}> telah menjaga Bright Orange Flame selama **${streak} hari**.`,
+            `Kehangatan yang perlahan benderang. <@${pair.user_one}> & <@${pair.user_two}> sukses menyalakan Bright Orange Flame hingga **${streak} hari**.`,
+            `Minggu pertama yang manis. Cerita <@${pair.user_one}> & <@${pair.user_two}> kini semakin bersinar di usia **${streak} hari** bersama Bright Orange Flame.`
+          ])
         };
       } else {
         return {
           title: `${emoji} Orange Flame!`,
-          body: `Selamat! <@${pair.user_one}> & <@${pair.user_two}> kini resmi berjalan **${streak} hari** dengan **Orange Flame**. Jaga terus apinya!`
+          body: getRandomBody([
+            `Sebuah permulaan yang indah. <@${pair.user_one}> & <@${pair.user_two}> resmi merajut kisah **${streak} hari** pertama bersama Orange Flame.`,
+            `Langkah pertama selalu bermakna. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas kehangatan **${streak} hari** bersama Orange Flame.`,
+            `Merawat nyala kecil dengan anggun. <@${pair.user_one}> & <@${pair.user_two}> menyalakan Orange Flame dengan manis di usia **${streak} hari**.`
+          ])
         };
       }
     }
@@ -1246,7 +1352,6 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
     const embedColor = cardType === "Broken" ? 0x4f545c : parseInt(mInfo.color.replace("#", ""), 16);
     const embed = new EmbedBuilder()
       .setTitle(embedTitle)
-      .setDescription(content)
       .setColor(embedColor)
       .setTimestamp();
 
@@ -1254,7 +1359,7 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
       embed.setImage("attachment://streak_card.png");
     }
 
-    const payload = { embeds: [embed] };
+    const payload = { content: content, embeds: [embed] };
     if (attachment) {
       payload.files = [attachment];
     }
@@ -1295,7 +1400,6 @@ async function runDailyEvaluation(client) {
               user_two_active_today: 0
             });
             await addLog(guildId, pair.id, null, "warning_status", "Streak set to warning status");
-            await sendStreakCardNotification(client, guildId, pair.id, "Warning");
           } else if (pair.status === "warning") {
             await updatePair(pair.id, {
               status: "broken",
@@ -1331,8 +1435,8 @@ async function sendDmReminders(client) {
 
       const settings = await getSettings(pair.guild_id);
       const chatChannelId = settings?.chat_channel;
-      const chatChannelLink = chatChannelId 
-        ? `https://discord.com/channels/${pair.guild_id}/${chatChannelId}` 
+      const chatChannelLink = chatChannelId
+        ? `https://discord.com/channels/${pair.guild_id}/${chatChannelId}`
         : null;
 
       const u1User = await client.users.fetch(pair.user_one).catch(() => null);
@@ -1370,6 +1474,40 @@ async function sendDmReminders(client) {
     }
   } catch (e) {
     console.error("[STREAK DM REMINDER ERROR]", e);
+  }
+}
+
+async function sendPublicWarningReminders(client) {
+  try {
+    const pairs = await dbAll(`SELECT * FROM streak_pairs WHERE status IN ('active', 'warning')`);
+    for (const pair of pairs) {
+      if (pair.user_one_active_today && pair.user_two_active_today) continue;
+
+      const settings = await getSettings(pair.guild_id);
+      if (!settings || !settings.enabled) continue;
+
+      const chatChannelId = settings.chat_channel;
+      if (!chatChannelId) continue;
+
+      const guild = client.guilds.cache.get(pair.guild_id) || await client.guilds.fetch(pair.guild_id).catch(() => null);
+      if (!guild) continue;
+
+      const channel = await guild.channels.fetch(chatChannelId).catch(() => null);
+      if (!channel || !channel.isTextBased()) continue;
+
+      const embed = new EmbedBuilder()
+        .setTitle("<a:22593alert:1523238009393123409> Streak Hampir Padam!")
+        .setDescription(`<@${pair.user_one}> & <@${pair.user_two}>, salah satu dari kalian belum aktif hari ini. Segera berinteraksi sebelum reset pukul 00:00 WIB!`)
+        .setColor(0xff5252)
+        .setTimestamp();
+
+      await channel.send({
+        content: `<@${pair.user_one}> & <@${pair.user_two}>`,
+        embeds: [embed]
+      }).catch(err => console.error("[PUBLIC WARNING SEND ERROR]", err));
+    }
+  } catch (e) {
+    console.error("[STREAK PUBLIC WARNING REMINDER ERROR]", e);
   }
 }
 
@@ -1441,6 +1579,7 @@ async function resetMonthlyRecoveryTokens(client) {
 }
 
 let cronInterval = null;
+const initializedClients = new WeakSet();
 function startScheduler(client) {
   if (cronInterval) clearInterval(cronInterval);
   cronInterval = setInterval(async () => {
@@ -1473,6 +1612,11 @@ function startScheduler(client) {
           if (dayOfMonth === 1) {
             await resetMonthlyRecoveryTokens(client);
           }
+        }
+
+        if (hh === 21 && mm === 0) {
+          console.log("[STREAK] Running 21:00 WIB Public Warning Reminders...");
+          await sendPublicWarningReminders(client);
         }
 
         if (hh === 22 && mm === 0) {
@@ -1558,11 +1702,26 @@ const streakCommandBuilder = new SlashCommandBuilder()
 
 async function handlePrefixCommand(message, client) {
   const prefix = process.env.PREFIX || "c";
-  const commandPrefix = prefix + "streak";
+  const contentLower = message.content.trim().toLowerCase();
+  let subcommand, args;
 
-  // Extract subcommand and args
-  const args = message.content.slice(commandPrefix.length).trim().split(/\s+/);
-  const subcommand = args.shift()?.toLowerCase();
+  if (contentLower.startsWith(prefix + "sp")) {
+    subcommand = "profile";
+    args = message.content.slice((prefix + "sp").length).trim().split(/\s+/);
+  } else if (contentLower.startsWith(prefix + "sl")) {
+    subcommand = "list";
+    args = message.content.slice((prefix + "sl").length).trim().split(/\s+/);
+  } else if (contentLower.startsWith(prefix + "srec")) {
+    subcommand = "recover";
+    args = message.content.slice((prefix + "srec").length).trim().split(/\s+/);
+  } else if (contentLower.startsWith(prefix + "si")) {
+    subcommand = "info";
+    args = message.content.slice((prefix + "si").length).trim().split(/\s+/);
+  } else {
+    const commandPrefix = prefix + "streak";
+    args = message.content.slice(commandPrefix.length).trim().split(/\s+/);
+    subcommand = args.shift()?.toLowerCase();
+  }
 
   const guildId = message.guild.id;
   const runnerId = message.author.id;
@@ -1628,23 +1787,24 @@ async function handlePrefixCommand(message, client) {
     }
     if (!targetUser) targetUser = message.author;
 
-    let pair = null;
-    if (targetUser.id !== runnerId) {
-      pair = await getPair(guildId, runnerId, targetUser.id);
-    }
-    if (!pair) {
-      const activePair = await getActivePairForUser(guildId, targetUser.id);
-      const brokenPair = await getBrokenPairForUser(guildId, targetUser.id);
-      pair = activePair || brokenPair;
-    }
+    const allPairs = await dbAll(
+      `SELECT * FROM streak_pairs 
+       WHERE guild_id = ? 
+         AND (user_one = ? OR user_two = ?) 
+         AND status != 'forming'
+       ORDER BY current_streak DESC`,
+      [guildId, targetUser.id, targetUser.id]
+    );
 
-    if (!pair) {
+    if (!allPairs.length) {
       return message.reply(`❌ **${targetUser.username}** belum memiliki pasangan streak.\nAjak temanmu mengobrol di channel khusus <#${settings.chat_channel || "belum di-set"}> untuk mulai membentuk streak harian! ✨`);
     }
 
     const loadingMsg = await message.reply("⏳ Sedang memproses kartu profil streak...");
+    let currentIndex = 0;
 
-    try {
+    async function buildProfilePage(index) {
+      const pair = allPairs[index];
       const uOne = await client.users.fetch(pair.user_one).catch(() => null);
       const uTwo = await client.users.fetch(pair.user_two).catch(() => null);
 
@@ -1666,21 +1826,60 @@ async function handlePrefixCommand(message, client) {
         cardType: pair.status === "broken" ? "Broken" : "Daily Progress"
       });
 
-      const allActivePairs = await getAllActivePairsForUser(guildId, targetUser.id);
       let descNote = `Berikut adalah kartu perkembangan streak untuk **${nameOne} & ${nameTwo}**.\nStatus saat ini: **${pair.status.toUpperCase()}**`;
-      if (allActivePairs.length > 1) {
-        descNote += `\n\n💡 **${targetUser.username}** memiliki **${allActivePairs.length}** pasangan streak aktif saat ini. Gunakan \`${prefix}streak profile [mention]\` untuk melihat kartu dengan pasangan lainnya!`;
+      if (allPairs.length > 1) {
+        descNote += `\n\n💡 **${targetUser.username}** memiliki **${allPairs.length}** pasangan streak aktif saat ini.`;
       }
 
-      const attachment = new AttachmentBuilder(cardBuffer, { name: "streak_card.png" });
+      const attachment = new AttachmentBuilder(cardBuffer, { name: `streak_card_${pair.id}.png` });
       const embed = new EmbedBuilder()
         .setTitle(`🔥 Mystral Flame Streak — Profile`)
         .setDescription(descNote)
         .setColor(pair.status === "broken" ? 0x4f545c : 0xff7700)
-        .setImage("attachment://streak_card.png")
-        .setFooter({ text: "Jaga terus api kebersamaan kalian!" });
+        .setImage(`attachment://streak_card_${pair.id}.png`)
+        .setFooter({ text: `Pasangan ${index + 1} dari ${allPairs.length} | Jaga terus api kebersamaan kalian!` });
 
-      await loadingMsg.edit({ content: null, embeds: [embed], files: [attachment] });
+      return { embeds: [embed], files: [attachment] };
+    }
+
+    function buildProfileButtons(index) {
+      const row = new ActionRowBuilder();
+      const prevBtn = new ButtonBuilder()
+        .setCustomId("prev")
+        .setLabel("prev")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(index === 0);
+
+      const nextBtn = new ButtonBuilder()
+        .setCustomId("next")
+        .setLabel("next")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(index === allPairs.length - 1);
+
+      row.addComponents(prevBtn, nextBtn);
+      return row;
+    }
+
+    try {
+      const payload = await buildProfilePage(0);
+      const components = allPairs.length > 1 ? [buildProfileButtons(0)] : [];
+      const replyMsg = await loadingMsg.edit({ content: null, ...payload, components });
+
+      if (allPairs.length > 1) {
+        const filter = (i) => i.user.id === runnerId;
+        const collector = replyMsg.createMessageComponentCollector({ filter, time: 60000 });
+
+        collector.on("collect", async (i) => {
+          if (i.customId === "prev") {
+            currentIndex = Math.max(0, currentIndex - 1);
+          } else if (i.customId === "next") {
+            currentIndex = Math.min(allPairs.length - 1, currentIndex + 1);
+          }
+          await i.deferUpdate();
+          const nextPayload = await buildProfilePage(currentIndex);
+          await replyMsg.edit({ ...nextPayload, components: [buildProfileButtons(currentIndex)] });
+        });
+      }
     } catch (e) {
       console.error(e);
       await loadingMsg.edit("❌ Terjadi kesalahan saat membuat kartu profil streak.");
@@ -1736,15 +1935,19 @@ async function handlePrefixCommand(message, client) {
       if (pageActive.length > 0) {
         lines.push("🔥 **STREAK AKTIF:**");
         const renderedActive = await Promise.all(
-          pageActive.map(async ({ pair }) => {
+          pageActive.map(async ({ pair }, index) => {
+            const displayIndex = start + index + 1;
             const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
             const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
             const name = partner ? partner.username : partnerId;
             const emoji = getMilestoneEmoji(pair.current_streak);
             const isTodayDone = pair.user_one === targetUser.id ? pair.user_one_active_today : pair.user_two_active_today;
             const partnerTodayDone = pair.user_one === targetUser.id ? pair.user_two_active_today : pair.user_one_active_today;
-            const statusIndicator = isTodayDone && partnerTodayDone ? "🔥" : "⏳";
-            return `• ${emoji} **${name}** — \`${pair.current_streak} Hari\` (Status: *${pair.status.toUpperCase()}*) ${statusIndicator}`;
+            const statusIndicator =
+              isTodayDone && partnerTodayDone
+                ? "<a:Fm_check:1523182720493289666> Active"
+                : "<a:loadmystral:1525210969876205578> Waiting";
+            return `**#${displayIndex}** ${emoji} **${name}** — \`${pair.current_streak} Hari\` • ${statusIndicator}`;
           })
         );
         lines.push(...renderedActive);
@@ -1777,13 +1980,13 @@ async function handlePrefixCommand(message, client) {
       const row = new ActionRowBuilder();
       const prevBtn = new ButtonBuilder()
         .setCustomId("prev")
-        .setLabel("Prev")
+        .setLabel("prev")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(page === 0);
 
       const nextBtn = new ButtonBuilder()
         .setCustomId("next")
-        .setLabel("Next")
+        .setLabel("next")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(page === totalPages - 1);
 
@@ -1871,7 +2074,7 @@ async function handlePrefixCommand(message, client) {
     };
 
     const embed = new EmbedBuilder()
-      .setTitle(`🏆 Leaderboard Mystral Flame Streak`)
+      .setTitle(`<a:champions:1523182563332718767> Leaderboard Mystral Flame Streak`)
       .setColor(0xff7700)
       .setTimestamp();
 
@@ -1968,38 +2171,28 @@ async function handlePrefixCommand(message, client) {
 
   // Subcommand: INFO
   if (subcommand === "info") {
-    const embed = new EmbedBuilder()
-      .setTitle("🔥 Panduan Mystral Flame Streak")
-      .setDescription([
-        "Sistem streak api kebersamaan otomatis tanpa pairing manual!",
-        "",
-        "**Cara Memulai:**",
-        `1. Saling mengobrol di channel <#${settings.chat_channel || "belum di-set"}>.`,
-        "2. Interaksi harus dua arah (saling reply/mention/tag) setiap hari.",
-        "3. Lakukan selama **3 hari berturut-turut** untuk membentuk **Streak Pair** pertama kali.",
-        "",
-        "**Aturan Penting:**",
-        "• Pesan minimal **5 karakter**.",
-        "• Cooldown validasi **60 detik** antar pesan untuk menghindari spamming.",
-        "• Maksimal memiliki **1 Partner** aktif per user.",
-        "• Reset evaluasi dilakukan setiap pukul **00.00 WIB**.",
-        "",
-        "**Tingkatan Milestone (Flame Tiers):**",
-        "• `3 Hari` — <:3haritiktokorangeflame:1523332105319485562> Orange Flame",
-        "• `7 Hari` — <:7haribrightorangeflame:1523332107533811744> Bright Orange Flame",
-        "• `30-100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Purple Royal Flame",
-        "• `200 Hari` — <:200haricrystalflamegrey:1523332112030371940> Crystal Flame",
-        "• `300 Hari` — <:300hariemeralflame:1523332114819579944> Emerald Flame",
-        "• `400 Hari` — <:400harirubyredflame:1523332117193293966> Ruby Flame",
-        "• `500-600 Hari` — <:500600_blueroyalfame:1523332118917152779> Blue Royal Flame",
-        "• `700 Hari` — <:700haridiamondflame:1523332121333334016> Diamond Flame",
-        "• `800-900 Hari` — <:800900hariauroraflame:1523332124667805746> Aurora Flame",
-        "• `1000 Hari` — <:1000haridanseterusnyalegendaryeternalflame:1523332127176003805> Legendary Eternal Flame"
-      ].join("\n"))
-      .setColor(0xff7700)
-      .setFooter({ text: "Mystral Assistant • Flame Streak System" });
+    const embed = buildStreakInfoEmbed(settings);
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("view_milestones")
+        .setLabel("Lihat Tingkatan Flame")
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji("🔥")
+    );
 
-    return message.reply({ embeds: [embed] });
+    const replyMsg = await message.reply({ embeds: [embed], components: [row] });
+    const filter = (i) => i.customId === "view_milestones";
+    const collector = replyMsg.createMessageComponentCollector({ filter, time: 300000 });
+
+    collector.on("collect", async (i) => {
+      const milestoneEmbed = buildMilestonesEmbed();
+      await i.reply({ embeds: [milestoneEmbed], flags: MessageFlags.Ephemeral }).catch(() => { });
+    });
+
+    collector.on("end", () => {
+      replyMsg.edit({ components: [] }).catch(() => { });
+    });
+    return;
   }
 
   // Subcommand: SETTINGS (redirect to slash)
@@ -2022,23 +2215,25 @@ async function handleInteraction(interaction, client) {
     await interaction.deferReply();
     const targetUser = interaction.options.getUser("user") || interaction.user;
 
-    let pair = null;
-    if (targetUser.id !== runnerId) {
-      pair = await getPair(guildId, runnerId, targetUser.id);
-    }
-    if (!pair) {
-      const activePair = await getActivePairForUser(guildId, targetUser.id);
-      const brokenPair = await getBrokenPairForUser(guildId, targetUser.id);
-      pair = activePair || brokenPair;
-    }
+    const allPairs = await dbAll(
+      `SELECT * FROM streak_pairs 
+       WHERE guild_id = ? 
+         AND (user_one = ? OR user_two = ?) 
+         AND status != 'forming'
+       ORDER BY current_streak DESC`,
+      [guildId, targetUser.id, targetUser.id]
+    );
 
-    if (!pair) {
+    if (!allPairs.length) {
       return interaction.editReply({
         content: `❌ **${targetUser.username}** belum memiliki pasangan streak.\nAjak temanmu mengobrol di channel khusus <#${settings.chat_channel || "belum di-set"}> untuk mulai membentuk streak harian! ✨`
       });
     }
 
-    try {
+    let currentIndex = 0;
+
+    async function buildProfilePage(index) {
+      const pair = allPairs[index];
       const uOne = await client.users.fetch(pair.user_one).catch(() => null);
       const uTwo = await client.users.fetch(pair.user_two).catch(() => null);
 
@@ -2060,21 +2255,60 @@ async function handleInteraction(interaction, client) {
         cardType: pair.status === "broken" ? "Broken" : "Daily Progress"
       });
 
-      const allActivePairs = await getAllActivePairsForUser(guildId, targetUser.id);
       let descNote = `Berikut adalah kartu perkembangan streak untuk **${nameOne} & ${nameTwo}**.\nStatus saat ini: **${pair.status.toUpperCase()}**`;
-      if (allActivePairs.length > 1) {
-        descNote += `\n\n💡 **${targetUser.username}** memiliki **${allActivePairs.length}** pasangan streak aktif saat ini. Gunakan \`/streak profile user:[pilih pasangan]\` untuk melihat kartu dengan pasangan lainnya!`;
+      if (allPairs.length > 1) {
+        descNote += `\n\n💡 **${targetUser.username}** memiliki **${allPairs.length}** pasangan streak aktif saat ini.`;
       }
 
-      const attachment = new AttachmentBuilder(cardBuffer, { name: "streak_card.png" });
+      const attachment = new AttachmentBuilder(cardBuffer, { name: `streak_card_${pair.id}.png` });
       const embed = new EmbedBuilder()
         .setTitle(`🔥 Mystral Flame Streak — Profile`)
         .setDescription(descNote)
         .setColor(pair.status === "broken" ? 0x4f545c : 0xff7700)
-        .setImage("attachment://streak_card.png")
-        .setFooter({ text: "Jaga terus api kebersamaan kalian!" });
+        .setImage(`attachment://streak_card_${pair.id}.png`)
+        .setFooter({ text: `Pasangan ${index + 1} dari ${allPairs.length} | Jaga terus api kebersamaan kalian!` });
 
-      await interaction.editReply({ embeds: [embed], files: [attachment] });
+      return { embeds: [embed], files: [attachment] };
+    }
+
+    function buildProfileButtons(index) {
+      const row = new ActionRowBuilder();
+      const prevBtn = new ButtonBuilder()
+        .setCustomId("prev")
+        .setLabel("prev")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(index === 0);
+
+      const nextBtn = new ButtonBuilder()
+        .setCustomId("next")
+        .setLabel("next")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(index === allPairs.length - 1);
+
+      row.addComponents(prevBtn, nextBtn);
+      return row;
+    }
+
+    try {
+      const payload = await buildProfilePage(0);
+      const components = allPairs.length > 1 ? [buildProfileButtons(0)] : [];
+      const replyMsg = await interaction.editReply({ ...payload, components });
+
+      if (allPairs.length > 1) {
+        const filter = (i) => i.user.id === interaction.user.id;
+        const collector = replyMsg.createMessageComponentCollector({ filter, time: 60000 });
+
+        collector.on("collect", async (i) => {
+          if (i.customId === "prev") {
+            currentIndex = Math.max(0, currentIndex - 1);
+          } else if (i.customId === "next") {
+            currentIndex = Math.min(allPairs.length - 1, currentIndex + 1);
+          }
+          await i.deferUpdate();
+          const nextPayload = await buildProfilePage(currentIndex);
+          await interaction.editReply({ ...nextPayload, components: [buildProfileButtons(currentIndex)] });
+        });
+      }
     } catch (e) {
       console.error(e);
       await interaction.editReply({ content: "❌ Terjadi kesalahan saat membuat kartu profil streak." });
@@ -2124,15 +2358,19 @@ async function handleInteraction(interaction, client) {
       if (pageActive.length > 0) {
         lines.push("🔥 **STREAK AKTIF:**");
         const renderedActive = await Promise.all(
-          pageActive.map(async ({ pair }) => {
+          pageActive.map(async ({ pair }, index) => {
+            const displayIndex = start + index + 1;
             const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
             const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
             const name = partner ? partner.username : partnerId;
             const emoji = getMilestoneEmoji(pair.current_streak);
             const isTodayDone = pair.user_one === targetUser.id ? pair.user_one_active_today : pair.user_two_active_today;
             const partnerTodayDone = pair.user_one === targetUser.id ? pair.user_two_active_today : pair.user_one_active_today;
-            const statusIndicator = isTodayDone && partnerTodayDone ? "🔥" : "⏳";
-            return `• ${emoji} **${name}** — \`${pair.current_streak} Hari\` (Status: *${pair.status.toUpperCase()}*) ${statusIndicator}`;
+            const statusIndicator =
+              isTodayDone && partnerTodayDone
+                ? "Active <a:Fm_check:1523182720493289666>"
+                : "Waiting <a:loadmystral:1525210969876205578>";
+            return `#${displayIndex} ${emoji} **${name}** — \`${pair.current_streak} Hari\` • ${statusIndicator}`;
           })
         );
         lines.push(...renderedActive);
@@ -2165,13 +2403,13 @@ async function handleInteraction(interaction, client) {
       const row = new ActionRowBuilder();
       const prevBtn = new ButtonBuilder()
         .setCustomId("prev")
-        .setLabel("Prev")
+        .setLabel("prev")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(page === 0);
 
       const nextBtn = new ButtonBuilder()
         .setCustomId("next")
-        .setLabel("Next")
+        .setLabel("next")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(page === totalPages - 1);
 
@@ -2344,38 +2582,27 @@ async function handleInteraction(interaction, client) {
   }
 
   if (subcommand === "info") {
-    const embed = new EmbedBuilder()
-      .setTitle("🔥 Panduan Mystral Flame Streak")
-      .setDescription([
-        "Sistem streak api kebersamaan otomatis tanpa pairing manual!",
-        "",
-        "**Cara Memulai:**",
-        `1. Saling mengobrol di channel <#${settings.chat_channel || "belum di-set"}>.`,
-        "2. Interaksi harus dua arah (saling reply/mention/tag) setiap hari.",
-        "3. Lakukan selama **3 hari berturut-turut** untuk membentuk **Streak Pair** pertama kali.",
-        "",
-        "**Aturan Penting:**",
-        "• Pesan minimal **5 karakter**.",
-        "• Cooldown validasi **60 detik** antar pesan untuk menghindari spamming.",
-        "• Maksimal memiliki **1 Partner** aktif per user.",
-        "• Reset evaluasi dilakukan setiap pukul **00.00 WIB**.",
-        "",
-        "**Tingkatan Milestone (Flame Tiers):**",
-        "• `3 Hari` — <:3haritiktokorangeflame:1523332105319485562> Orange Flame",
-        "• `7 Hari` — <:7haribrightorangeflame:1523332107533811744> Bright Orange Flame",
-        "• `30-100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> Purple Royal Flame",
-        "• `200 Hari` — <:200haricrystalflamegrey:1523332112030371940> Crystal Flame",
-        "• `300 Hari` — <:300hariemeralflame:1523332114819579944> Emerald Flame",
-        "• `400 Hari` — <:400harirubyredflame:1523332117193293966> Ruby Flame",
-        "• `500-600 Hari` — <:500600_blueroyalfame:1523332118917152779> Blue Royal Flame",
-        "• `700 Hari` — <:700haridiamondflame:1523332121333334016> Diamond Flame",
-        "• `800-900 Hari` — <:800900hariauroraflame:1523332124667805746> Aurora Flame",
-        "• `1000 Hari` — <:1000haridanseterusnyalegendaryeternalflame:1523332127176003805> Legendary Eternal Flame"
-      ].join("\n"))
-      .setColor(0xff7700)
-      .setFooter({ text: "Mystral Assistant • Flame Streak System" });
+    const embed = buildStreakInfoEmbed(settings);
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("view_milestones")
+        .setLabel("Lihat Tingkatan Flame")
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji("🔥")
+    );
 
-    await interaction.reply({ embeds: [embed] });
+    const replyMsg = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
+    const filter = (i) => i.customId === "view_milestones";
+    const collector = replyMsg.createMessageComponentCollector({ filter, time: 300000 });
+
+    collector.on("collect", async (i) => {
+      const milestoneEmbed = buildMilestonesEmbed();
+      await i.reply({ embeds: [milestoneEmbed], flags: MessageFlags.Ephemeral }).catch(() => { });
+    });
+
+    collector.on("end", () => {
+      interaction.editReply({ components: [] }).catch(() => { });
+    });
   }
 
   if (subcommand === "settings") {
@@ -2426,7 +2653,13 @@ function setupListeners(client) {
       const commandPrefix = (prefix + "streak").toLowerCase();
       const contentLower = message.content.trim().toLowerCase();
 
-      if (contentLower.startsWith(commandPrefix)) {
+      const isStreakCmd = contentLower.startsWith(commandPrefix);
+      const isCsp = contentLower === prefix + "sp" || contentLower.startsWith(prefix + "sp ");
+      const isCsl = contentLower === prefix + "sl" || contentLower.startsWith(prefix + "sl ");
+      const isCsrec = contentLower === prefix + "srec" || contentLower.startsWith(prefix + "srec ");
+      const isCsi = contentLower === prefix + "si" || contentLower.startsWith(prefix + "si ");
+
+      if (isStreakCmd || isCsp || isCsl || isCsrec || isCsi) {
         await handlePrefixCommand(message, client);
         return;
       }
@@ -2475,11 +2708,17 @@ function setupListeners(client) {
 // ===================== EXPORTS & INITIALIZATION =====================
 async function init(client, dbWrappers) {
   try {
+    if (initializedClients.has(client)) {
+      console.log("[STREAK] Init skipped: subsystem already initialized for this client.");
+      return;
+    }
+
     console.log("[STREAK] Initializing Mystral Flame Streak Subsystem (Single-file)...");
     setDb(dbWrappers);
     await initTables();
     setupListeners(client);
     startScheduler(client);
+    initializedClients.add(client);
     console.log("[STREAK] Subsystem successfully initialized! 🔥");
   } catch (err) {
     console.error("❌ [STREAK] Initialization failed:", err);
