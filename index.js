@@ -1347,7 +1347,7 @@ function todCard(question, challengerId, targetId, status = "pending") {
 
   if (status === "pending") {
     embed.setColor(0x1f1b24);
-    if (targetId && targetId !== challengerId) {
+    if (targetId && targetId !== challengerId && targetId !== "self") {
       embed.addFields(
         { name: "Challenger", value: `<@${challengerId}>`, inline: true },
         { name: "Target", value: `<@${targetId}>`, inline: true }
@@ -1380,7 +1380,7 @@ function todPanelCard(challengerId, targetId) {
     .setFooter({ text: "Mystral • Truth or Dare" })
     .setTimestamp();
 
-  if (targetId && targetId !== challengerId) {
+  if (targetId && targetId !== challengerId && targetId !== "self") {
     embed.setDescription(`<@${challengerId}> menantang <@${targetId}> untuk bermain Truth or Dare! \n\nSilakan pilih kategori di bawah.`);
   } else {
     embed.setDescription(`<@${challengerId}> ingin bermain Truth or Dare! \n\nSilakan pilih kategori di bawah.`);
@@ -10089,7 +10089,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           embeds: [todPanelCard(targetId, "self")],
           components: [todRow(targetId, "self")],
           allowedMentions: { parse: [] }
-        }).catch(() => {});
+        }).catch(() => { });
 
         return;
       }
