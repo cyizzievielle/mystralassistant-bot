@@ -10058,7 +10058,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.reply({
             content: `❌ Hanya <@${targetId}> yang bisa menyelesaikan/melewati tantangan ini!`,
             flags: MessageFlags.Ephemeral
-          }).catch(() => {});
+          }).catch(() => { });
         }
 
         // Fetch question details to render the completed card
@@ -10081,7 +10081,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.update({
           embeds: [todCard(reconstructedQ, null, targetId, status)],
           components: []
+        }).catch(() => { });
+
+        // AUTOMATICALLY SEND A NEW PANEL CARD!
+        // The player who just completed/passed the challenge (targetId) is now the new challenger.
+        await interaction.channel.send({
+          embeds: [todPanelCard(targetId, "self")],
+          components: [todRow(targetId, "self")],
+          allowedMentions: { parse: [] }
         }).catch(() => {});
+
         return;
       }
 
@@ -10094,7 +10103,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({
           content: `❌ Hanya <@${allowedUser}> yang bisa memilih kategori!`,
           flags: MessageFlags.Ephemeral
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       // Apply cooldown
@@ -10122,14 +10131,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({
           content: "❌ Gagal mendapatkan pertanyaan.",
           flags: MessageFlags.Ephemeral
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       // Edit message to show the question card
       await interaction.update({
         embeds: [todCard(q, challengerId, allowedUser)],
         components: [todResponseRow(allowedUser, q.id)]
-      }).catch(() => {});
+      }).catch(() => { });
 
       // Auto-create thread if text channel
       if (interaction.channel.type === ChannelType.GuildText) {
@@ -10143,7 +10152,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).catch(() => null);
 
         if (thread) {
-          await thread.send(`Halo <@${allowedUser}>, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => {});
+          await thread.send(`Halo <@${allowedUser}>, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => { });
         }
       }
       return;
@@ -12739,7 +12748,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           if (thread) {
             const targetMention = targetUser ? `<@${targetId}>` : `<@${challengerId}>`;
-            await thread.send(`Halo ${targetMention}, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => {});
+            await thread.send(`Halo ${targetMention}, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => { });
           }
         }
 
