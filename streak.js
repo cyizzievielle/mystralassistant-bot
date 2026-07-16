@@ -4,6 +4,43 @@ const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const crypto = require("crypto");
 const path = require("path");
 
+function cleanName(name) {
+  if (!name) return "";
+  let result = "";
+  for (const char of name) {
+    const cp = char.codePointAt(0);
+    if (cp >= 0x1D400 && cp <= 0x1D7FF) {
+      if (cp >= 0x1D400 && cp <= 0x1D419) result += String.fromCharCode(cp - 0x1D400 + 0x41);
+      else if (cp >= 0x1D41A && cp <= 0x1D433) result += String.fromCharCode(cp - 0x1D41A + 0x61);
+      else if (cp >= 0x1D434 && cp <= 0x1D44D) result += String.fromCharCode(cp - 0x1D434 + 0x41);
+      else if (cp >= 0x1D44E && cp <= 0x1D467) result += String.fromCharCode(cp - 0x1D44E + 0x61);
+      else if (cp >= 0x1D468 && cp <= 0x1D481) result += String.fromCharCode(cp - 0x1D468 + 0x41);
+      else if (cp >= 0x1D482 && cp <= 0x1D49B) result += String.fromCharCode(cp - 0x1D482 + 0x61);
+      else if (cp >= 0x1D49C && cp <= 0x1D4B5) result += String.fromCharCode(cp - 0x1D49C + 0x41);
+      else if (cp >= 0x1D4B6 && cp <= 0x1D4CF) result += String.fromCharCode(cp - 0x1D4B6 + 0x61);
+      else if (cp >= 0x1D4D0 && cp <= 0x1D4E9) result += String.fromCharCode(cp - 0x1D4D0 + 0x41);
+      else if (cp >= 0x1D4EA && cp <= 0x1D503) result += String.fromCharCode(cp - 0x1D4EA + 0x61);
+      else if (cp >= 0x1D504 && cp <= 0x1D51D) result += String.fromCharCode(cp - 0x1D504 + 0x41);
+      else if (cp >= 0x1D51E && cp <= 0x1D537) result += String.fromCharCode(cp - 0x1D51E + 0x61);
+      else if (cp >= 0x1D538 && cp <= 0x1D551) result += String.fromCharCode(cp - 0x1D538 + 0x41);
+      else if (cp >= 0x1D552 && cp <= 0x1D56B) result += String.fromCharCode(cp - 0x1D552 + 0x61);
+      else if (cp >= 0x1D5A0 && cp <= 0x1D5B9) result += String.fromCharCode(cp - 0x1D5A0 + 0x41);
+      else if (cp >= 0x1D5BA && cp <= 0x1D5D3) result += String.fromCharCode(cp - 0x1D5BA + 0x61);
+      else if (cp >= 0x1D670 && cp <= 0x1D689) result += String.fromCharCode(cp - 0x1D670 + 0x41);
+      else if (cp >= 0x1D68A && cp <= 0x1D6A3) result += String.fromCharCode(cp - 0x1D68A + 0x61);
+      else if (cp >= 0x1D7CE && cp <= 0x1D7D7) result += String.fromCharCode(cp - 0x1D7CE + 0x30);
+      else if (cp >= 0x1D7D8 && cp <= 0x1D7E1) result += String.fromCharCode(cp - 0x1D7D8 + 0x30);
+      else if (cp >= 0x1D7E2 && cp <= 0x1D7EB) result += String.fromCharCode(cp - 0x1D7E2 + 0x30);
+      else if (cp >= 0x1D7EC && cp <= 0x1D7F5) result += String.fromCharCode(cp - 0x1D7EC + 0x30);
+      else if (cp >= 0x1D7F6 && cp <= 0x1D7FF) result += String.fromCharCode(cp - 0x1D7F6 + 0x30);
+    } else {
+      result += char;
+    }
+  }
+  result = result.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return result.replace(/[^\x20-\x7E]/g, "").trim() || "User";
+}
+
 // ===================== DATABASE STATE & HELPERS =====================
 let dbGet, dbAll, dbRun, dbExec;
 
@@ -511,6 +548,11 @@ async function drawStreakCard({
   lastActiveOne = null,
   lastActiveTwo = null,
 }) {
+  userOneName = cleanName(userOneName);
+  userTwoName = cleanName(userTwoName);
+  userOneHandle = cleanName(userOneHandle);
+  userTwoHandle = cleanName(userTwoHandle);
+
   const W = 860;
   const H = 320;
   const canvas = createCanvas(W, H);
