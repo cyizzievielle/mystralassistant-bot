@@ -1,4 +1,4 @@
-﻿/**
+/**
  * index.js — Mystral (SQLite FINAL + PREFIX)
  * discord.js v14 + @napi-rs/canvas
  *
@@ -1700,7 +1700,7 @@ const WELCOME_MESSAGES = [
   (m, g) => `**✨ Halo ${m}, selamat datang di ${g}!**\nTerima kasih sudah bergabung. Semoga District ini menjadi tempat yang nyaman untukmu. 🌿`,
   (m, g) => `**🤍 Welcome aboard, ${m}!**\nKami senang kamu menjadi bagian dari Mystral District. Selamat menikmati komunitas ini bersama para Mystralians.`,
   (m, g) => `**🌿 Welcome to ${g}, ${m}!**\nSemoga harimu lebih menyenangkan bersama komunitas yang hangat dan ramah di MYSTRAL.`,
-  (m, g) => `**🌌 Welcome to ${g}!**\nJangan ragu untuk mengobrol, bergabung di voice, atau sekadar menikmati suasana komunitas. ✨`,
+  (m, g) => `**🌌 Welcome to ${g}, ${m}!**\nJangan ragu untuk mengobrol, bergabung di voice, atau sekadar menikmati suasana komunitas. ✨`,
   (m, g) => `**🌙 Hai ${m}, selamat datang di Mystral District!**\nSemoga kamu menemukan banyak cerita, teman baru, dan pengalaman seru di sini. 🤍`,
   (m, g) => `**✨ Welcome, ${m}!**\nTerima kasih telah bergabung dengan ${g}. Semoga kamu merasa nyaman menjadi bagian dari para Mystralians.`,
   (m, g) => `**🤝 Halo ${m}, welcome to ${g}!**\nNikmati setiap percakapan, event, dan momen yang akan kamu temukan di komunitas ini.`,
