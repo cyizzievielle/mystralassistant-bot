@@ -1,4 +1,4 @@
-/**
+﻿/**
  * index.js — Mystral (SQLite FINAL + PREFIX)
  * discord.js v14 + @napi-rs/canvas
  *

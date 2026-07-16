@@ -41,6 +41,17 @@ function cleanName(name) {
   return result.replace(/[^\x20-\x7E]/g, "").trim() || "User";
 }
 
+function isSameCalendarDayJakarta(ts1, ts2) {
+  const date1 = new Date(ts1);
+  const date2 = new Date(ts2);
+
+  const options = { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit" };
+  const d1Str = new Intl.DateTimeFormat("en-US", options).format(date1);
+  const d2Str = new Intl.DateTimeFormat("en-US", options).format(date2);
+
+  return d1Str === d2Str;
+}
+
 // ===================== DATABASE STATE & HELPERS =====================
 let dbGet, dbAll, dbRun, dbExec;
 
@@ -1435,20 +1446,13 @@ async function runDailyEvaluation(client) {
           });
           await clearActivity(pair.id);
         } else {
-          if (pair.status === "active") {
-            await updatePair(pair.id, {
-              status: "warning",
-              user_one_active_today: 0,
-              user_two_active_today: 0
-            });
-            await addLog(guildId, pair.id, null, "warning_status", "Streak set to warning status");
-          } else if (pair.status === "warning") {
+          if (pair.status === "active" || pair.status === "warning") {
             await updatePair(pair.id, {
               status: "broken",
               user_one_active_today: 0,
               user_two_active_today: 0
             });
-            await addLog(guildId, pair.id, null, "broken_status", "Streak set to broken status");
+            await addLog(guildId, pair.id, null, "broken_status", "Streak set to broken status immediately");
             await sendStreakCardNotification(client, guildId, pair.id, "Broken");
           }
         }
@@ -1563,7 +1567,21 @@ async function recoverStreak(guildId, userId) {
     return { error: "Batas pemulihan (recovery) bulan ini untuk pasanganmu telah habis! (Maksimal 5/bulan)" };
   }
 
+  // Get the latest broken_status log for this pair to prevent same-day recovery
+  const latestBrokenLog = await dbGet(
+    `SELECT timestamp FROM streak_logs 
+     WHERE pair_id = ? AND action = 'broken_status' 
+     ORDER BY timestamp DESC LIMIT 1`,
+    [pair.id]
+  ).catch(() => null);
+
   const now = Date.now();
+  if (latestBrokenLog && latestBrokenLog.timestamp) {
+    if (isSameCalendarDayJakarta(latestBrokenLog.timestamp, now)) {
+      return { error: "Kamu tidak bisa memulihkan streak di hari yang sama saat streak padam. Silakan coba lagi besok!" };
+    }
+  }
+
   const nextRec = pair.recovery_left - 1;
 
   await updatePair(pair.id, {
