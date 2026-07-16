@@ -1383,7 +1383,7 @@ function todPanelCard(challengerId, targetId) {
   if (targetId && targetId !== challengerId && targetId !== "self") {
     embed.setDescription(`<@${challengerId}> menantang <@${targetId}> untuk bermain Truth or Dare! \n\nSilakan pilih kategori di bawah.`);
   } else {
-    embed.setDescription(`<@${challengerId}> ingin bermain Truth or Dare! \n\nSilakan pilih kategori di bawah.`);
+    embed.setDescription(`Silakan pilih kategori di bawah untuk memulai permainan Truth or Dare! 🎲🕯️`);
   }
   return embed;
 }
