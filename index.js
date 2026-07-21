@@ -1,4 +1,4 @@
-/**
+﻿/**
  * index.js — Mystral (SQLite FINAL + PREFIX)
  * discord.js v14 + @napi-rs/canvas
  *
@@ -5046,8 +5046,8 @@ function registryEmbed(pageIndex, totalPages, totalUsers, pageRows) {
 
 function registryRow(pageIndex, totalPages) {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`registry:prev:${pageIndex}`).setLabel("Prev").setStyle(ButtonStyle.Secondary).setDisabled(pageIndex <= 0),
-    new ButtonBuilder().setCustomId(`registry:next:${pageIndex}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(pageIndex >= totalPages - 1)
+    new ButtonBuilder().setCustomId(`registry:prev:${pageIndex}`).setLabel("Prev").setEmoji("◀").setStyle(ButtonStyle.Primary).setDisabled(pageIndex <= 0),
+    new ButtonBuilder().setCustomId(`registry:next:${pageIndex}`).setLabel("Next").setEmoji("▶").setStyle(ButtonStyle.Primary).setDisabled(pageIndex >= totalPages - 1)
   );
 }
 
@@ -7266,25 +7266,122 @@ async function addGuessNumberWin(guildId, userId, attempts) {
   );
 }
 
-async function guessNumberLeaderboardText(guildId) {
+async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage, authorId) {
+  const isInteraction = !!interactionOrMessage.commandName;
+  if (isInteraction) {
+    if (!interactionOrMessage.deferred && !interactionOrMessage.replied) {
+      await safeDefer(interactionOrMessage).catch(() => { });
+    }
+  }
+
   const rows = await safeAll(
     `SELECT user_id, wins, best_attempts
      FROM guess_number_scores
      WHERE guild_id=?
      ORDER BY wins DESC, best_attempts ASC, updated_at ASC
-     LIMIT 10`,
+     LIMIT 100`,
     [guildId]
   );
 
-  if (!rows.length) return "🏆 **leaderboard tebak angka**\nBelum ada pemenang.";
+  if (!rows.length) {
+    const payload = { content: "Belum ada pemenang yang tercatat.", flags: MessageFlags.Ephemeral };
+    if (isInteraction) return interactionOrMessage.editReply(payload);
+    return interactionOrMessage.reply(payload);
+  }
 
-  return [
-    "🏆 **leaderboard tebak angka**",
-    ...rows.map((row, index) => {
-      const best = row.best_attempts ? ` • best ${row.best_attempts} percobaan` : "";
-      return `${index + 1}. <@${row.user_id}> — **${row.wins} win**${best}`;
-    }),
-  ].join("\n");
+  const totalPages = Math.ceil(rows.length / 10);
+  let currentPage = 0;
+  const medals = ["🥇", "🥈", "🥉"];
+  const ACCENT = 0xffa500;
+
+  async function buildPage(page, showButtons = true) {
+    const startIdx = page * 10;
+    const pageRows = rows.slice(startIdx, startIdx + 10);
+
+    const container = new ContainerBuilder().setAccentColor(ACCENT);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent("## 🏆 Leaderboard Tebak Angka")
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+
+    const renderedLines = await Promise.all(
+      pageRows.map(async (row, i) => {
+        const globalIndex = startIdx + i;
+        const medal = medals[globalIndex] || `**${globalIndex + 1}.**`;
+        const best = row.best_attempts ? ` • Best **${row.best_attempts}x**` : "";
+        let username = row.user_id;
+        try {
+          const u = client.users.cache.get(row.user_id) || await client.users.fetch(row.user_id);
+          username = u.username;
+        } catch { }
+        return `${medal} @${username} — **${row.wins} Win**${best}`;
+      })
+    );
+
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(renderedLines.join("\n"))
+    );
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`-# Halaman ${page + 1} dari ${totalPages} • Mystral Tebak Angka`)
+    );
+
+    if (totalPages > 1 && showButtons) {
+      const row = new ActionRowBuilder();
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId("tebak_lb:prev")
+          .setLabel("Prev")
+          .setEmoji("◀")
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(page === 0),
+        new ButtonBuilder()
+          .setCustomId("tebak_lb:next")
+          .setLabel("Next")
+          .setEmoji("▶")
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(page === totalPages - 1)
+      );
+      container.addActionRowComponents(row);
+    }
+    return container;
+  }
+
+  const firstContainer = await buildPage(0, true);
+  let replyMsg;
+  if (isInteraction) {
+    replyMsg = await interactionOrMessage.editReply({ components: [firstContainer], flags: MessageFlags.IsComponentsV2 });
+  } else {
+    replyMsg = await interactionOrMessage.reply({ components: [firstContainer], flags: MessageFlags.IsComponentsV2 });
+  }
+
+  if (totalPages > 1) {
+    const filter = (i) => i.user.id === authorId;
+    const collector = replyMsg.createMessageComponentCollector({ filter, time: 60000 });
+
+    collector.on("collect", async (i) => {
+      try {
+        if (i.customId === "tebak_lb:prev") {
+          currentPage = Math.max(0, currentPage - 1);
+        } else if (i.customId === "tebak_lb:next") {
+          currentPage = Math.min(totalPages - 1, currentPage + 1);
+        }
+        await i.deferUpdate();
+        const nextContainer = await buildPage(currentPage, true);
+        await replyMsg.edit({ components: [nextContainer], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
+      } catch { }
+    });
+
+    collector.on("end", () => {
+      buildPage(currentPage, false).then(c => {
+        if (isInteraction) {
+          interactionOrMessage.editReply({ components: [c], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
+        } else {
+          replyMsg.edit({ components: [c], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
+        }
+      }).catch(() => { });
+    });
+  }
 }
 
 async function handleGuessNumberAttempt(message) {
@@ -8088,10 +8185,7 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     if ((cmd === "lb" && (args[0] || "").toLowerCase() === "angka") || (cmd === "leaderboard" && (args[0] || "").toLowerCase() === "tebakangka")) {
-      return message.reply({
-        content: await guessNumberLeaderboardText(message.guild.id),
-        allowedMentions: { parse: [] },
-      });
+      return handleTebakAngkaLeaderboard(client, message.guild.id, message, message.author.id);
     }
 
     if (cmd === "ban") {
@@ -9495,14 +9589,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`afk:list:${page - 1}`)
-          .setLabel("⬅")
-          .setStyle(ButtonStyle.Secondary)
+          .setLabel("Prev")
+          .setEmoji("◀")
+          .setStyle(ButtonStyle.Primary)
           .setDisabled(page <= 0),
 
         new ButtonBuilder()
           .setCustomId(`afk:list:${page + 1}`)
-          .setLabel("➡")
-          .setStyle(ButtonStyle.Secondary)
+          .setLabel("Next")
+          .setEmoji("▶")
+          .setStyle(ButtonStyle.Primary)
           .setDisabled(page >= maxPage - 1)
       );
 
@@ -11440,10 +11536,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const sub = interaction.options.getSubcommand();
 
         if (sub === "tebakangka") {
-          return safeReply(interaction, {
-            content: await guessNumberLeaderboardText(interaction.guild.id),
-            allowedMentions: { parse: [] },
-          });
+          return handleTebakAngkaLeaderboard(client, interaction.guild.id, interaction, interaction.user.id);
         }
 
         if (sub === "support") {
@@ -13435,14 +13528,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
               .setCustomId(`afk:list:${page - 1}`)
-              .setLabel("⬅ Prev")
-              .setStyle(ButtonStyle.Secondary)
-              .setDisabled(true),
+              .setLabel("Prev")
+              .setEmoji("◀")
+              .setStyle(ButtonStyle.Primary)
+              .setDisabled(page <= 0),
 
             new ButtonBuilder()
               .setCustomId(`afk:list:${page + 1}`)
-              .setLabel("Next ➡")
-              .setStyle(ButtonStyle.Secondary)
+              .setLabel("Next")
+              .setEmoji("▶")
+              .setStyle(ButtonStyle.Primary)
               .setDisabled(maxPage <= 1)
           );
 
@@ -14246,7 +14341,7 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
     const memoryUsage = `${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1)} MB`;
 
     console.log("┌────────────────────────────────────────────────────────┐");
-    console.log("│             🔮 Mystral BOOTLOADER 🔮           │");
+    console.log("│             🔮 Mystral BOOTLOADER 🔮                  │");
     console.log("└────────────────────────────────────────────────────────┘");
     console.log(` ├── [SYSTEM] Node: ${nodeVer} | Platform: ${platform} | Heap: ${memoryUsage}`);
 
