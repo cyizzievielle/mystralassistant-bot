@@ -1,10 +1,11 @@
 ﻿/**
- * index.js — Mystral (SQLite FINAL + PREFIX)
- * discord.js v14 + @napi-rs/canvas
- *
- * DB Engine:
- * - Prefer: better-sqlite3 (sync, fast)  -> optional
- * - Fallback: sqlite3 (async, stable)    -> recommended on many Pterodactyl images
+ * 🔮 Mystral Assistant Core Engine v2.0
+ * ════════════════════════════════════════════════════════════════
+ * 🚀 Powered by: Discord.js v14 | Mongoose (MongoDB Atlas Cloud)
+ * 🎨 Canvas Engine: @napi-rs/canvas
+ * 🔥 Features: Flame Streak, ID Card, Menfess, Sorting, Music CC
+ * 🛡️ Host Ready: Pterodactyl Panel, Linux x64, Railway, VPS
+ * ════════════════════════════════════════════════════════════════
  */
 
 require("dotenv").config();
@@ -24,6 +25,7 @@ const {
   ActionRowBuilder,
   ContainerBuilder,
   TextDisplayBuilder,
+  SectionBuilder,
   SeparatorBuilder,
   ModalBuilder,
   TextInputBuilder,
@@ -383,121 +385,770 @@ const OWNER_DM_BACKUP_TIMES = String(process.env.OWNER_DM_BACKUP_TIMES || "00:00
   .filter((x) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x));
 const OWNER_DM_BACKUP_META_KEY = "owner_dm_db_backup_last_slot";
 
-// ===================== DB ENGINE AUTO =====================
-let DB_ENGINE = null;
+// ===================== MONGODB ATLAS CLOUD ENGINE =====================
+let DB_ENGINE = "MongoDB Atlas Cloud (Mongoose)";
 
-// Try better-sqlite3 first
-let BetterSqlite = null;
-try {
-  BetterSqlite = require("better-sqlite3");
-  DB_ENGINE = "better-sqlite3";
-} catch { }
+const {
+  mongoose,
+  connectMongo,
+  MenfessPost,
+  MenfessAnonMap,
+  SortingUser,
+  IdCardUser,
+  AfkUser,
+  MetaText,
+  TarotUser,
+  TarotCategoryStat,
+  ModWarning,
+  FaqItem,
+  StreakSetting,
+  StreakPair,
+  StreakDailyActivity,
+  StreakLog,
+  StreakAchievement,
+  StreakFreezeInventory,
+} = require("./db");
 
-// fallback sqlite3
-let sqlite3 = null;
-if (!DB_ENGINE) {
-  try {
-    sqlite3 = require("sqlite3").verbose();
-    DB_ENGINE = "sqlite3";
-  } catch { }
-}
-
-if (!DB_ENGINE) {
-  console.error("❌ Tidak ada DB engine terpasang. Install salah satu:");
-  console.error("   yarn add sqlite3");
-  console.error("   (optional) yarn add better-sqlite3");
-  process.exit(1);
-}
-
-// Wrapper interface
 let db = null;
-let dbGet = null;
-let dbAll = null;
-let dbRun = null;
-let dbExec = null;
-let dbTransaction = null;
+let dbGet = mongoGet;
+let dbAll = mongoAll;
+let dbRun = mongoRun;
+let dbExec = async () => true;
+let dbTransaction = (fn) => async (...args) => await fn(...args);
 
 function openDb() {
-  if (DB_ENGINE === "better-sqlite3") {
-    db = new BetterSqlite(SQLITE_PATH);
-
-    db.pragma("wal_checkpoint(TRUNCATE)");
-    db.pragma("synchronous = NORMAL");
-    db.pragma("foreign_keys = ON");
-
-    dbGet = (sql, params = []) => db.prepare(sql).get(params);
-    dbAll = (sql, params = []) => db.prepare(sql).all(params);
-    dbRun = (sql, params = []) => db.prepare(sql).run(params);
-    dbExec = (sql) => db.exec(sql);
-
-    dbTransaction = (fn) => {
-      const tx = db.transaction(fn);
-      return (...args) => tx(...args);
-    };
-
-    return;
-  }
-
-  // sqlite3 (async)
-  db = new sqlite3.Database(SQLITE_PATH);
-
-  dbExec = (sql) =>
-    new Promise((resolve, reject) => {
-      db.exec(sql, (err) => (err ? reject(err) : resolve()));
-    });
-
-  dbRun = (sql, params = []) =>
-    new Promise((resolve, reject) => {
-      db.run(sql, params, function (err) {
-        if (err) return reject(err);
-        resolve({ changes: this.changes ?? 0, lastID: this.lastID });
-      });
-    });
-
-  dbGet = (sql, params = []) =>
-    new Promise((resolve, reject) => {
-      db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-    });
-
-  dbAll = (sql, params = []) =>
-    new Promise((resolve, reject) => {
-      db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
-    });
-
-  // transaction emulation
-  dbTransaction = (fn) => {
-    return async (...args) => {
-      await dbRun("BEGIN IMMEDIATE");
-      try {
-        const res = await fn(...args);
-        await dbRun("COMMIT");
-        return res;
-      } catch (e) {
-        await dbRun("ROLLBACK").catch(() => { });
-        throw e;
-      }
-    };
-  };
-
+  DB_ENGINE = "MongoDB Atlas Cloud (Mongoose)";
+  dbGet = mongoGet;
+  dbAll = mongoAll;
+  dbRun = mongoRun;
+  dbExec = async () => true;
+  dbTransaction = (fn) => async (...args) => await fn(...args);
 }
 
-// ===================== DB SAFE HELPERS (works for better-sqlite3 + sqlite3) =====================
-// ===================== DB SAFE HELPERS (FIXED) =====================
+// ===================== DYNAMIC MONGODB TRANSLATOR ENGINE =====================
+const genericMongoModels = new Map();
+
+function getMongoModel(tableName) {
+  if (!tableName) return null;
+  const cleanName = tableName.trim().toLowerCase();
+
+  if (cleanName === "menfess_posts") return MenfessPost;
+  if (cleanName === "menfess_anonmap") return MenfessAnonMap;
+  if (cleanName === "sorting_users") return SortingUser;
+  if (cleanName === "idcard_users") return IdCardUser;
+  if (cleanName === "afk_users") return AfkUser;
+  if (cleanName === "menfess_meta" || cleanName === "meta_text" || cleanName === "app_meta") return MetaText;
+  if (cleanName === "streak_settings") return StreakSetting;
+  if (cleanName === "streak_pairs") return StreakPair;
+  if (cleanName === "streak_daily_activity") return StreakDailyActivity;
+  if (cleanName === "streak_logs") return StreakLog;
+  if (cleanName === "streak_achievements") return StreakAchievement;
+  if (cleanName === "streak_freeze_inventory") return StreakFreezeInventory;
+  if (cleanName === "tarot_users") return TarotUser;
+  if (cleanName === "tarot_category_stats") return TarotCategoryStat;
+  if (cleanName === "mod_warnings") return ModWarning;
+
+  if (!genericMongoModels.has(cleanName)) {
+    const modelName = "MongoTable_" + cleanName;
+    const model = mongoose.models[modelName] || mongoose.model(modelName, new mongoose.Schema({}, { strict: false, collection: cleanName }));
+    genericMongoModels.set(cleanName, model);
+  }
+  return genericMongoModels.get(cleanName);
+}
+
+function parseTableNameFromSql(sql) {
+  if (!sql) return null;
+  const match = sql.match(/(?:from|into|update|delete\s+from)\s+([`"]?[\w_]+[`"]?)/i);
+  if (!match) return null;
+  return match[1].replace(/[`"]/g, "").toLowerCase();
+}
+
+function parseQueryFromSql(sql, params = []) {
+  const query = {};
+  if (!sql || !params) return query;
+
+  const whereMatch = sql.match(/where\s+([\s\S]+?)(?:order\s+by|limit|group\s+by|$)/i);
+  if (!whereMatch) return query;
+
+  const whereClause = whereMatch[1];
+  const conds = whereClause.split(/\s+and\s+/i);
+  let paramIdx = 0;
+
+  for (let cond of conds) {
+    cond = cond.trim();
+    const eqParam = cond.match(/^([`"]?[\w_]+[`"]?)\s*=\s*\?/i);
+    if (eqParam) {
+      const field = eqParam[1].replace(/[`"]/g, "");
+      if (paramIdx < params.length) {
+        query[field] = params[paramIdx++];
+      }
+      continue;
+    }
+    const eqLit = cond.match(/^([`"]?[\w_]+[`"]?)\s*=\s*['"]?(.*?)['"]?$/i);
+    if (eqLit) {
+      const field = eqLit[1].replace(/[`"]/g, "");
+      query[field] = eqLit[2];
+      continue;
+    }
+  }
+
+  return query;
+}
+
+function parseOrderFromSql(sql) {
+  if (!sql) return {};
+  const orderMatch = sql.match(/order\s+by\s+([\w_]+)(?:\s+(asc|desc))?/i);
+  if (!orderMatch) return {};
+  const field = orderMatch[1].replace(/[`"]/g, "");
+  const dir = orderMatch[2] && orderMatch[2].toLowerCase() === "desc" ? -1 : 1;
+  return { [field]: dir };
+}
+
+function parseLimitFromSql(sql, params = []) {
+  if (!sql) return 0;
+  const limitMatch = sql.match(/limit\s+(\?|\d+)/i);
+  if (!limitMatch) return 0;
+  if (limitMatch[1] === "?") {
+    const val = Number(params[params.length - 1]);
+    return !isNaN(val) && val > 0 ? val : 0;
+  }
+  const val = Number(limitMatch[1]);
+  return !isNaN(val) && val > 0 ? val : 0;
+}
+
+async function mongoGet(sql, params = []) {
+  if (!sql) return null;
+  const s = String(sql).toLowerCase();
+
+  try {
+    if (s.includes("idcard_users")) {
+      const uId = params[0];
+      const doc = await IdCardUser.findOne({ user_id: String(uId) });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("afk_users")) {
+      const uId = params[0];
+      const doc = await AfkUser.findOne({ user_id: String(uId) });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("sorting_users")) {
+      const uId = params[0];
+      const doc = await SortingUser.findOne({ user_id: String(uId) });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("menfess_anonmap")) {
+      const uId = params[0];
+      const doc = await MenfessAnonMap.findOne({ user_id: String(uId) });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("menfess_meta") || s.includes("meta_text")) {
+      const key = s.includes("menfess_last_id") ? "menfess_last_id" : params[0];
+      const doc = await MetaText.findOne({ key: String(key) });
+      return doc ? { value: doc.value } : null;
+    }
+    if (s.includes("streak_settings")) {
+      const gId = params[0];
+      const doc = await StreakSetting.findOne({ guild_id: String(gId) });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("streak_pairs")) {
+      const gId = params[0] ? String(params[0]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+
+      if (s.includes("where id = ?") || s.includes("where id=?")) {
+        query.id = params[0];
+      } else if (params.length >= 3 && String(params[1]) !== String(params[2])) {
+        const u1 = String(params[1]);
+        const u2 = String(params[2]);
+        query.$or = [
+          { user_one: u1, user_two: u2 },
+          { user_one: u2, user_two: u1 },
+        ];
+      } else if (params.length >= 2) {
+        const uId = String(params[1]);
+        query.$or = [{ user_one: uId }, { user_two: uId }];
+      }
+
+      if (s.includes("status = 'active'") || s.includes("status='active'")) {
+        query.status = "active";
+      } else if (s.includes("status = 'broken'") || s.includes("status='broken'")) {
+        query.status = "broken";
+      } else if (s.includes("status = 'warning'") || s.includes("status='warning'")) {
+        query.status = "warning";
+      }
+
+      const doc = await StreakPair.findOne(query).sort({ current_streak: -1 });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("streak_freeze_inventory")) {
+      const uId = params[0];
+      const doc = await StreakFreezeInventory.findOne({ user_id: String(uId) });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("tarot_users")) {
+      const uId = params[0];
+      const doc = await TarotUser.findOne({ user_id: String(uId) });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("mod_warnings")) {
+      const gId = params[0] ? String(params[0]) : null;
+      const uId = params[1] ? String(params[1]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+      if (uId) query.user_id = uId;
+      const doc = await ModWarning.findOne(query).sort({ created_at: -1 });
+      return doc ? doc.toObject() : null;
+    }
+    if (s.includes("faq_items")) {
+      const gId = params[0] ? String(params[0]) : null;
+      const id = params[1] !== undefined ? Number(params[1]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+      if (id !== null && !isNaN(id)) query.id = id;
+      const doc = await FaqItem.findOne(query).sort({ updated_at: -1 });
+      return doc ? doc.toObject() : null;
+    }
+
+    // Dynamic Fallback Engine for any unhandled single table query
+    const tableName = parseTableNameFromSql(sql);
+    if (tableName) {
+      const Model = getMongoModel(tableName);
+      if (Model) {
+        const query = parseQueryFromSql(sql, params);
+        const order = parseOrderFromSql(sql);
+        let q = Model.findOne(query);
+        if (Object.keys(order).length > 0) q = q.sort(order);
+        const doc = await q;
+        if (doc) return doc.toObject();
+      }
+    }
+  } catch (err) {
+    console.error("[MONGO GET ERROR]", err);
+  }
+  return null;
+}
+
+async function mongoAll(sql, params = []) {
+  if (!sql) return [];
+  const s = String(sql).toLowerCase();
+
+  try {
+    if (s.includes("afk_users")) {
+      const docs = await AfkUser.find().sort({ since: 1 });
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("sorting_users")) {
+      const docs = await SortingUser.find().sort({ at: -1 });
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("menfess_posts")) {
+      const docs = await MenfessPost.find().sort({ created_at: -1 });
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("tarot_users")) {
+      let sort = { total_reading: -1 };
+      if (s.includes("order by streak")) sort = { streak: -1 };
+      const limitParam = params.length > 0 ? Number(params[params.length - 1]) : 0;
+      const limit = !isNaN(limitParam) && limitParam > 0 ? limitParam : 10;
+      const docs = await TarotUser.find().sort(sort).limit(limit);
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("tarot_category_stats")) {
+      const uId = params[0];
+      const docs = await TarotCategoryStat.find({ user_id: String(uId) }).sort({ count: -1, category: 1 });
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("mod_warnings")) {
+      const gId = params[0] ? String(params[0]) : null;
+      const uId = params[1] ? String(params[1]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+      if (uId) query.user_id = uId;
+      const limitParam = params.length > 2 ? Number(params[2]) : 0;
+      const limit = !isNaN(limitParam) && limitParam > 0 ? limitParam : 15;
+      const docs = await ModWarning.find(query).sort({ created_at: -1 }).limit(limit);
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("streak_pairs")) {
+      const gId = params[0] ? String(params[0]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+
+      if (s.includes("user_one = ?") || s.includes("user_two = ?") || s.includes("user_one=?") || s.includes("user_two=?")) {
+        const uId = params[1] ? String(params[1]) : params[2] ? String(params[2]) : null;
+        if (uId) {
+          query.$or = [{ user_one: uId }, { user_two: uId }];
+        }
+      }
+
+      if (s.includes("status = 'broken'") || s.includes("status='broken'")) {
+        query.status = "broken";
+      } else if (s.includes("status in ('active', 'warning')") || s.includes("status in ('active','warning')") || s.includes("status in ('active', 'warning')")) {
+        query.status = { $in: ["active", "warning"] };
+      } else if (s.includes("status = 'active'") || s.includes("status='active'")) {
+        query.status = "active";
+      }
+
+      let sort = { current_streak: -1 };
+      if (s.includes("order by highest_streak")) {
+        sort = { highest_streak: -1 };
+      }
+
+      const docs = await StreakPair.find(query).sort(sort);
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("streak_logs")) {
+      let query = {};
+      if (s.includes("pair_id = ?") || s.includes("pair_id=?")) {
+        query.pair_id = params[0];
+      } else if (params[0]) {
+        query.guild_id = String(params[0]);
+      }
+      const docs = await StreakLog.find(query).sort({ timestamp: -1 }).limit(50);
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("faq_items")) {
+      const gId = params[0] ? String(params[0]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+      const limitParam = params.length > 1 ? Number(params[params.length - 1]) : 0;
+      const limit = !isNaN(limitParam) && limitParam > 0 ? limitParam : 25;
+      let sort = { updated_at: -1 };
+      if (s.includes("order by id")) sort = { id: 1 };
+      else if (s.includes("order by updated_at desc")) sort = { updated_at: -1 };
+      const docs = await FaqItem.find(query).sort(sort).limit(limit);
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("guess_number_scores")) {
+      const gId = params[0] ? String(params[0]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+      const limit = s.includes("limit") ? (Number(params[params.length - 1]) || 10) : 10;
+      const GNS = getMongoModel("guess_number_scores");
+      const docs = await GNS.find(query).sort({ wins: -1, best_attempts: 1, updated_at: 1 }).limit(limit);
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("giveaways") && !s.includes("giveaway_entries")) {
+      const gId = params[0] ? String(params[0]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+      if (s.includes("is_ended=0") || s.includes("is_ended = 0")) query.is_ended = 0;
+      const GW = getMongoModel("giveaways");
+      const docs = await GW.find(query).sort({ end_at: 1 });
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("giveaway_entries")) {
+      const giveawayId = params[0] !== undefined ? Number(params[0]) : null;
+      let query = {};
+      if (giveawayId !== null) query.giveaway_id = giveawayId;
+      const GE = getMongoModel("giveaway_entries");
+      let sort = {};
+      if (s.includes("order by joined_at")) sort = { joined_at: 1 };
+      const docs = await GE.find(query).sort(sort);
+      return docs.map((d) => d.toObject());
+    }
+    if (s.includes("timed_roles")) {
+      const now = params[0] !== undefined ? Number(params[0]) : Date.now();
+      const TR = getMongoModel("timed_roles");
+      let query = {};
+      if (s.includes("expire_at")) query.expire_at = { $lte: now };
+      if (params[0] && !s.includes("expire_at")) query.guild_id = String(params[0]);
+      const docs = await TR.find(query);
+      return docs.map((d) => d.toObject());
+    }
+
+    // ── Dynamic Fallback Engine for any unhandled SELECT … FROM table ──
+    const tableName = parseTableNameFromSql(sql);
+    if (tableName) {
+      const Model = getMongoModel(tableName);
+      if (Model) {
+        const query = parseQueryFromSql(sql, params);
+        const order = parseOrderFromSql(sql);
+
+        let limit = 0;
+        let skip = 0;
+
+        if (s.includes("limit ? offset ?")) {
+          limit = Number(params[params.length - 2]) || 0;
+          skip = Number(params[params.length - 1]) || 0;
+        } else if (s.includes("limit ?")) {
+          limit = Number(params[params.length - 1]) || 0;
+        }
+
+        let q = Model.find(query);
+        if (Object.keys(order).length > 0) q = q.sort(order);
+        if (skip > 0) q = q.skip(skip);
+        if (limit > 0) q = q.limit(limit);
+
+        const docs = await q;
+        return docs.map((d) => d.toObject());
+      }
+    }
+  } catch (err) {
+    console.error("[MONGO ALL ERROR]", err);
+  }
+  return [];
+}
+
+async function mongoRun(sql, params = []) {
+  if (!sql) return { changes: 0, lastID: Date.now() };
+  try {
+    await syncToMongo(sql, params);
+    return { changes: 1, lastID: Date.now() };
+  } catch (err) {
+    console.error("[MONGO RUN ERROR]", err);
+    return { changes: 0, lastID: Date.now() };
+  }
+}
+
 async function safeGet(sql, params = []) {
-  try { return await dbGet(sql, params); } catch (e) { console.error(e); return null; }
+  try { return await mongoGet(sql, params); } catch (e) { console.error(e); return null; }
 }
 
 async function safeAll(sql, params = []) {
-  try { return await dbAll(sql, params); } catch (e) { console.error(e); return []; }
+  try { return await mongoAll(sql, params); } catch (e) { console.error(e); return []; }
 }
 
 async function safeRun(sql, params = []) {
   try {
-    // Tambahkan return di sini agar objek { changes, lastID } bisa dipakai
-    return await dbRun(sql, params);
+    return await mongoRun(sql, params);
   } catch (e) {
-    console.error("[DB RUN ERROR]", e);
-    return { changes: 0, lastID: null };
+    console.error("[SAFE RUN ERROR]", e);
+    return { changes: 0, lastID: Date.now() };
+  }
+}
+
+async function safeExec(sql) {
+  return true;
+}
+
+async function syncToMongo(sql, params = []) {
+  if (!sql || typeof sql !== "string") return;
+  const s = sql.trim().toLowerCase();
+
+  try {
+    // 1. Menfess Posts
+    if (s.includes("menfess_posts")) {
+      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const msgId = params[0];
+        const chId = params[1];
+        const createdAt = params[2] || Date.now();
+        if (msgId) {
+          await MenfessPost.updateOne(
+            { message_id: String(msgId) },
+            { $set: { channel_id: String(chId), created_at: Number(createdAt) } },
+            { upsert: true }
+          );
+        }
+      }
+    }
+
+    // 2. Menfess Anon Map
+    if (s.includes("menfess_anonmap")) {
+      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const uId = params[0];
+        const label = params[1];
+        if (uId) {
+          await MenfessAnonMap.updateOne(
+            { user_id: String(uId) },
+            { $set: { anon_label: String(label) } },
+            { upsert: true }
+          );
+        }
+      }
+    }
+
+    // 3. Sorting Users
+    if (s.includes("sorting_users")) {
+      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const uId = params[0];
+        const choice = params[1];
+        const at = params[2] || Date.now();
+        if (uId) {
+          await SortingUser.updateOne(
+            { user_id: String(uId) },
+            { $set: { choice: String(choice), at: Number(at) } },
+            { upsert: true }
+          );
+        }
+      }
+    }
+
+    // 4. ID Card Users
+    if (s.includes("idcard_users")) {
+      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const uId = params[0];
+        if (uId) {
+          await IdCardUser.updateOne(
+            { user_id: String(uId) },
+            {
+              $set: {
+                number: String(params[1] || ""),
+                name: String(params[2] || ""),
+                gender: String(params[3] || ""),
+                domisili: String(params[4] || ""),
+                hobi: String(params[5] || ""),
+                status: String(params[6] || ""),
+                theme: String(params[7] || ""),
+                created_at: Number(params[8] || Date.now()),
+                updated_at: Number(params[9] || Date.now()),
+              },
+            },
+            { upsert: true }
+          );
+        }
+      }
+    }
+
+    // 5. AFK Users
+    if (s.includes("afk_users")) {
+      if (s.includes("delete")) {
+        const uId = params[0];
+        if (uId) await AfkUser.deleteOne({ user_id: String(uId) });
+      } else if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const uId = params[0];
+        const reason = params[1];
+        const since = params[2] || Date.now();
+        if (uId) {
+          await AfkUser.updateOne(
+            { user_id: String(uId) },
+            { $set: { reason: String(reason || ""), since: Number(since) } },
+            { upsert: true }
+          );
+        }
+      }
+    }
+
+    // 6. Meta Text & Menfess Meta
+    if (s.includes("menfess_meta") || s.includes("meta_text")) {
+      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const key = s.includes("menfess_last_id") ? "menfess_last_id" : params[0];
+        const val = s.includes("menfess_last_id") ? params[0] : params[1];
+        if (key) {
+          await MetaText.updateOne(
+            { key: String(key) },
+            { $set: { value: val } },
+            { upsert: true }
+          );
+        }
+      }
+    }
+
+    // 7. Tarot Users & Stats
+    if (s.includes("tarot_users")) {
+      if (s.includes("insert")) {
+        const uId = params[0];
+        const username = params[1];
+        if (uId) {
+          await TarotUser.updateOne(
+            { user_id: String(uId) },
+            {
+              $setOnInsert: {
+                username: String(username || ""),
+                total_reading: 0,
+                last_reading_date: null,
+                streak: 0,
+                favorite_category: "—",
+                last_card: "—",
+                rarest_card: "—",
+                cards_collected: "",
+                streak_recovery_left: 3,
+                last_streak_before_break: 0
+              }
+            },
+            { upsert: true }
+          );
+        }
+      } else if (s.includes("update")) {
+        if (s.includes("favorite_category = ?")) {
+          const fav = params[0];
+          const uId = params[1];
+          await TarotUser.updateOne({ user_id: String(uId) }, { $set: { favorite_category: String(fav) } });
+        } else if (s.includes("total_reading = total_reading + 1")) {
+          const [username, todayStr, newStreak, cardName, rarest, collectedStr, saveStreak, uId] = params;
+          await TarotUser.updateOne(
+            { user_id: String(uId) },
+            {
+              $set: {
+                username: String(username),
+                last_reading_date: String(todayStr),
+                streak: Number(newStreak),
+                last_card: String(cardName),
+                rarest_card: String(rarest),
+                cards_collected: String(collectedStr),
+                last_streak_before_break: Number(saveStreak)
+              },
+              $inc: { total_reading: 1 }
+            }
+          );
+        } else if (s.includes("streak = ?") && s.includes("streak_recovery_left = ?")) {
+          const [newStreak, nextRec, uId] = params;
+          await TarotUser.updateOne(
+            { user_id: String(uId) },
+            {
+              $set: {
+                streak: Number(newStreak),
+                streak_recovery_left: Number(nextRec),
+                last_streak_before_break: 0
+              }
+            }
+          );
+        }
+      }
+    }
+    if (s.includes("tarot_category_stats")) {
+      const uId = params[0];
+      const category = params[1];
+      if (uId && category) {
+        await TarotCategoryStat.updateOne(
+          { user_id: String(uId), category: String(category) },
+          { $inc: { count: 1 } },
+          { upsert: true }
+        );
+      }
+    }
+    if (s.includes("mod_warnings")) {
+      if (s.includes("insert")) {
+        const [gId, uId, modId, reason, createdAt] = params;
+        const count = await ModWarning.countDocuments({ guild_id: String(gId) });
+        await ModWarning.create({
+          id: count + 1,
+          guild_id: String(gId),
+          user_id: String(uId),
+          moderator_id: String(modId),
+          reason: String(reason || ""),
+          created_at: Number(createdAt || Date.now())
+        });
+      } else if (s.includes("delete")) {
+        if (s.includes("id=?") || s.includes("id = ?")) {
+          const [gId, warnId] = params;
+          await ModWarning.deleteOne({ guild_id: String(gId), id: Number(warnId) });
+        } else {
+          const [gId, uId] = params;
+          await ModWarning.deleteMany({ guild_id: String(gId), user_id: String(uId) });
+        }
+      }
+    }
+
+    // autoresponses CRUD
+    if (s.includes("autoresponses")) {
+      const AR = getMongoModel("autoresponses");
+      if (s.includes("delete")) {
+        // DELETE FROM autoresponses WHERE id=? AND guild_id=?
+        const idParam = params[0];
+        const gId = params[1];
+        if (idParam && gId) {
+          await AR.deleteOne({ id: Number(idParam), guild_id: String(gId) });
+        } else if (gId) {
+          await AR.deleteMany({ guild_id: String(gId) });
+        }
+      } else if (s.includes("update") && (s.includes("is_enabled=0") || s.includes("is_enabled = 0"))) {
+        // UPDATE autoresponses SET is_enabled=0 WHERE id=? AND guild_id=?
+        const [arId, gId] = params;
+        if (arId && gId) await AR.updateOne({ id: Number(arId), guild_id: String(gId) }, { $set: { is_enabled: 0 } });
+      } else if (s.includes("update") && (s.includes("is_enabled=1") || s.includes("is_enabled = 1"))) {
+        // UPDATE autoresponses SET is_enabled=1 WHERE id=? AND guild_id=?
+        const [arId, gId] = params;
+        if (arId && gId) await AR.updateOne({ id: Number(arId), guild_id: String(gId) }, { $set: { is_enabled: 1 } });
+      } else if (s.includes("insert")) {
+        // INSERT INTO autoresponses (guild_id, trigger_text, response_text, ...) VALUES (...)
+        const fieldsMatch = s.match(/\((.*?)\)\s*values/i);
+        if (fieldsMatch) {
+          const fields = fieldsMatch[1].split(",").map(f => f.trim().replace(/[`"]/g, ""));
+          const docObj = {};
+          fields.forEach((f, idx) => { if (idx < params.length) docObj[f] = params[idx]; });
+          const count = await AR.countDocuments({ guild_id: String(docObj.guild_id || "") });
+          docObj.id = count + 1;
+          await AR.create(docObj);
+        }
+      }
+    }
+
+    // guess_number_scores CRUD (upsert with $inc wins, $min best_attempts)
+    if (s.includes("guess_number_scores")) {
+      if (s.includes("insert") || s.includes("update")) {
+        const [gId, uId, wins, bestAttempts, updatedAt] = params;
+        const GNS = getMongoModel("guess_number_scores");
+        await GNS.updateOne(
+          { guild_id: String(gId), user_id: String(uId) },
+          {
+            $inc: { wins: 1 },
+            $min: { best_attempts: Number(bestAttempts) },
+            $set: { updated_at: Number(updatedAt || Date.now()) },
+            $setOnInsert: { guild_id: String(gId), user_id: String(uId) }
+          },
+          { upsert: true }
+        );
+      }
+    }
+
+    // faq_items CRUD
+    if (s.includes("faq_items")) {
+      if (s.includes("insert")) {
+        // INSERT INTO faq_items (guild_id, title, content, tags, created_by, created_at, updated_at)
+        const [gId, title, content, tags, createdBy, createdAt, updatedAt] = params;
+        const count = await FaqItem.countDocuments({ guild_id: String(gId) });
+        await FaqItem.create({
+          id: count + 1,
+          guild_id: String(gId),
+          title: String(title || ""),
+          content: String(content || ""),
+          tags: String(tags || ""),
+          created_by: createdBy ? String(createdBy) : null,
+          created_at: Number(createdAt || Date.now()),
+          updated_at: Number(updatedAt || Date.now())
+        });
+      } else if (s.includes("update")) {
+        // UPDATE faq_items SET title=?, content=?, tags=?, updated_at=? WHERE guild_id=? AND id=?
+        const [title, content, tags, updatedAt, gId, id] = params;
+        await FaqItem.updateOne(
+          { guild_id: String(gId), id: Number(id) },
+          { $set: { title: String(title || ""), content: String(content || ""), tags: String(tags || ""), updated_at: Number(updatedAt || Date.now()) } }
+        );
+      } else if (s.includes("delete")) {
+        // DELETE FROM faq_items WHERE guild_id=? AND id=?
+        const [gId, id] = params;
+        await FaqItem.deleteOne({ guild_id: String(gId), id: Number(id) });
+      }
+    }
+
+    // Dynamic Fallback Engine for any unhandled write operation
+    const tableName = parseTableNameFromSql(sql);
+    if (tableName) {
+      const Model = getMongoModel(tableName);
+      if (Model) {
+        const lower = sql.toLowerCase();
+        if (lower.includes("insert")) {
+          const fieldsMatch = sql.match(/\((.*?)\)\s*values/i);
+          if (fieldsMatch) {
+            const fields = fieldsMatch[1].split(",").map(f => f.trim().replace(/[`"]/g, ""));
+            const docObj = {};
+            fields.forEach((f, idx) => {
+              if (idx < params.length) docObj[f] = params[idx];
+            });
+            const keyField = fields[0];
+            if (keyField && docObj[keyField] !== undefined) {
+              await Model.updateOne({ [keyField]: docObj[keyField] }, { $set: docObj }, { upsert: true });
+            } else {
+              await Model.create(docObj);
+            }
+          }
+        } else if (lower.includes("update")) {
+          const query = parseQueryFromSql(sql, params);
+          if (Object.keys(query).length > 0) {
+            await Model.updateMany(query, { $set: { updated_at: Date.now() } }).catch(() => { });
+          }
+        } else if (lower.includes("delete")) {
+          const query = parseQueryFromSql(sql, params);
+          if (Object.keys(query).length > 0) {
+            await Model.deleteMany(query);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[MONGO SYNC ERROR]", err);
   }
 }
 
@@ -678,19 +1329,24 @@ function startOwnerDmBackupSchedule(discordClient) {
 // MENFESS ID HELPER
 // =======================
 async function nextMenfessId() {
-  const row = await safeGet(
-    `SELECT value FROM menfess_meta WHERE key='menfess_last_id'`
-  );
-
-  const current = Number(row?.value || 0);
-  const next = current + 1;
-
-  await safeRun(
-    `UPDATE menfess_meta SET value=? WHERE key='menfess_last_id'`,
-    [next]
-  );
-
-  return next;
+  try {
+    let doc = await MetaText.findOne({ key: "menfess_last_id" });
+    if (!doc) {
+      const row = await safeGet(`SELECT value FROM menfess_meta WHERE key='menfess_last_id'`);
+      doc = { value: Number(row?.value || 800) };
+    }
+    const current = Number(doc?.value || 800);
+    const next = current + 1;
+    await MetaText.updateOne(
+      { key: "menfess_last_id" },
+      { $set: { value: next } },
+      { upsert: true }
+    );
+    await safeRun(`UPDATE menfess_meta SET value=? WHERE key='menfess_last_id'`, [next]).catch(() => { });
+    return next;
+  } catch {
+    return 801;
+  }
 }
 
 // ===================== DISCORD CLIENT =====================
@@ -1109,79 +1765,91 @@ function parseDurationToMs(input) {
 }
 
 async function createGiveaway({ guildId, channelId, hostId, prize, winners, endAt }) {
-  const r = await safeRun(
-    `INSERT INTO giveaways (guild_id, channel_id, prize, winners, end_at, host_id, is_ended)
-     VALUES (?,?,?,?,?,?,0)`,
-    [String(guildId), String(channelId), safeText(prize, 140), Number(winners), Number(endAt), String(hostId)]
-  );
-
-  // ✅ sqlite3 => lastID, better-sqlite3 => lastInsertRowid
-  return r?.lastID ?? r?.lastInsertRowid ?? null;
+  const id = Date.now();
+  const GW = getMongoModel("giveaways");
+  await GW.create({
+    id,
+    guild_id: String(guildId),
+    channel_id: String(channelId),
+    prize: String(prize),
+    winners: Number(winners),
+    end_at: Number(endAt),
+    host_id: String(hostId),
+    is_ended: 0
+  });
+  return id;
 }
-
 
 async function getGiveaway(id) {
-  return await safeGet(`SELECT * FROM giveaways WHERE id=?`, [Number(id)]);
+  const GW = getMongoModel("giveaways");
+  const doc = await GW.findOne({ id: Number(id) });
+  return doc ? doc.toObject() : null;
 }
+
 async function setGiveawayMessage(id, messageId) {
-  await safeRun(`UPDATE giveaways SET message_id=? WHERE id=?`, [String(messageId), Number(id)]);
+  const GW = getMongoModel("giveaways");
+  await GW.updateOne({ id: Number(id) }, { $set: { message_id: String(messageId) } });
 }
+
 async function joinGiveaway(giveawayId, userId) {
-  await safeRun(
-    `INSERT INTO giveaway_entries (giveaway_id, user_id, joined_at)
-     VALUES (?,?,?)
-     ON CONFLICT(giveaway_id, user_id) DO NOTHING`,
-    [Number(giveawayId), String(userId), Date.now()]
+  const GE = getMongoModel("giveaway_entries");
+  await GE.updateOne(
+    { giveaway_id: Number(giveawayId), user_id: String(userId) },
+    { $setOnInsert: { giveaway_id: Number(giveawayId), user_id: String(userId), joined_at: Date.now() } },
+    { upsert: true }
   );
 }
+
 async function leaveGiveaway(giveawayId, userId) {
-  await safeRun(`DELETE FROM giveaway_entries WHERE giveaway_id=? AND user_id=?`, [Number(giveawayId), String(userId)]);
+  const GE = getMongoModel("giveaway_entries");
+  await GE.deleteOne({ giveaway_id: Number(giveawayId), user_id: String(userId) });
 }
+
 async function countGiveawayEntries(giveawayId) {
-  const r = await safeGet(`SELECT COUNT(*) AS n FROM giveaway_entries WHERE giveaway_id=?`, [Number(giveawayId)]);
-  return Number(r?.n || 0);
+  const GE = getMongoModel("giveaway_entries");
+  return await GE.countDocuments({ giveaway_id: Number(giveawayId) });
 }
+
 async function listGiveawayEntries(giveawayId) {
-  return await safeAll(
-    `SELECT user_id, joined_at
-     FROM giveaway_entries
-     WHERE giveaway_id=?
-     ORDER BY joined_at ASC`,
-    [Number(giveawayId)]
-  );
+  const GE = getMongoModel("giveaway_entries");
+  const docs = await GE.find({ giveaway_id: Number(giveawayId) }).sort({ joined_at: 1 });
+  return docs.map(d => d.toObject());
 }
+
 async function pickGiveawayWinners(giveawayId, winnersCount) {
-  const rows = await safeAll(`SELECT user_id FROM giveaway_entries WHERE giveaway_id=?`, [Number(giveawayId)]);
-  if (!rows.length) return [];
+  const GE = getMongoModel("giveaway_entries");
+  const docs = await GE.find({ giveaway_id: Number(giveawayId) });
+  if (!docs.length) return [];
 
-  let pool = rows.map(r => r.user_id);
+  let pool = docs.map(r => r.user_id);
   const winners = [];
-
-  // Ambil pemenang sebanyak winnersCount atau maksimal isi peserta yang ada
   const count = Math.min(pool.length, Number(winnersCount));
 
   for (let i = 0; i < count; i++) {
     const index = crypto.randomInt(0, pool.length);
     winners.push(pool[index]);
-    pool.splice(index, 1); // Hapus agar tidak menang lagi di putaran ini
+    pool.splice(index, 1);
   }
 
   return winners;
 }
+
 async function endGiveaway(giveawayId) {
-  await safeRun(`UPDATE giveaways SET is_ended=1, ended_at=? WHERE id=?`, [Date.now(), Number(giveawayId)]);
+  const GW = getMongoModel("giveaways");
+  await GW.updateOne({ id: Number(giveawayId) }, { $set: { is_ended: 1, ended_at: Date.now() } });
 }
+
 async function listActiveGiveaways(guildId) {
-  return await safeAll(
-    `SELECT * FROM giveaways
-     WHERE guild_id=? AND is_ended=0
-     ORDER BY end_at ASC`,
-    [String(guildId)]
-  );
+  const GW = getMongoModel("giveaways");
+  const docs = await GW.find({ guild_id: String(guildId), is_ended: 0 }).sort({ end_at: 1 });
+  return docs.map(d => d.toObject());
 }
+
 async function deleteGiveaway(giveawayId) {
-  await safeRun(`DELETE FROM giveaway_entries WHERE giveaway_id=?`, [Number(giveawayId)]);
-  await safeRun(`DELETE FROM giveaways WHERE id=?`, [Number(giveawayId)]);
+  const GE = getMongoModel("giveaway_entries");
+  const GW = getMongoModel("giveaways");
+  await GE.deleteMany({ giveaway_id: Number(giveawayId) });
+  await GW.deleteOne({ id: Number(giveawayId) });
 }
 async function getHouseCardPost(userId) {
   return await safeGet(`SELECT * FROM house_cards WHERE user_id=?`, [String(userId)]);
@@ -1338,56 +2006,108 @@ function todDisplayCode(question) {
   return `C-${hash.toString(36).toUpperCase().slice(-3).padStart(3, "0")}`;
 }
 
+// ── Component v2 colour accents (hex string for Container accent)
+const TOD_COLOR_PENDING = 0x5865f2; // blurple
+const TOD_COLOR_DONE = 0x57f287; // green
+const TOD_COLOR_FAIL = 0xed4245; // red
+const TOD_COLOR_PANEL = 0x9b59b6; // purple
+
+/**
+ * Build a Component v2 Container for an active / resolved TOD question.
+ * Returns { components, flags } ready to spread into channel.send() / interaction.update().
+ */
 function todCard(question, challengerId, targetId, status = "pending") {
-  const embed = new EmbedBuilder()
-    .setTitle(question.type === "dare" ? "🎲 Dare" : "🕯️ Truth")
-    .setDescription(`**${question.question}**`)
-    .setFooter({ text: "Mystral • Truth or Dare" })
-    .setTimestamp();
+  const isDare = question.type === "dare";
+  const typeIcon = isDare ? "🎲" : "🕯️";
+  const typeName = isDare ? "Dare" : "Truth";
+  const isDuel = targetId && targetId !== challengerId && targetId !== "self";
+
+  let accentColor, headerLine, resultLine = null;
 
   if (status === "pending") {
-    embed.setColor(0x1f1b24);
-    if (targetId && targetId !== challengerId && targetId !== "self") {
-      embed.addFields(
-        { name: "Challenger", value: `<@${challengerId}>`, inline: true },
-        { name: "Target", value: `<@${targetId}>`, inline: true }
-      );
-    } else {
-      embed.addFields({ name: "Player", value: `<@${challengerId}>`, inline: true });
-    }
-    embed.addFields({
-      name: "Info",
-      value: `\`${String(question.type).toUpperCase()}\` • \`${question.rating}\` • \`${todDisplayCode(question)}\``,
-      inline: false
-    });
+    accentColor = TOD_COLOR_PENDING;
+    headerLine = `## ${typeIcon} ${typeName}`;
   } else if (status === "done") {
-    embed.setColor(0x2ecc71); // Green
-    embed.setTitle(`🟢 TOD Selesai - ${question.type === "dare" ? "Dare" : "Truth"}`);
-    embed.setDescription(`**${question.question}**\n\n✅ <@${targetId}> berhasil menyelesaikan tantangan ini!`);
-  } else if (status === "pass") {
-    embed.setColor(0xe74c3c); // Red
-    embed.setTitle(`🔴 TOD Gagal - ${question.type === "dare" ? "Dare" : "Truth"}`);
-    embed.setDescription(`**${question.question}**\n\n❌ <@${targetId}> menyerah/gagal menyelesaikan tantangan ini!`);
-  }
-
-  return embed;
-}
-
-function todPanelCard(challengerId, targetId) {
-  const embed = new EmbedBuilder()
-    .setTitle("⚔️ Truth or Dare Duel")
-    .setColor(0x1f1b24)
-    .setFooter({ text: "Mystral • Truth or Dare" })
-    .setTimestamp();
-
-  if (targetId && targetId !== challengerId && targetId !== "self") {
-    embed.setDescription(`<@${challengerId}> menantang <@${targetId}> untuk bermain Truth or Dare! \n\nSilakan pilih kategori di bawah.`);
+    accentColor = TOD_COLOR_DONE;
+    headerLine = `## 🟢 TOD Selesai — ${typeName}`;
+    resultLine = `✅ <@${targetId}> berhasil menyelesaikan tantangan ini!`;
   } else {
-    embed.setDescription(`Silakan pilih kategori di bawah untuk memulai permainan Truth or Dare! 🎲🕯️`);
+    accentColor = TOD_COLOR_FAIL;
+    headerLine = `## 🔴 TOD Gagal — ${typeName}`;
+    resultLine = `❌ <@${targetId}> menyerah/gagal menyelesaikan tantangan ini!`;
   }
-  return embed;
+
+  const container = new ContainerBuilder().setAccentColor(accentColor);
+
+  // Header
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(headerLine)
+  );
+
+  // Separator
+  container.addSeparatorComponents(
+    new SeparatorBuilder().setSpacing(1)
+  );
+
+  // Question body
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`> ${question.question}`)
+  );
+
+  // Result line (done / pass only)
+  if (resultLine) {
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(resultLine));
+  }
+
+  // Player info + meta (pending only)
+  if (status === "pending") {
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    const meta = isDuel
+      ? `👤 **Challenger:** <@${challengerId}>  •  🎯 **Target:** <@${targetId}>`
+      : `👤 **Player:** <@${challengerId}>`;
+    const info = `\`${String(question.type).toUpperCase()}\` • \`${question.rating}\` • \`${todDisplayCode(question)}\``;
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`${meta}\n${info}`)
+    );
+  }
+
+  // Footer
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`-# Mystral • Truth or Dare`)
+  );
+
+  return container;
 }
 
+/**
+ * Build a Component v2 Container for the category-select panel.
+ * Returns the ContainerBuilder (callers add buttons in ActionRow).
+ */
+function todPanelCard(challengerId, targetId) {
+  const isDuel = targetId && targetId !== challengerId && targetId !== "self";
+
+  const desc = isDuel
+    ? `<@${challengerId}> menantang <@${targetId}> untuk bermain Truth or Dare!\nSilakan pilih kategori di bawah.`
+    : `Silakan pilih kategori di bawah untuk memulai permainan Truth or Dare! 🎲🕯️`;
+
+  const container = new ContainerBuilder().setAccentColor(TOD_COLOR_PANEL);
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## ⚔️ Truth or Dare`)
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(desc)
+  );
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`-# Mystral • Truth or Dare`)
+  );
+  return container;
+}
+
+/** Row of Truth / Dare / Random buttons */
 function todRow(challengerId, targetId) {
   const target = targetId || "self";
   return new ActionRowBuilder().addComponents(
@@ -1397,6 +2117,7 @@ function todRow(challengerId, targetId) {
   );
 }
 
+/** Row of Done / Pass buttons */
 function todResponseRow(targetId, questionId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`tod:done:${targetId}:${questionId}`).setLabel("Selesai (Done)").setStyle(ButtonStyle.Success).setEmoji("🟢"),
@@ -1404,11 +2125,12 @@ function todResponseRow(targetId, questionId) {
   );
 }
 
+/** Helper: send a TOD question card (Component v2) */
 async function sendTodQuestion(channel, question, challengerId, targetId) {
   const target = targetId || challengerId;
   return channel.send({
-    embeds: [todCard(question, challengerId, target)],
-    components: [todResponseRow(target, question.id)],
+    components: [todCard(question, challengerId, target), todResponseRow(target, question.id)],
+    flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
   });
 }
@@ -1736,29 +2458,54 @@ function formatIdDate(ms) {
   }
 }
 
-// ===================== WELCOME =====================
+const LINK_STAFF = "https://discord.com/channels/1251131422115106876/1456705988337078303/1527315806499901531";
+
 const WELCOME_MESSAGES = [
-  (m, g) => `**🌙 Welcome to ${g}, ${m}!**\nSemoga kamu betah di sini, menemukan teman baru, dan menikmati setiap momen bersama para Mystralians. 🤍`,
-  (m, g) => `**✨ Halo ${m}, selamat datang di ${g}!**\nTerima kasih sudah bergabung. Semoga District ini menjadi tempat yang nyaman untukmu. 🌿`,
-  (m, g) => `**🤍 Welcome aboard, ${m}!**\nKami senang kamu menjadi bagian dari Mystral District. Selamat menikmati komunitas ini bersama para Mystralians.`,
-  (m, g) => `**🌿 Welcome to ${g}, ${m}!**\nSemoga harimu lebih menyenangkan bersama komunitas yang hangat dan ramah di MYSTRAL.`,
-  (m, g) => `**🌌 Welcome to ${g}, ${m}!**\nJangan ragu untuk mengobrol, bergabung di voice, atau sekadar menikmati suasana komunitas. ✨`,
-  (m, g) => `**🌙 Hai ${m}, selamat datang di Mystral District!**\nSemoga kamu menemukan banyak cerita, teman baru, dan pengalaman seru di sini. 🤍`,
-  (m, g) => `**✨ Welcome, ${m}!**\nTerima kasih telah bergabung dengan ${g}. Semoga kamu merasa nyaman menjadi bagian dari para Mystralians.`,
-  (m, g) => `**🤝 Halo ${m}, welcome to ${g}!**\nNikmati setiap percakapan, event, dan momen yang akan kamu temukan di komunitas ini.`,
-  (m, g) => `**🌠 Selamat datang di ${g}, ${m}!**\nSemoga langkah pertamamu di MYSTRAL menjadi awal dari banyak kenangan yang menyenangkan.`,
-  (m, g) => `**📍 Welcome to ${g}, ${m}!**\nLuangkan waktumu sesukamu, berkenalan dengan member lain, dan nikmati setiap perjalananmu di sini.`,
-  (m, g) => `**🌙 Senang melihatmu bergabung, ${m}!**\nSemoga Mystral District menjadi tempat yang selalu membuatmu merasa diterima. 🤍`,
-  (m, g) => `**💫 Halo ${m}, welcome to ${g}!**\nSemoga kamu menemukan komunitas yang positif, hangat, dan penuh cerita baru.`,
-  (m, g) => `**✨ Selamat datang di ${g}, ${m}!**\nSemoga setiap hari yang kamu habiskan di MYSTRAL membawa pengalaman yang menyenangkan.`,
-  (m, g) => `**🌿 Welcome, ${m}!**\nTerima kasih telah menjadi bagian dari Mystralians. Semoga kamu betah dan menikmati komunitas ini.`,
-  (m, g) => `**🤍 Halo ${m}, selamat datang di ${g}!**\nSemoga kamu selalu menemukan hal-hal baik dan orang-orang hebat selama berada di MYSTRAL.`,
-  (m, g) => `**🌌 Welcome to Mystral District, ${m}!**\nKami senang menyambutmu di komunitas ini. Selamat menikmati perjalanan barumu bersama kami. ✨`,
-  (m, g) => `**🌙 Welcome, ${m}!**\nSemoga District ini menjadi tempat untuk berbagi cerita, membangun pertemanan, dan menciptakan banyak momen berharga.`,
-  (m, g) => `**✨ Halo ${m}, senang bertemu denganmu!**\nSemoga kamu menikmati setiap fitur dan aktivitas yang tersedia di ${g}.`,
-  (m, g) => `**🤝 Selamat datang di ${g}, ${m}!**\nTerima kasih telah bergabung. Semoga kamu merasa seperti di rumah bersama para Mystralians. 🤍`,
-  (m, g) => `**🌠 Welcome to ${g}, ${m}!**\nSemoga perjalananmu di MYSTRAL dipenuhi teman baru, pengalaman baru, dan banyak kenangan indah. 🌙`,
+  (m, g) => `**🌙 Welcome to ${g}, ${m}!** 🤍\nSemoga betah ya! Cek <#1251131422908092572> & intip info open staff [di sini](${LINK_STAFF}). 🎀`,
+  (m, g) => `**✨ Halo ${m}, welcome!** 🌿\n*Enjoy your stay!* Jangan lupa baca <#1251131422908092572> dan cek loker staff kita [di sini](${LINK_STAFF}). 🌸`,
+  (m, g) => `**🤍 Welcome aboard, ${m}!** 🫧\nSenang kamu bergabung! Mampir ke <#1251131422908092572> yuk, kita juga lagi open staff lho [di sini](${LINK_STAFF}). 🩰`,
+  (m, g) => `**🌿 Welcome to ${g}, ${m}!** ☁️\nSemoga harimu seru! Cek <#1251131422908092572> dulu ya, kalau minat jadi staff bisa klik [di sini](${LINK_STAFF}). 🌷`,
+  (m, g) => `**🌌 Welcome, ${m}!** ✨\nSelamat bergabung di Mystral! Pastikan baca <#1251131422908092572> & cek info rekrutmen staff [di sini](${LINK_STAFF}). 🌙`,
+  (m, g) => `**🌙 Hai ${m}, selamat datang di Mystral District!** 🤍\nMari berteman! Cek <#1251131422908092572> sebentar & intip pendaftaran staff [di sini](${LINK_STAFF}). 🎀`,
+  (m, g) => `**✨ Welcome to ${g}, ${m}!** 🌸\nSemoga nyaman di sini! Yuk baca <#1251131422908092572> dan barangkali tertarik jadi staff, cek [di sini](${LINK_STAFF}). ☁️`,
+  (m, g) => `**🤝 Halo ${m}, welcome!** 🫧\nNikmati waktumu di ${g}. Jangan lupa mampir ke <#1251131422908092572> & cek open staff kita [di tautan ini](${LINK_STAFF}). 🩰`,
+  (m, g) => `**🌠 Selamat datang di ${g}, ${m}!** 🌷\nSemoga betah! Cek <#1251131422908092572> dulu yuk, kalau mau bantu komunitas, daftar staff [di sini](${LINK_STAFF}). 🤍`,
+  (m, g) => `**📍 Welcome to ${g}, ${m}!** ☁️\n*Make yourself at home!* Baca <#1251131422908092572> ya, dan cek pendaftaran staff kita [di sini](${LINK_STAFF}). 🌸`,
+  (m, g) => `**🌙 Senang melihatmu bergabung, ${m}!** 🤍\nSelamat datang! Cek <#1251131422908092572> sebentar & lihat info open staff [di sini](${LINK_STAFF}). 🎀`,
+  (m, g) => `**💫 Halo ${m}, welcome to ${g}!** 🌿\nSemoga harimu menyenangkan! Jangan lupa baca <#1251131422908092572> dan cek loker staff [di sini](${LINK_STAFF}). 🩰`,
+  (m, g) => `**✨ Selamat datang di ${g}, ${m}!** 🫧\n*Enjoy the vibes!* Mampir ke <#1251131422908092572> yuk, kita juga lagi cari staff lho [di sini](${LINK_STAFF}). 🌷`,
+  (m, g) => `**🌿 Welcome, ${m}!** ☁️\nTerima kasih sudah join! Cek <#1251131422908092572> dulu ya, kalau minat jadi staff bisa intip [di sini](${LINK_STAFF}). 🌸`,
+  (m, g) => `**🤍 Halo ${m}, selamat datang!** ✨\nSemoga betah di ${g}! Pastikan baca <#1251131422908092572> & cek info rekrutmen staff [di sini](${LINK_STAFF}). 🌙`,
+  (m, g) => `**🌌 Welcome to Mystral District, ${m}!** 🤍\nSenang menyambutmu! Mari baca <#1251131422908092572> & cek pendaftaran staff kita [di sini](${LINK_STAFF}). 🎀`,
+  (m, g) => `**🌙 Welcome to ${g}, ${m}!** 🌸\nSemoga dapat teman baru! Yuk baca <#1251131422908092572> dan barangkali tertarik jadi staff, intip [di sini](${LINK_STAFF}). ☁️`,
+  (m, g) => `**✨ Halo ${m}, senang bertemu denganmu!** 🫧\nNikmati obrolan di sini. Jangan lupa mampir ke <#1251131422908092572> & cek open staff [di sini](${LINK_STAFF}). 🩰`,
+  (m, g) => `**🤝 Selamat datang di ${g}, ${m}!** 🌷\nSemoga nyaman! Cek <#1251131422908092572> dulu yuk, kalau mau bantu komunitas, daftar staff [di sini](${LINK_STAFF}). 🤍`,
+  (m, g) => `**🌠 Welcome, ${m}!** ☁️\n*Enjoy your stay* di ${g}! Baca <#1251131422908092572> ya, dan cek pendaftaran staff kita [di tautan ini](${LINK_STAFF}). 🌸`
 ];
+
+// // ===================== WELCOME =====================
+// const WELCOME_MESSAGES = [
+//   (m, g) => `**🌙 Welcome to ${g}, ${m}!**\nSemoga kamu betah di sini, menemukan teman baru, dan menikmati setiap momen bersama para Mystralians. 🤍`,
+//   (m, g) => `**✨ Halo ${m}, selamat datang di ${g}!**\nTerima kasih sudah bergabung. Semoga District ini menjadi tempat yang nyaman untukmu. 🌿`,
+//   (m, g) => `**🤍 Welcome aboard, ${m}!**\nKami senang kamu menjadi bagian dari Mystral District. Selamat menikmati komunitas ini bersama para Mystralians.`,
+//   (m, g) => `**🌿 Welcome to ${g}, ${m}!**\nSemoga harimu lebih menyenangkan bersama komunitas yang hangat dan ramah di MYSTRAL.`,
+//   (m, g) => `**🌌 Welcome to ${g}, ${m}!**\nJangan ragu untuk mengobrol, bergabung di voice, atau sekadar menikmati suasana komunitas. ✨`,
+//   (m, g) => `**🌙 Hai ${m}, selamat datang di Mystral District!**\nSemoga kamu menemukan banyak cerita, teman baru, dan pengalaman seru di sini. 🤍`,
+//   (m, g) => `**✨ Welcome, ${m}!**\nTerima kasih telah bergabung dengan ${g}. Semoga kamu merasa nyaman menjadi bagian dari para Mystralians.`,
+//   (m, g) => `**🤝 Halo ${m}, welcome to ${g}!**\nNikmati setiap percakapan, event, dan momen yang akan kamu temukan di komunitas ini.`,
+//   (m, g) => `**🌠 Selamat datang di ${g}, ${m}!**\nSemoga langkah pertamamu di MYSTRAL menjadi awal dari banyak kenangan yang menyenangkan.`,
+//   (m, g) => `**📍 Welcome to ${g}, ${m}!**\nLuangkan waktumu sesukamu, berkenalan dengan member lain, dan nikmati setiap perjalananmu di sini.`,
+//   (m, g) => `**🌙 Senang melihatmu bergabung, ${m}!**\nSemoga Mystral District menjadi tempat yang selalu membuatmu merasa diterima. 🤍`,
+//   (m, g) => `**💫 Halo ${m}, welcome to ${g}!**\nSemoga kamu menemukan komunitas yang positif, hangat, dan penuh cerita baru.`,
+//   (m, g) => `**✨ Selamat datang di ${g}, ${m}!**\nSemoga setiap hari yang kamu habiskan di MYSTRAL membawa pengalaman yang menyenangkan.`,
+//   (m, g) => `**🌿 Welcome, ${m}!**\nTerima kasih telah menjadi bagian dari Mystralians. Semoga kamu betah dan menikmati komunitas ini.`,
+//   (m, g) => `**🤍 Halo ${m}, selamat datang di ${g}!**\nSemoga kamu selalu menemukan hal-hal baik dan orang-orang hebat selama berada di MYSTRAL.`,
+//   (m, g) => `**🌌 Welcome to Mystral District, ${m}!**\nKami senang menyambutmu di komunitas ini. Selamat menikmati perjalanan barumu bersama kami. ✨`,
+//   (m, g) => `**🌙 Welcome, ${m}!**\nSemoga District ini menjadi tempat untuk berbagi cerita, membangun pertemanan, dan menciptakan banyak momen berharga.`,
+//   (m, g) => `**✨ Halo ${m}, senang bertemu denganmu!**\nSemoga kamu menikmati setiap fitur dan aktivitas yang tersedia di ${g}.`,
+//   (m, g) => `**🤝 Selamat datang di ${g}, ${m}!**\nTerima kasih telah bergabung. Semoga kamu merasa seperti di rumah bersama para Mystralians. 🤍`,
+//   (m, g) => `**🌠 Welcome to ${g}, ${m}!**\nSemoga perjalananmu di MYSTRAL dipenuhi teman baru, pengalaman baru, dan banyak kenangan indah. 🌙`,
+// ];
 
 function pickWelcomeMessage(member) {
   const templates = WELCOME_MESSAGES.filter((fn) => typeof fn === "function");
@@ -2269,7 +3016,21 @@ async function getOrInitTarotUser(userId, username) {
     );
     user = await safeGet("SELECT * FROM tarot_users WHERE user_id = ?", [userId]);
   }
-  if (user) {
+  if (!user) {
+    user = {
+      user_id: String(userId),
+      username: String(username),
+      total_reading: 0,
+      last_reading_date: null,
+      streak: 0,
+      favorite_category: '—',
+      last_card: '—',
+      rarest_card: '—',
+      cards_collected: '',
+      streak_recovery_left: 3,
+      last_streak_before_break: 0
+    };
+  } else {
     if (user.streak_recovery_left === null || user.streak_recovery_left === undefined) {
       user.streak_recovery_left = 3;
     }
@@ -3295,17 +4056,32 @@ async function buildTicketTranscript(channel) {
 
 
 // ===================== ID CARD (DB) =====================
+// ===================== ID CARD (DB) =====================
 async function getIdCard(userId) {
+  try {
+    const doc = await IdCardUser.findOne({ user_id: String(userId) });
+    if (doc) return doc.toObject();
+  } catch { }
   return (await safeGet(`SELECT * FROM idcard_users WHERE user_id=?`, [userId])) || null;
 }
+
 async function getAllIdCards() {
+  try {
+    const docs = await IdCardUser.find().sort({ created_at: 1 });
+    if (docs.length) return docs.map(d => d.toObject());
+  } catch { }
   return await safeAll(`
     SELECT *
     FROM idcard_users
     ORDER BY created_at ASC
   `);
 }
+
 async function getAllAfkUsers() {
+  try {
+    const docs = await AfkUser.find().sort({ since: 1 });
+    if (docs.length) return docs.map(d => d.toObject());
+  } catch { }
   return await safeAll(`
     SELECT *
     FROM afk_users
@@ -3313,13 +4089,35 @@ async function getAllAfkUsers() {
   `);
 }
 
-
 async function upsertIdCard(userId, data) {
   const existing = await getIdCard(userId);
   const createdAt = existing?.created_at ? Number(existing.created_at) : Date.now();
   const number = existing?.number || data.number || genCardNumber(userId);
+  const updatedAt = Date.now();
 
-  await dbRun(
+  try {
+    await IdCardUser.updateOne(
+      { user_id: String(userId) },
+      {
+        $set: {
+          number: String(number),
+          name: String(data.name || ""),
+          gender: String(data.gender || ""),
+          domisili: String(data.domisili || ""),
+          hobi: String(data.hobi || ""),
+          status: String(data.status || ""),
+          theme: String(data.theme || ""),
+          created_at: createdAt,
+          updated_at: updatedAt,
+        },
+      },
+      { upsert: true }
+    );
+  } catch (e) {
+    console.error("[ID CARD MONGO ERROR]", e);
+  }
+
+  await safeRun(
     `INSERT INTO idcard_users (user_id, number, name, gender, domisili, hobi, status, theme, created_at, updated_at)
      VALUES (?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(user_id) DO UPDATE SET
@@ -3331,18 +4129,26 @@ async function upsertIdCard(userId, data) {
        theme=excluded.theme,
        number=excluded.number,
        updated_at=excluded.updated_at`,
-    [userId, number, data.name, data.gender, data.domisili, data.hobi, data.status, data.theme, createdAt, Date.now()]
-  );
+    [userId, number, data.name, data.gender, data.domisili, data.hobi, data.status, data.theme, createdAt, updatedAt]
+  ).catch(() => { });
 
   return getIdCard(userId);
 }
 
 async function countRegistry() {
+  try {
+    const count = await IdCardUser.countDocuments();
+    if (count > 0) return count;
+  } catch { }
   const r = await safeGet(`SELECT COUNT(*) AS n FROM idcard_users`);
   return Number(r?.n || 0);
 }
 
 async function registryPage(offset, limit) {
+  try {
+    const docs = await IdCardUser.find().sort({ created_at: -1 }).skip(Number(offset)).limit(Number(limit));
+    if (docs.length) return docs.map(d => ({ user_id: d.user_id, name: d.name, created_at: d.created_at }));
+  } catch { }
   return (await safeAll(
     `SELECT user_id, name, created_at
      FROM idcard_users
@@ -3367,10 +4173,7 @@ function stripAfkPrefix(nickOrName) {
 async function trySetMemberNick(member, nickOrNull) {
   try {
     if (!member) return false;
-    // manageable = bot punya izin & hierarchy aman (owner / role tinggi biasanya false)
     if (!member.manageable) return false;
-
-    // null = reset nickname (balik ke username)
     await member.setNickname(nickOrNull);
     return true;
   } catch (e) {
@@ -3381,26 +4184,49 @@ async function trySetMemberNick(member, nickOrNull) {
 
 // ===================== AFK =====================
 async function setAfk(userId, reason) {
-  await dbRun(
+  const rText = safeText(reason || "AFK", 80);
+  const since = Date.now();
+
+  try {
+    await AfkUser.updateOne(
+      { user_id: String(userId) },
+      { $set: { reason: rText, since } },
+      { upsert: true }
+    );
+  } catch (e) {
+    console.error("[AFK MONGO ERROR]", e);
+  }
+
+  await safeRun(
     `INSERT INTO afk_users (user_id, reason, since)
      VALUES (?,?,?)
      ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, since=excluded.since`,
-    [userId, safeText(reason || "AFK", 80), Date.now()]
-  );
+    [userId, rText, since]
+  ).catch(() => { });
 }
 
 async function clearAfk(userId) {
+  let removed = false;
   try {
-    const r = await dbRun(`DELETE FROM afk_users WHERE user_id=?`, [userId]);
-    return (r?.changes || 0) > 0;
-  } catch {
-    return false;
-  }
+    const res = await AfkUser.deleteOne({ user_id: String(userId) });
+    if (res.deletedCount > 0) removed = true;
+  } catch { }
+
+  try {
+    const r = await safeRun(`DELETE FROM afk_users WHERE user_id=?`, [userId]);
+    if ((r?.changes || 0) > 0) removed = true;
+  } catch { }
+
+  return removed;
 }
 
 async function clearAllAfkUsers() {
   try {
-    const r = await dbRun(`DELETE FROM afk_users`);
+    await AfkUser.deleteMany({});
+  } catch { }
+
+  try {
+    const r = await safeRun(`DELETE FROM afk_users`);
     return r?.changes || 0;
   } catch {
     return 0;
@@ -3409,7 +4235,12 @@ async function clearAllAfkUsers() {
 
 async function getAfk(userId) {
   try {
-    return (await dbGet(`SELECT reason, since FROM afk_users WHERE user_id=?`, [userId])) || null;
+    const doc = await AfkUser.findOne({ user_id: String(userId) });
+    if (doc) return { reason: doc.reason, since: doc.since };
+  } catch { }
+
+  try {
+    return (await safeGet(`SELECT reason, since FROM afk_users WHERE user_id=?`, [userId])) || null;
   } catch {
     return null;
   }
@@ -3417,6 +4248,11 @@ async function getAfk(userId) {
 
 // ===================== SORTING (LOCK) =====================
 async function getSortedUser(userId) {
+  try {
+    const doc = await SortingUser.findOne({ user_id: String(userId) });
+    if (doc) return doc.toObject();
+  } catch { }
+
   return (await safeGet(
     `SELECT user_id, choice, at FROM sorting_users WHERE user_id=?`,
     [userId]
@@ -3424,12 +4260,23 @@ async function getSortedUser(userId) {
 }
 
 async function setSortedUser(userId, choice) {
-  await dbRun(
+  const at = Date.now();
+  try {
+    await SortingUser.updateOne(
+      { user_id: String(userId) },
+      { $set: { choice, at } },
+      { upsert: true }
+    );
+  } catch (e) {
+    console.error("[SORTING MONGO ERROR]", e);
+  }
+
+  await safeRun(
     `INSERT INTO sorting_users (user_id, choice, at)
      VALUES (?,?,?)
      ON CONFLICT(user_id) DO UPDATE SET choice=excluded.choice, at=excluded.at`,
-    [userId, choice, Date.now()]
-  );
+    [userId, choice, at]
+  ).catch(() => { });
 }
 
 // ===================== SORTING BAG SYSTEM =====================
@@ -5046,8 +5893,8 @@ function registryEmbed(pageIndex, totalPages, totalUsers, pageRows) {
 
 function registryRow(pageIndex, totalPages) {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`registry:prev:${pageIndex}`).setLabel("Prev").setEmoji("◀").setStyle(ButtonStyle.Primary).setDisabled(pageIndex <= 0),
-    new ButtonBuilder().setCustomId(`registry:next:${pageIndex}`).setLabel("Next").setEmoji("▶").setStyle(ButtonStyle.Primary).setDisabled(pageIndex >= totalPages - 1)
+    new ButtonBuilder().setCustomId(`registry:prev:${pageIndex}`).setLabel("Prev").setStyle(ButtonStyle.Secondary).setDisabled(pageIndex <= 0),
+    new ButtonBuilder().setCustomId(`registry:next:${pageIndex}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(pageIndex >= totalPages - 1)
   );
 }
 
@@ -6708,6 +7555,19 @@ async function takeNonStaffRows(guild, rows, limit = 5) {
   return out;
 }
 
+// ===================== LEADERBOARD HELPERS =====================
+// Fungsi baru untuk mendapatkan username tanpa di-tag
+async function resolveUsernameNoTag(guild, userId, fallback) {
+  if (!/^\d{17,20}$/.test(String(userId))) return fallback || userId;
+  if (!guild) return fallback || userId;
+  try {
+    const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+    return member ? member.user.username : (fallback || userId);
+  } catch {
+    return fallback || userId;
+  }
+}
+
 async function buildSupportPayload(guild = null) {
   const sponsorRows = await safeAll(
     "SELECT * FROM support_leaderboard WHERE type = 'sponsor' ORDER BY amount DESC, updated_at ASC LIMIT 50"
@@ -6718,21 +7578,24 @@ async function buildSupportPayload(guild = null) {
   const sponsors = await takeNonStaffRows(guild, sponsorRows, 5);
   const donaturs = await takeNonStaffRows(guild, donaturRows, 5);
 
-  const formatUser = (row) => {
-    const isSnowflake = /^\d{17,20}$/.test(row.user_id);
-    return isSnowflake ? `<@${row.user_id}>` : row.user_id;
-  };
-
   const formatAmount = (amount) => `\`Rp ${Number(amount || 0).toLocaleString("id-ID")}\``;
-  const formatSupportRows = (rows, icon) => {
+
+  const formatSupportRows = async (rows, icon) => {
     if (!rows.length) return "_Belum ada data._";
-    return rows
-      .map((row, index) => formatRankLine(index + 1, formatUser(row), formatAmount(row.amount), icon))
-      .join("\n");
+    const lines = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const name = await resolveUsernameNoTag(guild, row.user_id, row.username);
+      lines.push(formatRankLine(i + 1, name, formatAmount(row.amount), icon));
+    }
+    return lines.join("\n");
   };
 
   const totalSponsor = sponsors.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const totalDonatur = donaturs.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+
+  const sponsorText = await formatSupportRows(sponsors, "👑");
+  const donaturText = await formatSupportRows(donaturs, "💎");
 
   const container = new ContainerBuilder()
     .addTextDisplayComponents(
@@ -6749,7 +7612,7 @@ async function buildSupportPayload(guild = null) {
       new TextDisplayBuilder().setContent(
         [
           "## <a:ja_1roll3yellow:1516080291209285672> Sponsor Circle",
-          formatSupportRows(sponsors, "👑"),
+          sponsorText,
           "",
           `Total sponsor top list: ${formatAmount(totalSponsor)}`,
         ].join("\n")
@@ -6760,7 +7623,7 @@ async function buildSupportPayload(guild = null) {
       new TextDisplayBuilder().setContent(
         [
           "## <a:blue_diamond:1523181238154956956> Donatur Circle",
-          formatSupportRows(donaturs, "💎"),
+          donaturText,
           "",
           `Total donatur top list: ${formatAmount(totalDonatur)}`,
         ].join("\n")
@@ -6816,13 +7679,13 @@ async function buildMonthlyRecapPayload(guild, month, year) {
 
   if (targetMonth === currentMonth && targetYear === currentYear) {
     const targetGuildId = process.env.GUILD_ID;
-    const guild = targetGuildId ? client.guilds.cache.get(targetGuildId) : null;
+    const activeGuild = targetGuildId ? client.guilds.cache.get(targetGuildId) : null;
 
     for (const [userId, joinTime] of voiceSessions.entries()) {
-      if (guild) {
-        const member = guild.members.cache.get(userId);
+      if (activeGuild) {
+        const member = activeGuild.members.cache.get(userId);
         const vc = member?.voice?.channel;
-        if (!vc || vc.id === guild.afkChannelId) {
+        if (!vc || vc.id === activeGuild.afkChannelId) {
           continue;
         }
       }
@@ -6851,13 +7714,21 @@ async function buildMonthlyRecapPayload(guild, month, year) {
     return `${h} jam ${remMin} menit`;
   };
 
-  const chatList = topChatPublic.length
-    ? topChatPublic.map((r, i) => formatRankLine(i + 1, `<@${r.user_id}>`, `\`${Number(r.total).toLocaleString("id-ID")} pesan\``, "💬")).join("\n")
-    : "_Belum ada aktivitas chat non-staff._";
+  const chatLines = [];
+  for (let i = 0; i < topChatPublic.length; i++) {
+    const r = topChatPublic[i];
+    const name = await resolveUsernameNoTag(guild, r.user_id, r.user_id);
+    chatLines.push(formatRankLine(i + 1, name, `\`${Number(r.total).toLocaleString("id-ID")} pesan\``, "💬"));
+  }
+  const chatList = chatLines.length ? chatLines.join("\n") : "_Belum ada aktivitas chat non-staff._";
 
-  const voiceList = topVoice.length
-    ? topVoice.map((r, i) => formatRankLine(i + 1, `<@${r.user_id}>`, `\`${formatVoiceDuration(r.total)}\``, "🎙️")).join("\n")
-    : "_Belum ada aktivitas voice non-staff._";
+  const voiceLines = [];
+  for (let i = 0; i < topVoice.length; i++) {
+    const r = topVoice[i];
+    const name = await resolveUsernameNoTag(guild, r.user_id, r.user_id);
+    voiceLines.push(formatRankLine(i + 1, name, `\`${formatVoiceDuration(r.total)}\``, "🎙️"));
+  }
+  const voiceList = voiceLines.length ? voiceLines.join("\n") : "_Belum ada aktivitas voice non-staff._";
 
   const totalChat = topChatPublic.reduce((sum, row) => sum + Number(row.total || 0), 0);
   const totalVoice = topVoice.reduce((sum, row) => sum + Number(row.total || 0), 0);
@@ -7039,7 +7910,7 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`│ 👤 Client:     ${(c.user.tag + " (" + c.user.id + ")").padEnd(40)} │`);
   console.log(`│ 🌐 Servers:    ${(`${guildsCount} Guild(s) | ${totalMembers} Users`).padEnd(40)} │`);
   console.log(`│ 📶 Latency:    ${(`${latency} ms`).padEnd(40)} │`);
-  console.log(`│ 📁 DB Size:    ${(`${dbSizeFormatted} (${DB_ENGINE})`).padEnd(40)} │`);
+  console.log(`│ 📁 DB Engine:  ${("MongoDB Atlas Cloud (Mongoose)").padEnd(40)} │`);
   console.log(`│ 📅 Started At: ${(wib + " WIB").padEnd(40)} │`);
   console.log("└────────────────────────────────────────────────────────┘");
 
@@ -7176,10 +8047,9 @@ function startGiveawayLoop(client) {
     try {
       const now = Date.now();
 
-      const due = await safeAll(
-        `SELECT * FROM giveaways WHERE is_ended=0 AND end_at <= ? ORDER BY end_at ASC LIMIT 5`,
-        [now]
-      );
+      const GW = getMongoModel("giveaways");
+      const docs = await GW.find({ is_ended: 0, end_at: { $lte: now } }).sort({ end_at: 1 }).limit(5);
+      const due = docs.map(d => d.toObject());
 
       for (const g of due) {
         const guild = client.guilds.cache.get(g.guild_id);
@@ -7268,10 +8138,8 @@ async function addGuessNumberWin(guildId, userId, attempts) {
 
 async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage, authorId) {
   const isInteraction = !!interactionOrMessage.commandName;
-  if (isInteraction) {
-    if (!interactionOrMessage.deferred && !interactionOrMessage.replied) {
-      await safeDefer(interactionOrMessage).catch(() => { });
-    }
+  if (isInteraction && !interactionOrMessage.deferred && !interactionOrMessage.replied) {
+    await safeDefer(interactionOrMessage).catch(() => { });
   }
 
   const rows = await safeAll(
@@ -7283,103 +8151,107 @@ async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage
     [guildId]
   );
 
-  if (!rows.length) {
-    const payload = { content: "Belum ada pemenang yang tercatat.", flags: MessageFlags.Ephemeral };
-    if (isInteraction) return interactionOrMessage.editReply(payload);
-    return interactionOrMessage.reply(payload);
-  }
-
-  const totalPages = Math.ceil(rows.length / 10);
-  let currentPage = 0;
   const medals = ["🥇", "🥈", "🥉"];
   const ACCENT = 0xffa500;
 
-  async function buildPage(page, showButtons = true) {
-    const startIdx = page * 10;
-    const pageRows = rows.slice(startIdx, startIdx + 10);
+  if (!rows.length) {
+    const container = new ContainerBuilder().setAccentColor(ACCENT);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent("## 🏆 Leaderboard Tebak Angka"));
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent("Belum ada pemenang yang tercatat."));
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent("-# Mystral   Tebak Angka"));
+
+    const payload = { components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } };
+    return isInteraction ? interactionOrMessage.editReply(payload) : interactionOrMessage.reply(payload);
+  }
+
+  const itemsPerPage = 10;
+  const totalPages = Math.ceil(rows.length / itemsPerPage);
+  let currentPage = 0;
+
+  async function buildPage(page) {
+    const startIdx = page * itemsPerPage;
+    const pageRows = rows.slice(startIdx, startIdx + itemsPerPage);
 
     const container = new ContainerBuilder().setAccentColor(ACCENT);
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("## 🏆 Leaderboard Tebak Angka")
-    );
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent("## 🏆 Leaderboard Tebak Angka"));
     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
 
-    const renderedLines = await Promise.all(
-      pageRows.map(async (row, i) => {
-        const globalIndex = startIdx + i;
-        const medal = medals[globalIndex] || `**${globalIndex + 1}.**`;
-        const best = row.best_attempts ? ` • Best **${row.best_attempts}x**` : "";
-        let username = row.user_id;
-        try {
-          const u = client.users.cache.get(row.user_id) || await client.users.fetch(row.user_id);
-          username = u.username;
-        } catch { }
-        return `${medal} @${username} — **${row.wins} Win**${best}`;
-      })
-    );
+    let lines = [];
+    for (let i = 0; i < pageRows.length; i++) {
+      const row = pageRows[i];
+      const globalIdx = startIdx + i;
+      const medal = medals[globalIdx] || `**${globalIdx + 1}.**`;
+      const best = row.best_attempts ? ` • best **${row.best_attempts}x**` : "";
 
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(renderedLines.join("\n"))
-    );
+      let displayName = `<@${row.user_id}>`;
+      try {
+        const user = await client.users.fetch(row.user_id);
+        if (user) displayName = `**${user.username}**`;
+      } catch (e) { }
+
+      lines.push(`${medal} ${displayName} — **${row.wins} win**${best}`);
+    }
+
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n")));
     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`-# Halaman ${page + 1} dari ${totalPages} • Mystral Tebak Angka`)
-    );
 
-    if (totalPages > 1 && showButtons) {
-      const row = new ActionRowBuilder();
-      row.addComponents(
+    if (totalPages > 1) {
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Halaman ${page + 1} dari ${totalPages} • Mystral Tebak Angka`));
+    } else {
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Mystral   Tebak Angka`));
+    }
+
+    const comps = [container];
+
+    if (totalPages > 1) {
+      const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId("tebak_lb:prev")
-          .setLabel("Prev")
+          .setCustomId("talb_prev")
+          .setLabel("PREV")
           .setEmoji("◀")
           .setStyle(ButtonStyle.Primary)
           .setDisabled(page === 0),
         new ButtonBuilder()
-          .setCustomId("tebak_lb:next")
-          .setLabel("Next")
+          .setCustomId("talb_next")
+          .setLabel("NEXT")
           .setEmoji("▶")
           .setStyle(ButtonStyle.Primary)
           .setDisabled(page === totalPages - 1)
       );
-      container.addActionRowComponents(row);
+      comps.push(row);
     }
-    return container;
+
+    return comps;
   }
 
-  const firstContainer = await buildPage(0, true);
-  let replyMsg;
-  if (isInteraction) {
-    replyMsg = await interactionOrMessage.editReply({ components: [firstContainer], flags: MessageFlags.IsComponentsV2 });
-  } else {
-    replyMsg = await interactionOrMessage.reply({ components: [firstContainer], flags: MessageFlags.IsComponentsV2 });
-  }
+  const initialComps = await buildPage(currentPage);
+  const payload = { components: initialComps, flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } };
+  const msg = isInteraction
+    ? await interactionOrMessage.editReply(payload)
+    : await interactionOrMessage.reply(payload);
 
   if (totalPages > 1) {
-    const filter = (i) => i.user.id === authorId;
-    const collector = replyMsg.createMessageComponentCollector({ filter, time: 60000 });
-
-    collector.on("collect", async (i) => {
-      try {
-        if (i.customId === "tebak_lb:prev") {
-          currentPage = Math.max(0, currentPage - 1);
-        } else if (i.customId === "tebak_lb:next") {
-          currentPage = Math.min(totalPages - 1, currentPage + 1);
-        }
-        await i.deferUpdate();
-        const nextContainer = await buildPage(currentPage, true);
-        await replyMsg.edit({ components: [nextContainer], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
-      } catch { }
+    const collector = msg.createMessageComponentCollector({
+      filter: (i) => i.customId.startsWith("talb_") && i.user.id === authorId,
+      time: 60000
     });
 
-    collector.on("end", () => {
-      buildPage(currentPage, false).then(c => {
-        if (isInteraction) {
-          interactionOrMessage.editReply({ components: [c], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
-        } else {
-          replyMsg.edit({ components: [c], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
-        }
-      }).catch(() => { });
+    collector.on("collect", async (i) => {
+      if (i.customId === "talb_prev") currentPage = Math.max(0, currentPage - 1);
+      if (i.customId === "talb_next") currentPage = Math.min(totalPages - 1, currentPage + 1);
+
+      const newComps = await buildPage(currentPage);
+      await i.update({ components: newComps }).catch(() => { });
+    });
+
+    collector.on("end", async () => {
+      const disabledComps = await buildPage(currentPage);
+      if (disabledComps.length > 1) {
+        disabledComps[1].components.forEach(b => b.setDisabled(true));
+      }
+      msg.edit({ components: disabledComps }).catch(() => { });
     });
   }
 }
@@ -7674,7 +8546,81 @@ client.on(Events.MessageCreate, async (message) => {
       }, 1500));
     }
 
-    // Universal Media Embed Handler
+    // Universal Media Embed Handler using local/global yt-dlp
+    async function ensureYtDlp() {
+      const isWin = process.platform === "win32";
+      const binaryName = isWin ? "yt-dlp.exe" : "yt-dlp";
+      const localPath = path.join(__dirname, binaryName);
+
+      if (fs.existsSync(localPath)) {
+        return localPath;
+      }
+
+      // Check if installed globally
+      const { execSync } = require("child_process");
+      try {
+        execSync(isWin ? "where yt-dlp" : "which yt-dlp", { stdio: "ignore" });
+        return "yt-dlp";
+      } catch {
+        // Auto-download binary appropriate for the hosting platform
+        console.log(`[YT-DLP] Binary not found. Downloading for ${process.platform}...`);
+        const url = isWin
+          ? "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+          : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+
+        try {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`Failed to download: ${res.statusText}`);
+          const buffer = Buffer.from(await res.arrayBuffer());
+          fs.writeFileSync(localPath, buffer);
+          if (!isWin) {
+            fs.chmodSync(localPath, "755"); // Set executable permissions on Linux/Pterodactyl
+          }
+          console.log(`[YT-DLP] Download complete: ${localPath}`);
+          return localPath;
+        } catch (err) {
+          console.error("[YT-DLP DOWNLOAD ERROR]", err);
+          return null;
+        }
+      }
+    }
+
+    async function downloadMedia(url) {
+      const ytDlpPath = await ensureYtDlp();
+      if (!ytDlpPath) return null;
+
+      return new Promise((resolve) => {
+        const { execFile } = require("child_process");
+        const filename = `temp_media_${Date.now()}.mp4`;
+        const outputPath = path.join(__dirname, filename);
+        const formatArg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+
+        execFile(ytDlpPath, ["-o", outputPath, "-f", formatArg, url], (error) => {
+          if (error) {
+            console.error("[LOCAL YTDL DOWNLOAD ERROR]", error);
+            if (fs.existsSync(outputPath)) {
+              try { fs.unlinkSync(outputPath); } catch { }
+            }
+            resolve(null);
+            return;
+          }
+
+          try {
+            if (fs.existsSync(outputPath)) {
+              const buffer = fs.readFileSync(outputPath);
+              fs.unlinkSync(outputPath); // Delete temp file
+              resolve(buffer);
+            } else {
+              resolve(null);
+            }
+          } catch (e) {
+            console.error("[LOCAL YTDL READ/CLEANUP ERROR]", e);
+            resolve(null);
+          }
+        });
+      });
+    }
+
     const mediaSettings = await getOrInitMediaSettings(message.guild.id);
     if (mediaSettings && mediaSettings.enabled) {
       const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
@@ -7686,6 +8632,8 @@ client.on(Events.MessageCreate, async (message) => {
         let firstOriginalUrl = "";
         let firstPlatform = "";
 
+        const fixedUrls = [];
+
         for (const rawUrl of urls) {
           let platform = "";
           let fixedUrl = rawUrl;
@@ -7694,15 +8642,15 @@ client.on(Events.MessageCreate, async (message) => {
           if (/tiktok\.com/i.test(rawUrl)) {
             platform = "tiktok";
             const cleaned = rawUrl.split('?')[0];
-            fixedUrl = cleaned.replace(/(?:www\.|vt\.|vm\.)?tiktok\.com/i, "tfxktok.com");
+            fixedUrl = cleaned.replace(/(?:www\.|vt\.|vm\.)?tiktok\.com/i, "d.tnktok.com");
           } else if (/instagram\.com\/(?:p|reel|tv|stories)/i.test(rawUrl)) {
             platform = "instagram";
             const cleaned = rawUrl.split('?')[0];
-            fixedUrl = cleaned.replace(/(?:www\.)?instagram\.com/i, "instagram7.com");
+            fixedUrl = cleaned.replace(/(?:www\.)?instagram\.com/i, "ddinstagram.com");
           } else if (/(twitter|x)\.com\/[a-zA-Z0-9_]+\/status/i.test(rawUrl)) {
             platform = "twitter";
             const cleaned = rawUrl.split('?')[0];
-            fixedUrl = cleaned.replace(/(?:www\.)?(?:twitter|x)\.com/i, "fxtwitter.com");
+            fixedUrl = cleaned.replace(/(?:www\.)?(?:twitter|x)\.com/i, "vxtwitter.com");
           } else if (/reddit\.com\/r\/[a-zA-Z0-9_]+\/comments/i.test(rawUrl)) {
             platform = "reddit";
             const cleaned = rawUrl.split('?')[0];
@@ -7745,6 +8693,7 @@ client.on(Events.MessageCreate, async (message) => {
                 convertedText = convertedText.replace(rawUrl, fixedUrl);
                 hasConverted = true;
               }
+              fixedUrls.push(fixedUrl);
               if (!firstOriginalUrl) {
                 if (platform !== "youtube" || /shorts/i.test(rawUrl)) {
                   firstOriginalUrl = rawUrl.split('?')[0];
@@ -7753,7 +8702,11 @@ client.on(Events.MessageCreate, async (message) => {
                 }
                 firstPlatform = platform;
               }
+            } else {
+              fixedUrls.push(rawUrl);
             }
+          } else {
+            fixedUrls.push(rawUrl);
           }
         }
 
@@ -7801,7 +8754,7 @@ client.on(Events.MessageCreate, async (message) => {
             const dlUrl = getDownloadUrl(firstOriginalUrl);
             buttons.push(
               new ButtonBuilder()
-                .setLabel("⬇ Download")
+                .setLabel("⬇ Download Link")
                 .setStyle(ButtonStyle.Link)
                 .setURL(dlUrl)
             );
@@ -7809,18 +8762,51 @@ client.on(Events.MessageCreate, async (message) => {
             const row = new ActionRowBuilder().addComponents(buttons);
 
             const canDelete = message.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageMessages);
-            if (mediaSettings.deleteOriginal && canDelete) {
-              await message.delete().catch(() => null);
-              await message.channel.send({
-                content: `Shared by ${message.author}:\n\n${convertedText}`,
-                components: [row]
-              });
+
+            // ── TRY DOWNLOADING VIA COBALT API FIRST ──
+            let downloadedBuffer = null;
+            if (firstOriginalUrl && (firstPlatform === "tiktok" || firstPlatform === "instagram" || firstPlatform === "twitter" || firstPlatform === "reddit" || firstPlatform === "youtube")) {
+              downloadedBuffer = await downloadMedia(firstOriginalUrl);
+            }
+
+            if (downloadedBuffer) {
+              const attachment = new AttachmentBuilder(downloadedBuffer, { name: `mystral_media_${Date.now()}.mp4` });
+
+              if (mediaSettings.deleteOriginal && canDelete) {
+                await message.delete().catch(() => null);
+                // remove the link from the caption if we delete the original
+                const captionOnly = message.content.replace(firstOriginalUrl, "").trim();
+                const textPrefix = `Shared by ${message.author}`;
+                const finalContent = captionOnly ? `${textPrefix}:\n${captionOnly}` : textPrefix;
+                await message.channel.send({
+                  content: finalContent,
+                  files: [attachment],
+                  components: [row],
+                  allowedMentions: { parse: [] }
+                });
+              } else {
+                await message.reply({
+                  files: [attachment],
+                  components: [row],
+                  allowedMentions: { repliedUser: false }
+                }).catch(() => null);
+              }
             } else {
-              await message.reply({
-                content: convertedText,
-                components: [row],
-                allowedMentions: { repliedUser: false }
-              }).catch(() => null);
+              // ── FALLBACK TO STANDARD LINK REDIRECTION (so embeds work) ──
+              if (mediaSettings.deleteOriginal && canDelete) {
+                await message.delete().catch(() => null);
+                await message.channel.send({
+                  content: `Shared by ${message.author}:\n\n${convertedText}`,
+                  components: [row],
+                  allowedMentions: { parse: [] }
+                });
+              } else {
+                await message.reply({
+                  content: fixedUrls.join("\n"),
+                  components: [row],
+                  allowedMentions: { repliedUser: false }
+                }).catch(() => null);
+              }
             }
           }
         }
@@ -8205,7 +9191,7 @@ client.on(Events.MessageCreate, async (message) => {
 
       const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
       if (targetMember && !targetMember.bannable) {
-        return message.reply("❌ Saya tidak bisa ban user ini (role lebih tinggi/owner/permission bot kurang).");
+        return message.reply("❌ Gagal membanned user tersebut. Pastikan role bot lebih tinggi dan memiliki izin yang diperlukan.");
       }
 
       const reason = args.slice(1).join(" ") || "Ban";
@@ -8214,7 +9200,7 @@ client.on(Events.MessageCreate, async (message) => {
         return message.reply(`🔨 <@${targetUser.id}> berhasil di-ban. Reason: ${reason}`);
       } catch (e) {
         console.error("[PREFIX BAN FAIL]", e?.message || e);
-        return message.reply("❌ Gagal ban user. Cek role bot dan permission.");
+        return message.reply("❌ Gagal membanned user. Pastikan role bot lebih tinggi dan permission sudah sesuai.");
       }
     }
 
@@ -8277,27 +9263,40 @@ client.on(Events.MessageCreate, async (message) => {
 
       if (command === "timeout" || command === "mute") {
         const duration = parseInt(args[1]);
-        if (!target || isNaN(duration)) return message.reply("Format: `ctimeout @user 10 alasan` (menit)");
+
+        if (!target || isNaN(duration)) {
+          return message.reply("❌ Format: `ctimeout @user <durasi> [alasan]`\nContoh: `ctimeout @user 10 Spam`");
+        }
+
         await target.timeout(duration * 60 * 1000, reason);
-        message.reply(`🔇 **${target.user.tag}** di-timeout selama ${duration} menit.`);
+        return message.reply(`🔇 **${target.user.tag}** telah di-timeout selama **${duration} menit**.`);
       }
 
       if (command === "kick") {
-        if (!target) return message.reply("Siapa yang mau di-kick?");
+        if (!target) {
+          return message.reply("❌ Mention user yang ingin di-kick.");
+        }
+
         await target.kick(reason);
-        message.reply(`👢 **${target.user.tag}** berhasil di-kick.`);
+        return message.reply(`👢 **${target.user.tag}** berhasil di-kick dari server.`);
       }
 
       if (command === "ban") {
-        if (!target) return message.reply("Siapa yang mau di-ban?");
+        if (!target) {
+          return message.reply("❌ Mention user yang ingin di-ban.");
+        }
+
         await target.ban({ reason });
-        message.reply(`🔨 **${target.user.tag}** telah diblokir permanen.`);
+        return message.reply(`🔨 **${target.user.tag}** berhasil di-ban dari server.`);
       }
 
       if (command === "unmute" || command === "untimeout") {
-        if (!target) return message.reply("Siapa yang mau di-unmute?");
+        if (!target) {
+          return message.reply("❌ Mention user yang ingin di-untimeout.");
+        }
+
         await target.timeout(null);
-        message.reply(`🔊 Timeout dihapus untuk **${target.user.tag}**.`);
+        return message.reply(`🔊 Timeout untuk **${target.user.tag}** berhasil dihapus.`);
       }
     }
 
@@ -8725,9 +9724,22 @@ Enjoy your reward ✨`
       return message.reply({ ...ui, allowedMentions: { repliedUser: false, parse: [] } });
     }
 
-    // chalo (prefix) tetap ada sebagai sapaan singkat
+    // halo (prefix)
     if (cmd === "halo") {
-      return message.reply(`✨ salam, <@${message.author.id}>. gerbang Mystral menyambutmu. 🕯️`);
+      const greetings = [
+        `👋 Halo, <@${message.author.id}>! Selamat datang di **Mystral** ✨`,
+        `🌸 Hai, <@${message.author.id}>! Semoga harimu menyenangkan 🤍`,
+        `✨ Salam, <@${message.author.id}>. Gerbang **Mystral** menyambutmu. 🕯️`,
+        `🌙 Selamat datang kembali, <@${message.author.id}>. Semoga petualanganmu menyenangkan!`,
+        `💜 Halo, <@${message.author.id}>! Ada yang bisa Relovie bantu hari ini?`,
+        `⭐ Hai, <@${message.author.id}>! Semoga keberuntungan selalu bersamamu.`,
+        `🌷 Welcome back, <@${message.author.id}>! Senang melihatmu lagi.`,
+        `☀️ Halo, <@${message.author.id}>! Semoga harimu penuh keberuntungan.`,
+        `🪄 Selamat datang, <@${message.author.id}>! Mystral selalu terbuka untukmu.`,
+        `🤍 Hai, <@${message.author.id}>! Semoga harimu dipenuhi hal-hal baik.`
+      ];
+
+      return message.reply(greetings[Math.floor(Math.random() * greetings.length)]);
     }
 
     // ctranslate
@@ -8839,7 +9851,7 @@ Enjoy your reward ✨`
     }
 
     // cshorturl
-    if (cmd === "shorturl" || cmd === "short" || cmd === "surl") {
+    if (cmd === "shorturl" || cmd === "su" || cmd === "surl") {
       const longUrl = args.join(" ").trim();
       if (!longUrl) {
         return message.reply("Format: `cshorturl <link URL>`");
@@ -8926,7 +9938,7 @@ Enjoy your reward ✨`
     }
 
     // cavatar
-    if (cmd === "avatar") {
+    if (["avatar", "ava", "av", "pfp", "pp"].includes(cmd)) {
       const mentioned = message.mentions.users.first();
       let user = mentioned || message.author;
 
@@ -9240,13 +10252,10 @@ Enjoy your reward ✨`
       if (sub === "" || sub === "pull") {
         const todayStr = wibDayKey();
         const tarotUser = await getOrInitTarotUser(userId, username);
-        if (tarotUser.last_reading_date === todayStr) {
-          return message.reply([
-            `╭・<:pink_cards1:1510057886795956235> **Daily Tarot — Sudah Terbuka**`,
-            `├・Energi spiritualmu hari ini telah terbaca sepenuhnya.`,
-            `├・*Arcane Deck* baru bisa kamu panggil kembali esok hari.`,
-            `╰・🕒 *Penyelarasan kartu disetel ulang setiap pukul 00:00 WIB*`
-          ].join("\n"));
+        if (tarotUser?.last_reading_date === todayStr) {
+          return message.reply(
+            "> 🔮 Kamu sudah menggunakan **Daily Tarot** hari ini. Coba lagi setelah reset pada **00:00 WIB**."
+          );
         }
 
         return message.reply({
@@ -9306,7 +10315,7 @@ Enjoy your reward ✨`
       }
     }
 
-    if (cmd === "tarotprofile") {
+    if (["tarotprofile", "tp", "tprofile", "tarotp"].includes(cmd)) {
       const targetUser =
         message.mentions.users.first() ||
         (args[0] && /^\d{15,25}$/.test(args[0])
@@ -9354,7 +10363,7 @@ Enjoy your reward ✨`
     }
 
     // ===================== PREFIX: cstealemoji =====================
-    if (cmd === "stealemoji" || cmd === "stemoji" || cmd === "stlemoji") {
+    if (cmd === "stealemoji" || cmd === "stemoji" || cmd === "se") {
       if (!message.guild) return message.reply("🧸 **Gak bisa di sini...**\n> Command ini cuma bisa dipake di dalam server yaa! `(｡•́︿•̀｡)`");
 
       // Permission check
@@ -9500,10 +10509,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (tarotUser.last_reading_date === todayStr) {
         return interaction.followUp({
           content: [
-            `╭・${TAROT_EMOJIS.cooldown} **Daily Tarot — Sudah Terbuka**`,
-            `├・Energi spiritualmu hari ini telah terbaca sepenuhnya.`,
-            `├・*Arcane Deck* baru bisa kamu panggil kembali esok hari.`,
-            `╰・🕒 *Penyelarasan kartu disetel ulang setiap pukul 00:00 WIB*`
+            `╭・${TAROT_EMOJIS.cooldown} **Daily Tarot**`,
+            `├・Kamu sudah menggunakan **Daily Tarot** hari ini.`,
+            `╰・🕒 Coba lagi setelah reset harian pada **00:00 WIB**.`
           ].join("\n"),
           flags: MessageFlags.Ephemeral
         });
@@ -9589,16 +10597,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`afk:list:${page - 1}`)
-          .setLabel("Prev")
-          .setEmoji("◀")
-          .setStyle(ButtonStyle.Primary)
+          .setLabel("⬅")
+          .setStyle(ButtonStyle.Secondary)
           .setDisabled(page <= 0),
 
         new ButtonBuilder()
           .setCustomId(`afk:list:${page + 1}`)
-          .setLabel("Next")
-          .setEmoji("▶")
-          .setStyle(ButtonStyle.Primary)
+          .setLabel("➡")
+          .setStyle(ButtonStyle.Secondary)
           .setDisabled(page >= maxPage - 1)
       );
 
@@ -10055,12 +11061,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const bars = ["░░░░░░░░░░", "▓░░░░░░░░░", "▓▓░░░░░░░░", "▓▓▓░░░░░░░", "▓▓▓▓░░░░░░", "▓▓▓▓▓░░░░░", "▓▓▓▓▓▓░░░░", "▓▓▓▓▓▓▓░░░", "▓▓▓▓▓▓▓▓░░", "▓▓▓▓▓▓▓▓▓░", "▓▓▓▓▓▓▓▓▓▓"];
       const mantras = [
-        "🕯️ lilin takdir menyala…",
-        "🌫️ kabut tipis menutup lingkaran…",
-        "🔮 gema jiwa dipanggil satu per satu…",
-        "📜 huruf kuno bergerak sendiri…",
-        "✨ cahaya & bayangan saling menimbang…",
-        "🜁 segel bergetar—menjawab namamu…",
+        "🔮 Arcane Deck is awakening...",
+        "🃏 Drawing your tarot card...",
+        "✨ Reading your destiny...",
+        "🌙 Aligning cosmic energy...",
+        "📜 Interpreting the tarot...",
+        "💫 Revealing today's fortune..."
       ];
       const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -10068,20 +11074,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const setPanel = (text) => interaction.message.edit({ content: text }).catch(() => { });
 
       await setPanel(
-        `🜂 **Ritual Dimulai**\n` +
+        `✨ **Arcane Process**\n` +
         `> ${pick(mantras)}\n\n` +
-        `**${name}** berdiri di dalam lingkaran…\n` +
+        `Synchronizing data for **${name}**...\n` +
         `Progress: \`${bars[1]}\``
       );
-
       const delays = [900, 950, 1050, 900, 1100, 900, 1050, 950, 1100];
       for (let i = 2; i <= 9; i++) {
         await new Promise((r) => setTimeout(r, delays[i - 2]));
         await setPanel(
-          `🜂 **Ritual Dimulai**\n` +
+          `✨ **Arcane Process**\n` +
           `> ${pick(mantras)}\n\n` +
-          `**${name}** …\n` +
-          `Progress: \`${bars[i]}\``
+          `Synchronizing data for **${name}**...\n` +
+          `Progress: \`${bars[1]}\``
         );
       }
 
@@ -10166,24 +11171,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
           questionText = q.question;
           questionType = q.type;
           rating = q.rating;
-        } else if (interaction.message.embeds[0]) {
-          questionText = interaction.message.embeds[0].description.replace(/^\*\*|\*\*$/g, "");
-          questionType = interaction.message.embeds[0].title.toLowerCase().includes("dare") ? "dare" : "truth";
         }
+        // (No embed fallback — messages are now Components v2)
 
         const reconstructedQ = { id: questionId, question: questionText, type: questionType, rating };
         const status = action === "done" ? "done" : "pass";
 
         await interaction.update({
-          embeds: [todCard(reconstructedQ, null, targetId, status)],
-          components: []
+          components: [todCard(reconstructedQ, null, targetId, status)],
+          flags: MessageFlags.IsComponentsV2,
         }).catch(() => { });
 
         // AUTOMATICALLY SEND A NEW PANEL CARD!
         // The player who just completed/passed the challenge (targetId) is now the new challenger.
         await interaction.channel.send({
-          embeds: [todPanelCard(targetId, "self")],
-          components: [todRow(targetId, "self")],
+          components: [todPanelCard(targetId, "self"), todRow(targetId, "self")],
+          flags: MessageFlags.IsComponentsV2,
           allowedMentions: { parse: [] }
         }).catch(() => { });
 
@@ -10230,10 +11233,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).catch(() => { });
       }
 
-      // Edit message to show the question card
+      // Edit message to show the question card (Component v2)
       await interaction.update({
-        embeds: [todCard(q, challengerId, allowedUser)],
-        components: [todResponseRow(allowedUser, q.id)]
+        components: [todCard(q, challengerId, allowedUser), todResponseRow(allowedUser, q.id)],
+        flags: MessageFlags.IsComponentsV2,
       }).catch(() => { });
 
       // Auto-create thread if text channel
@@ -10309,7 +11312,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setStyle(TextInputStyle.Short)
         .setMaxLength(32)
         .setRequired(true)
-        .setPlaceholder("contoh: Palembang")
+        .setPlaceholder("contoh: Sumatera")
         .setValue(existingIdCard?.domisili || "");
 
       const iHobby = new TextInputBuilder()
@@ -10646,7 +11649,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // ===================== TICKET: CLAIM / CLOSE =====================
-    // ===================== TICKET: CLAIM / CLOSE =====================
     if (interaction.isButton() && (interaction.customId === "ticket:claim" || interaction.customId === "ticket:close")) {
       if (!interaction.guild || !interaction.channel) {
         return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
@@ -10729,7 +11731,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ).catch(() => null);
 
         // optional transcript ke log channel
-        // optional transcript ke log channel
         const logCh = await getTicketLogChannel(interaction.guild).catch(() => null);
         if (logCh) {
           const t = await buildTicketTranscript(interaction.channel).catch(() => null);
@@ -10750,7 +11751,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             // fallback biar gak error
             filePayload = { attachment: Buffer.from(JSON.stringify(t, null, 2), "utf8"), name: `ticket-${interaction.channel.id}.json` };
           }
-
 
           // ===================== TRANSCRIPT PREFER TXT (ADD-ONLY) =====================
           // buildTicketTranscript() ngembaliin { txtBuffer, htmlBuffer, count }
@@ -10794,7 +11794,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
               if (!meta.created_at && dbTicket.created_at) meta.created_at = Number(dbTicket.created_at);
             }
           } catch { }
-
 
           const ownerId = meta.opener || meta.opener_id || null;
           const type = meta.type || "—";
@@ -11348,13 +12347,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (sub === "pull") {
           const todayStr = wibDayKey();
           const tarotUser = await getOrInitTarotUser(userId, username);
-          if (tarotUser.last_reading_date === todayStr) {
+          if (tarotUser?.last_reading_date === todayStr) {
             return safeReply(interaction, {
               content: [
-                `╭・<:pink_cards1:1510057886795956235> **Daily Tarot — Sudah Terbuka**`,
-                `├・Energi spiritualmu hari ini telah terbaca sepenuhnya.`,
-                `├・*Arcane Deck* baru bisa kamu panggil kembali esok hari.`,
-                `╰・🕒 *Penyelarasan kartu disetel ulang setiap pukul 00:00 WIB*`
+                `╭・<:pink_cards1:1510057886795956235> **Daily Tarot**`,
+                `├・Kamu sudah menarik kartu tarot hari ini.`,
+                `├・Daily Tarot hanya dapat digunakan sekali setiap hari.`,
+                `╰・🕒 Tersedia kembali setelah reset pada **00:00 WIB**.`
               ].join("\n"),
               flags: MessageFlags.Ephemeral
             });
@@ -11536,7 +12535,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const sub = interaction.options.getSubcommand();
 
         if (sub === "tebakangka") {
-          return handleTebakAngkaLeaderboard(client, interaction.guild.id, interaction, interaction.user.id);
+          return handleTebakAngkaLeaderboard(interaction.client, interaction.guild.id, interaction, interaction.user.id);
         }
 
         if (sub === "support") {
@@ -12795,8 +13794,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // Mode: PANEL (Sends category buttons panel)
         if (mode === "panel") {
           await interaction.channel.send({
-            embeds: [todPanelCard(challengerId, targetId)],
-            components: [todRow(challengerId, targetId)],
+            components: [todPanelCard(challengerId, targetId), todRow(challengerId, targetId)],
+            flags: MessageFlags.IsComponentsV2,
             allowedMentions: { parse: [] }
           });
 
@@ -12823,10 +13822,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        // Send question with Selesai & Menyerah buttons
+        // Send question with Selesai & Menyerah buttons (Component v2)
         const msg = await interaction.channel.send({
-          embeds: [todCard(q, challengerId, targetId)],
-          components: [todResponseRow(targetId, q.id)],
+          components: [todCard(q, challengerId, targetId), todResponseRow(targetId, q.id)],
+          flags: MessageFlags.IsComponentsV2,
           allowedMentions: { parse: [] }
         });
 
@@ -13453,6 +14452,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const sent = await ch.send(sendOptions).catch(() => null);
         if (sent?.id) {
+          await MenfessPost.create({ message_id: String(sent.id), channel_id: String(ch.id), created_at: Date.now() }).catch(() => null);
           await updateMenfessPostLink(id, { messageId: sent.id, channelId: ch.id }).catch(() => null);
           await handleMenfessButtonCleanup(interaction.client, sent);
         }
@@ -13528,16 +14528,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
               .setCustomId(`afk:list:${page - 1}`)
-              .setLabel("Prev")
-              .setEmoji("◀")
-              .setStyle(ButtonStyle.Primary)
-              .setDisabled(page <= 0),
+              .setLabel("⬅ Prev")
+              .setStyle(ButtonStyle.Secondary)
+              .setDisabled(true),
 
             new ButtonBuilder()
               .setCustomId(`afk:list:${page + 1}`)
-              .setLabel("Next")
-              .setEmoji("▶")
-              .setStyle(ButtonStyle.Primary)
+              .setLabel("Next ➡")
+              .setStyle(ButtonStyle.Secondary)
               .setDisabled(maxPage <= 1)
           );
 
@@ -13575,6 +14573,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!interaction.guild) return safeReply(interaction, { content: "Command ini cuma bisa dipakai di server ya.", flags: 0 });
 
         const targetUser = interaction.options.getUser("user") || interaction.user;
+        const targetMember = interaction.options.getMember("user") || interaction.member;
 
         const sorted = await getSortedUser(targetUser.id);
         if (!sorted?.choice) {
@@ -14361,6 +15360,9 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
     const hasCinzel = famNames.includes("Cinzel");
     console.log(` ├── [FONT] Inter: ${hasInter ? "✅ Loaded" : "❌ Fallback"} | Cinzel: ${hasCinzel ? "✅ Loaded" : "❌ Missing"}`);
 
+    const { connectMongo } = require("./db");
+    await connectMongo();
+
     openDb();
     await initDb();
     await ensureMenfessCounterStart();
@@ -14381,7 +15383,7 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
       }
     } catch { }
 
-    console.log(` ├── [DB] Engine: ${DB_ENGINE} | Path: ${SQLITE_PATH} (${dbSizeFormatted})`);
+    console.log(` ├── [DB] Engine: MongoDB Atlas Cloud (Mongoose) ✅`);
     console.log(" ├── [CLIENT] Connecting to Discord Gateway...");
     client.login(process.env.DISCORD_TOKEN);
   } catch (e) {
