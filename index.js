@@ -1,11 +1,16 @@
 ﻿/**
- * 🔮 Mystral Assistant Core Engine v2.0
- * ════════════════════════════════════════════════════════════════
- * 🚀 Powered by: Discord.js v14 | Mongoose (MongoDB Atlas Cloud)
- * 🎨 Canvas Engine: @napi-rs/canvas
- * 🔥 Features: Flame Streak, ID Card, Menfess, Sorting, Music CC
- * 🛡️ Host Ready: Pterodactyl Panel, Linux x64, Railway, VPS
- * ════════════════════════════════════════════════════════════════
+ * ╔══════════════════════════════════════════════════════════════════════╗
+ * ║                                                                      ║
+ * ║                  🔮  MYSTRAL ASSISTANT CORE ENGINE  🔮              ║
+ * ║                           Version 2.5.0 - Ultimate                   ║
+ * ║                                                                      ║
+ * ╠══════════════════════════════════════════════════════════════════════╣
+ * ║  🚀 Stack     : Node.js v22+ | Discord.js v14 | Mongoose (Atlas)     ║
+ * ║  🎨 Canvas    : @napi-rs/canvas (High Performance 2D Engine)         ║
+ * ║  🔥 Modules   : Flame Streak | Cyber ID Card | Menfess | Ticket V2   ║
+ * ║  🛡️ Host      : Pterodactyl Panel | Linux x64 | Railway | VPS        ║
+ * ║  ✨ Design    : Premium Components V2 | Cyberpunk Aesthetics         ║
+ * ╚══════════════════════════════════════════════════════════════════════╝
  */
 
 require("dotenv").config();
@@ -370,15 +375,10 @@ function validateDirectImageUrl(url) {
   return null; // valid!
 }
 
-// ✅ SATU AJA (jangan dobel)
-const SQLITE_PATH = requireEnv("SQLITE_PATH") || "./data/hovassistant_v2.db";
-const dir = path.dirname(SQLITE_PATH);
-if (dir && dir !== "." && dir !== "/") fs.mkdirSync(dir, { recursive: true });
-
 // ===================== DB BACKUP CONFIG =====================
-const BACKUP_DIR = path.join(path.dirname(SQLITE_PATH), "_backups");
-const BACKUP_EVERY_MIN = Number(process.env.BACKUP_EVERY_MIN || 360); // 6 jam
-const BACKUP_KEEP = Number(process.env.BACKUP_KEEP || 30);
+
+// 6 jam
+
 const OWNER_DM_BACKUP_TIMES = String(process.env.OWNER_DM_BACKUP_TIMES || "00:00,18:00")
   .split(",")
   .map((x) => x.trim())
@@ -1171,34 +1171,6 @@ function rotateBackups(dir, keep) {
   });
 }
 
-async function backupDatabase(reason = "scheduled") {
-  try {
-    ensureDir(BACKUP_DIR);
-
-    // paksa WAL masuk db utama (aman walau non-WAL)
-    await safeRun("PRAGMA wal_checkpoint(FULL);").catch(() => null);
-
-    const stamp = new Date(Date.now() + 7 * 60 * 60 * 1000)
-      .toISOString()
-      .replace(/[:.]/g, "-")
-      .slice(0, 19);
-
-    const out = path.join(BACKUP_DIR, `backup_${stamp}_${reason}.db`);
-    fs.copyFileSync(SQLITE_PATH, out);
-
-    rotateBackups(BACKUP_DIR, BACKUP_KEEP);
-    if (reason === "startup") {
-      console.log(` ├── [BACKUP] Startup backup OK: ${path.basename(out)}`);
-    } else {
-      console.log(` ├── [BACKUP] OK: ${path.basename(out)} (${reason})`);
-    }
-    return { ok: true, path: out };
-  } catch (e) {
-    console.error("[BACKUP] FAIL:", e);
-    return { ok: false, error: e };
-  }
-}
-
 function formatDuration(ms) {
   const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
   const days = Math.floor(totalSeconds / 86400);
@@ -1357,6 +1329,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildPresences,
   ],
 });
 
@@ -3351,59 +3324,50 @@ function normalizeTags(raw) {
 }
 
 async function faqAdd(guildId, title, content, tags, createdBy) {
+  const count = await FaqItem.countDocuments({ guild_id: String(guildId) });
+  const id = count + 1;
   const now = Date.now();
-  const t = safeText(title, 80);
-  const c = String(content || "").replace(/\r\n/g, "\n").trim().slice(0, 4000);
-  const tg = normalizeTags(tags);
-  await dbRun(
-    `INSERT INTO faq_items (guild_id, title, content, tags, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [guildId, t, c, tg, createdBy || null, now, now]
-  );
-  const row = await dbGet(`SELECT last_insert_rowid() AS id`);
-  return Number(row?.id || 0);
+  await FaqItem.create({
+    id, guild_id: String(guildId), title: String(title || "").trim().slice(0, 100),
+    content: String(content || "").replace(/\r\n/g, "\n").trim().slice(0, 4000),
+    tags: normalizeTags(tags), created_by: String(createdBy || ""),
+    created_at: now, updated_at: now
+  });
+  return id;
 }
 
 async function faqGet(guildId, id) {
-  return await dbGet(`SELECT * FROM faq_items WHERE guild_id=? AND id=?`, [guildId, Number(id)]);
+  const doc = await FaqItem.findOne({ guild_id: String(guildId), id: Number(id) });
+  return doc ? doc.toObject() : null;
+}
+
+async function faqEdit(guildId, id, title, content, tags) {
+  const now = Date.now();
+  await FaqItem.updateOne({ guild_id: String(guildId), id: Number(id) }, {
+    $set: { title: String(title).trim().slice(0, 100), content: String(content).trim().slice(0, 4000), tags: normalizeTags(tags), updated_at: now }
+  });
+  return true;
 }
 
 async function faqSearch(guildId, query, limit = 10) {
   const q = String(query || "").trim();
   if (!q) return [];
-  const like = `%${q.replace(/[%_]/g, "\\$&")}%`;
-  // Simple LIKE search over title/content/tags
-  return await dbAll(
-    `SELECT id, title, tags, created_at, updated_at
-     FROM faq_items
-     WHERE guild_id=?
-       AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
-     ORDER BY updated_at DESC
-     LIMIT ?`,
-    [guildId, like, like, like, Number(limit)]
-  );
+  const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), "i");
+  const docs = await FaqItem.find({
+    guild_id: String(guildId),
+    $or: [{ title: regex }, { content: regex }, { tags: regex }]
+  }).sort({ updated_at: -1 }).limit(Number(limit));
+  return docs.map(d => d.toObject());
 }
 
 async function faqListLatest(guildId, limit = 15) {
-  return await dbAll(
-    `SELECT id, title, tags, updated_at
-     FROM faq_items
-     WHERE guild_id=?
-     ORDER BY updated_at DESC
-     LIMIT ?`,
-    [guildId, Number(limit)]
-  );
+  const docs = await FaqItem.find({ guild_id: String(guildId) }).sort({ updated_at: -1 }).limit(Number(limit));
+  return docs.map(d => d.toObject());
 }
 
 async function faqListForPanel(guildId, limit = 25) {
-  return await dbAll(
-    `SELECT id, title, tags, updated_at
-     FROM faq_items
-     WHERE guild_id=?
-     ORDER BY id ASC
-     LIMIT ?`,
-    [guildId, Number(limit)]
-  );
+  const docs = await FaqItem.find({ guild_id: String(guildId) }).sort({ id: 1 }).limit(Number(limit));
+  return docs.map(d => d.toObject());
 }
 async function faqUpdate(guildId, id, fields) {
   const cur = await faqGet(guildId, id);
@@ -3414,15 +3378,14 @@ async function faqUpdate(guildId, id, fields) {
   const tags = fields.tags != null ? normalizeTags(fields.tags) : (cur.tags || "");
   const now = Date.now();
 
-  await dbRun(
-    `UPDATE faq_items SET title=?, content=?, tags=?, updated_at=? WHERE guild_id=? AND id=?`,
-    [title, content, tags, now, guildId, Number(id)]
-  );
+  await FaqItem.updateOne({ guild_id: String(guildId), id: Number(id) }, {
+    $set: { title: String(title).trim().slice(0, 100), content: String(content).trim().slice(0, 4000), tags: normalizeTags(tags), updated_at: now }
+  });
   return true;
 }
 
 async function faqDelete(guildId, id) {
-  await dbRun(`DELETE FROM faq_items WHERE guild_id=? AND id=?`, [guildId, Number(id)]);
+  await FaqItem.deleteOne({ guild_id: String(guildId), id: Number(id) });
   return true;
 }
 
@@ -3523,16 +3486,12 @@ function buildfaqSelect(items, placeholder = "Pilih Topik") {
 
 // ===================== META (TEXT) =====================
 async function getMetaText(key) {
-  const r = await safeGet(`SELECT value FROM app_meta WHERE key=?`, [key]);
-  return r?.value ?? null;
+  const doc = await MetaText.findOne({ key: String(key) });
+  return doc?.value ?? null;
 }
 
 async function setMetaText(key, value) {
-  await dbRun(
-    `INSERT INTO app_meta (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-    [key, String(value)]
-  );
+  await MetaText.updateOne({ key: String(key) }, { $set: { value: String(value) } }, { upsert: true });
 }
 
 // WIB date key (Asia/Jakarta) => YYYY-MM-DD
@@ -3673,6 +3632,39 @@ function buildTicketPanel(settings) {
   return { components: [container] };
 }
 
+function buildFemaleVerificationPanel() {
+  const container = new ContainerBuilder().setAccentColor(0xFFC0CB);
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      "## 🎀 Verifikasi Role Female\n\n" +
+      "Halo! Untuk mendapatkan akses role, silakan lakukan verifikasi terlebih dahulu ya. ✨\n\n" +
+      "> 🌸 **Langkah Verifikasi:**\n" +
+      "> 1. Klik tombol **📩 Buka Tiket** di bawah.\n" +
+      "> 2. Kirimkan **Voice Note (VN)** sesuai instruksi.\n" +
+      "> 3. Tunggu staff kami mengecek tiketmu.\n\n" +
+      "Jangan lupa siapkan dirimu untuk *record* VN langsung dari Discord ya! ☁️"
+    )
+  );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("btn_open_verif")
+      .setLabel("📩 Buka Tiket Verifikasi")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  container.addActionRowComponents(row);
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent("-# Mystral • Role Verification Female")
+  );
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2
+  };
+}
+
 // ====== TICKET: MODAL BUILDER (DYNAMIC) ======
 function ticketTypeLabel(type) {
   const map = {
@@ -3754,33 +3746,21 @@ function buildTicketModal(type) {
 async function ensureMenfessCounterStart() {
   const MIN_LAST_ID = 675;
 
-  let row = null;
-  let maxRow = { m: 0 };
+  let row = await MetaText.findOne({ key: 'menfess_last_id' });
+  let maxDoc = await MenfessPost.findOne().sort({ id: -1 });
 
-  try {
-    row = await dbGet(`SELECT value FROM menfess_meta WHERE key='menfess_last_id'`);
-  } catch {
-    row = null;
-  }
-
-  try {
-    maxRow = await dbGet(`SELECT COALESCE(MAX(id), 0) AS m FROM menfess_posts`);
-  } catch {
-    maxRow = { m: 0 };
-  }
-
-  const maxId = Number(maxRow?.m || 0);
+  const maxId = maxDoc ? (maxDoc.id || 0) : 0;
 
   if (!row) {
     const startLastId = Math.max(MIN_LAST_ID, maxId);
-    await dbRun(`INSERT INTO menfess_meta (key, value) VALUES ('menfess_last_id', ?)`, [startLastId]);
+    await MetaText.create({ key: 'menfess_last_id', value: startLastId });
     return;
   }
 
   const cur = Number(row.value || 0);
   const fixed = Math.max(cur, MIN_LAST_ID, maxId);
   if (fixed !== cur) {
-    await dbRun(`UPDATE menfess_meta SET value=? WHERE key='menfess_last_id'`, [fixed]);
+    await MetaText.updateOne({ key: 'menfess_last_id' }, { $set: { value: fixed } });
   }
 }
 
@@ -3797,50 +3777,50 @@ function isBadAlias(alias) {
 }
 
 async function getAnonLabel(userId) {
-  const row = await safeGet("SELECT anon_label FROM menfess_anonmap WHERE user_id=?", [userId]);
-  if (row?.anon_label) return row.anon_label;
+  let doc = await MenfessAnonMap.findOne({ user_id: String(userId) });
+  if (doc?.anon_label) return doc.anon_label;
 
-  const c = await safeGet("SELECT COUNT(*) AS n FROM menfess_anonmap");
-  const n = Number(c?.n || 0) + 1;
+  const count = await MenfessAnonMap.countDocuments();
+  const n = count + 1;
 
   const label = `Anon #${String(n).padStart(3, "0")}`;
 
-  await safeRun(
-    `INSERT INTO menfess_anonmap (user_id, anon_label)
-     VALUES (?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET anon_label=excluded.anon_label`,
-    [userId, label]
+  await MenfessAnonMap.updateOne(
+    { user_id: String(userId) },
+    { $set: { anon_label: label } },
+    { upsert: true }
   );
 
   return label;
 }
 
 async function insertMenfessPost({ id, messageId, channelId }) {
-  await dbRun(
-    `INSERT INTO menfess_posts (id, message_id, channel_id, created_at)
-     VALUES (?,?,?,?)`,
-    [id, messageId || null, channelId || null, Date.now()]
-  );
+  await MenfessPost.create({
+    id: Number(id),
+    message_id: messageId || null,
+    channel_id: channelId || null,
+    created_at: Date.now()
+  });
   return id;
 }
 
 async function updateMenfessPostLink(id, { messageId, channelId, threadId = null }) {
-  await dbRun(`UPDATE menfess_posts SET message_id=?, channel_id=?, thread_id=COALESCE(?, thread_id) WHERE id=?`, [messageId, channelId, threadId, Number(id)]);
+  const setObj = { message_id: messageId, channel_id: channelId };
+  if (threadId) setObj.thread_id = threadId;
+  await MenfessPost.updateOne({ id: Number(id) }, { $set: setObj });
 }
 
 async function getMenfessPostById(id) {
-  return (await safeGet(
-    `SELECT id, message_id, channel_id, thread_id, created_at FROM menfess_posts WHERE id=?`,
-    [Number(id)]
-  )) || null;
+  const doc = await MenfessPost.findOne({ id: Number(id) });
+  return doc ? doc.toObject() : null;
 }
 
 // ===================== MENFESS BUTTON CLEANUP =====================
 async function handleMenfessButtonCleanup(client, sentMsg) {
   if (!sentMsg) return;
   try {
-    const lastMsgRow = await dbGet(`SELECT value FROM app_meta WHERE key='menfess_last_msg_id'`);
-    const lastChRow = await dbGet(`SELECT value FROM app_meta WHERE key='menfess_last_channel_id'`);
+    const lastMsgRow = await MetaText.findOne({ key: 'menfess_last_msg_id' });
+    const lastChRow = await MetaText.findOne({ key: 'menfess_last_channel_id' });
 
     if (lastMsgRow?.value && lastChRow?.value) {
       const oldCh = await client.channels.fetch(lastChRow.value).catch(() => null);
@@ -3852,8 +3832,8 @@ async function handleMenfessButtonCleanup(client, sentMsg) {
       }
     }
 
-    await dbRun(`INSERT INTO app_meta (key, value) VALUES ('menfess_last_msg_id', ?) ON CONFLICT(key) DO UPDATE SET value=?`, [sentMsg.id, sentMsg.id]);
-    await dbRun(`INSERT INTO app_meta (key, value) VALUES ('menfess_last_channel_id', ?) ON CONFLICT(key) DO UPDATE SET value=?`, [sentMsg.channelId, sentMsg.channelId]);
+    await MetaText.updateOne({ key: 'menfess_last_msg_id' }, { $set: { value: String(sentMsg.id) } }, { upsert: true });
+    await MetaText.updateOne({ key: 'menfess_last_channel_id' }, { $set: { value: String(sentMsg.channelId) } }, { upsert: true });
   } catch (err) {
     console.error("❌ handleMenfessButtonCleanup Error:", err);
   }
@@ -3939,7 +3919,7 @@ function ticketIsStaff(member) {
 }
 
 async function getTicketLogChannel(guild) {
-  const logId = requireEnv("TICKET_LOG_CHANNEL_ID");
+  const logId = process.env.TICKET_LOG_CHANNEL_ID || "1459868526096420945";
   if (!logId) return null;
   return await getTextChannelOrNull(guild, logId);
 }
@@ -5413,42 +5393,53 @@ const HELP_CATEGORIES = {
   assistant: {
     emoji: "🤖",
     label: "Management Assistant",
-    description: "Manage autoresponses, server statistics, active voice channels, and roles.",
+    description: "Core assistant queries, server stats, and voice tracking.",
     commands: [
       "`/c <query>` - Run assistant text queries directly.",
-      "`/serverstats` - View server statistics.",
-      "`/voicecheck` - Show active voice channel states.",
-      "`/sticky set <content>` / `/sticky remove` - Sticky Message management.",
-      "`/media enable` / `/media disable` / `/media status` - Universal Media Embed settings.",
-      "`/media platform <name> <enabled>` / `/media delete-original <value>` - Configure platforms and auto-deletion.",
-      "**Role Management & Information**:",
-      "- `c add <role> to <user> [days]` - Assign a role to a member with optional duration.",
+      "`c server stats` / `ss` / `stats` / `/serverstats` - View detailed server statistics.",
+      "`c voice check` / `vc` / `vcc` / `/voicecheck` - Show active voice channel states.",
+      "`cvc <user>` / `cv` / `cvc` / `cfind` - Check a member's active voice channel.",
+      "**Autoresponder Engine**:",
+      "- `cadd autoresponse ...` / `aar` - Add a new autoresponse.",
+      "- `cedit autoresponse ...` / `ear` - Edit an existing autoresponse.",
+      "- `cdelete autoresponse <id>` / `dar` - Delete an autoresponse.",
+      "- `clist autoresponse` / `clar` / `lar` - List all autoresponses.",
+      "- `cenable/disable autoresponse <id>` / `enar` / `disar` - Toggle autoresponse state."
+    ]
+  },
+  roles_mod: {
+    emoji: "🛠️",
+    label: "Role & Moderation Quick Actions",
+    description: "Prefix commands for roles, voice control, sticky messages, and moderation.",
+    commands: [
+      "**Role Management**:",
+      "- `c add <role> to <user> [days]` - Assign a role with optional duration.",
       "- `c remove <role> from <user>` - Remove a role from a member.",
-      "- `c list <role>` / `who` - List all members holding a role.",
-      "**Voice & Status Channels**:",
-      "- `c voice check` / `vc` / `vcc` - Show active voice channels.",
-      "- `c vc <user>` / `cv` / `voice` / `cfind` / `cvc` / `ccv` - Check a member's voice channel.",
-      "- `c server stats` / `ss` / `stats` - Show detailed server statistics.",
-      "**Moderation & Actions**:",
+      "- `c list <role>` / `c who <role>` - List all members holding a role.",
+      "**Voice Control**:",
+      "- `c move voice <user> <channel>` / `mv vc` - Move member to another voice channel.",
+      "- `c disconnect voice <user>` / `dc vc` - Disconnect member from voice.",
+      "- `c mute voice <user>` / `mu vc` - Server-mute member in voice.",
+      "- `c deafen voice <user>` / `df vc` - Server-deafen member in voice.",
+      "**Moderation & Utilities**:",
       "- `c timeout <user> <duration>` / `to` - Timeout a member.",
       "- `c untimeout <user>` / `unto` - Remove timeout from a member.",
-      "- `c nickname <user> <nick>` / `nick` - Change a member's nickname.",
-      "- `c move voice <user> <channel>` / `mv vc` - Move a member to another voice channel.",
-      "- `c disconnect voice <user>` / `dc vc` - Disconnect a member from voice.",
-      "- `c mute voice <user>` / `mu vc` - Server-mute a member in voice.",
-      "- `c deafen voice <user>` / `df vc` - Server-deafen a member in voice.",
       "- `c purge <amount>` / `pg` / `cl` - Bulk delete messages.",
-      "- `c sticky set <content>` / `stset` - Set sticky message for this channel.",
-      "- `c sticky remove` / `strem` - Remove sticky message from this channel.",
-      "- `c media enable [platform]` / `c media disable` - Enable/Disable platform media links.",
-      "- `c media delete-original <true/false>` - Toggle original link message deletion.",
-      "- `c media status` - Check current media configuration status.",
-      "**Autoresponder**:",
-      "- `c add autoresponse ...` / `aar` - Add a new autoresponse.",
-      "- `c edit autoresponse ...` / `ear` - Edit an existing autoresponse.",
-      "- `c delete autoresponse <id>` / `dar` - Delete an autoresponse.",
-      "- `c list autoresponse` / `lar` - List all autoresponses.",
-      "- `c enable/disable autoresponse <id>` / `enar` / `disar` - Enable/Disable an autoresponse."
+      "- `c sticky set <content>` / `c sticky remove` - Sticky message management.",
+      "- `c media enable/disable/status` - Universal Media Embed settings."
+    ]
+  },
+  streak: {
+    emoji: "🔥",
+    label: "Flame Streak System",
+    description: "Daily streak tracking, streak profiles, cards, and recovery.",
+    commands: [
+      "`cs` / `cstreak` / `c fire` - Check daily streak status.",
+      "`csl` / `cstreak list` / `/streak list` - View active & broken streak list.",
+      "`csp` / `cstreak profile` / `/streak profile` - View interactive streak profile card.",
+      "`csc` / `cstreak cards` / `/streak cards` - View interactive streak cards.",
+      "`csi` / `cstreak info` / `/streak info` - Check streak status with a member.",
+      "`csr` / `cstreak recover` / `/streak recover` - Recover a broken streak."
     ]
   },
   general: {
@@ -5456,16 +5447,16 @@ const HELP_CATEGORIES = {
     label: "General & Utilities",
     description: "General commands, status checks, latency ping, and calculator.",
     commands: [
-      "`/help` - Display this help grimoire.",
-      "`/ping` - Check bot connection & latency.",
+      "`/help` / `chelp` - Display this help grimoire.",
+      "`/ping` / `cping` - Check bot connection & latency.",
       "`/botstatus` - Check memory usage and bot status.",
-      "`/halo` - Warm greetings from the assistant.",
+      "`/halo` / `chalo` - Warm greetings from the assistant.",
       "`/about` - Detailed information about Mystral Assistant.",
-      "`/calc <expression>` - Secure calculator based on pure mathematics.",
-      "`/translate <text> [to] [from]` - Translate text to another language.",
-      "`/weather <location>` - Check weather conditions in a location.",
-      "`/qrcode <text>` - Generate a QR Code from text or URL.",
-      "`/shorturl <url>` - Shorten a URL using TinyURL."
+      "`/calc <expression>` / `ccalc` - Secure mathematical calculator.",
+      "`/translate <text>` / `cts` - Translate text to another language.",
+      "`/weather <location>` / `cweather` - Check weather conditions.",
+      "`/qrcode <text>` / `cqrcode` - Generate a QR Code.",
+      "`/shorturl <url>` / `csurl` - Shorten a URL using TinyURL."
     ]
   },
   profile: {
@@ -5504,7 +5495,7 @@ const HELP_CATEGORIES = {
       "`/tod random` - Get a random Truth or Dare.",
       "`/tod daily` - Get a special daily challenge.",
       "`/tod submit` - Submit your own custom Truth or Dare ideas.",
-      "`/afk [reason]` - Enter AFK state (notifies when mentioned).",
+      "`/afk [reason]` / `c afk` - Enter AFK state (notifies when mentioned).",
       "`/afk_list` - View the list of currently AFK members.",
       "`/remind_in <duration> <message>` - Set a reminder alarm based on duration.",
       "`/remind_at <time> <message>` - Set a reminder alarm at a specific time (WIB).",
@@ -5515,12 +5506,13 @@ const HELP_CATEGORIES = {
   games: {
     emoji: "🎉",
     label: "Games & Events",
-    description: "Number guessing mini-games and giveaway system.",
+    description: "Number guessing mini-games, Tarot, and giveaway system.",
     commands: [
-      "`/tebakangka` - Start an interactive number guessing game.",
-      "`/hint` - Get range hints for the active guessing game.",
-      "`/stopgame` - Terminate the active guessing game.",
-      "`/leaderboard tebakangka` - View top guessers leaderboard.",
+      "`/tebakangka` / `cta` - Start an interactive number guessing game.",
+      "`/hint` / `chint` - Get range hints for the active guessing game.",
+      "`/stopgame` / `cstopgame` - Terminate the active guessing game.",
+      "`/leaderboard tebakangka` / `clb angka` - View top guessers leaderboard.",
+      "`/tarot` / `ctarot` - Open daily tarot card reading.",
       "`/giveaway_start` - Start a new giveaway event.",
       "`/giveaway_end` - End the active giveaway and draw winners.",
       "`/giveaway_list` - List all active giveaways.",
@@ -5531,14 +5523,15 @@ const HELP_CATEGORIES = {
   },
   support: {
     emoji: "🎫",
-    label: "Support Desk",
-    description: "Support ticket management, reporting, and logs.",
+    label: "Support Desk & Verification",
+    description: "Support ticket management, verification, reporting, and logs.",
     commands: [
       "`/ticket_setup` - Set up log channels and ticket categories.",
       "`/ticketpanel` - Send the private support ticket panel *(Owner Only)*.",
       "**Ticket Operations**:",
-      "• `claim` - Claim a ticket by staff to start support.",
-      "• `close` - Permanently close a ticket and generate transcript logs."
+      "- `claim` - Claim a ticket by staff to start support.",
+      "- `close` - Permanently close a ticket with confirmation & transcript log.",
+      "- `approve` - Approve female verification ticket & log."
     ]
   },
   faq: {
@@ -5578,35 +5571,14 @@ const HELP_CATEGORIES = {
     commands: [
       "`/selfrolespanel` - Send the self-assignable roles setup panel.",
       "`/idcard_export` - Export ID Card database to JSON format.",
-      "`/backup_now` - Perform an instant backup of the SQLite database.",
+      "`/backup_now` - Perform an instant backup of the database.",
       "`/tod_add` - Add custom Truth/Dare questions to the database.",
       "`/sendembed` / `/sendembedv2` - Send custom embed messages."
-    ]
-  },
-  prefix: {
-    emoji: "⌨️",
-    label: "Prefix Shortcuts",
-    description: "Quick commands using the prefix 'c'.",
-    commands: [
-      "`chelp` - This interactive help menu.",
-      "`cping` - Fast ping check.",
-      "`chalo` - Quick greet.",
-      "`ccalc <expression>` - Secure calculator.",
-      "`cta` - Start a number guessing game.",
-      "`chint` - Get a guessing game hint.",
-      "`cstopgame` - End the guessing game.",
-      "`clb angka` - Guessing game leaderboard.",
-      "`ctarot` - Open daily tarot card.",
-      "`ctranslate` / `cts` - Fast translation.",
-      "`cweather <location>` - Quick weather check.",
-      "`cqrcode <text>` - Fast QR Code generation.",
-      "`cshorturl` / `csurl` - Fast URL shortening.",
-      "`cmedia` - Quick media settings check."
     ]
   }
 };
 
-function buildHelpUI(selectedCategory = "home", userId = null, isSlash = true) {
+function buildHelpUI(selectedCategory = "home", userId = null) {
   // Create Select Menu
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`help:menu:${userId || "any"}`)
@@ -5630,105 +5602,58 @@ function buildHelpUI(selectedCategory = "home", userId = null, isSlash = true) {
 
   const row = new ActionRowBuilder().addComponents(selectMenu);
 
-  if (isSlash) {
-    const container = new ContainerBuilder();
-    if (selectedCategory === "home" || !HELP_CATEGORIES[selectedCategory]) {
-      const categoriesDesc = Object.entries(HELP_CATEGORIES)
-        .map(([key, cat]) => `${cat.emoji} **${cat.label}**\n*${cat.description}*`)
-        .join("\n\n");
+  const container = new ContainerBuilder();
+  if (selectedCategory === "home" || !HELP_CATEGORIES[selectedCategory]) {
+    const categoriesDesc = Object.entries(HELP_CATEGORIES)
+      .map(([key, cat]) => `${cat.emoji} **${cat.label}**`)
+      .join("\n");
 
-      container
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent("# 📚 Mystral Assistant — Command Grimoire"),
-          new TextDisplayBuilder().setContent(
-            [
-              "Welcome to the **Mystral** help center.",
-              "Use slash commands `/...` for main features, or prefix `c...` for quick commands.",
-              "",
-              "> **Select a feature category below to view the full command list.**",
-              "",
-              categoriesDesc
-            ].join("\n")
-          )
-        )
-        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-        .addActionRowComponents(row)
-        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent("Mystral   Use the menu below to navigate")
-        );
-    } else {
-      const cat = HELP_CATEGORIES[selectedCategory];
-      container
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`# ${cat.emoji} Category: ${cat.label}`),
-          new TextDisplayBuilder().setContent(
-            [
-              `*${cat.description}*`,
-              "",
-              cat.commands.join("\n")
-            ].join("\n")
-          )
-        )
-        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-        .addActionRowComponents(row)
-        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`Mystral   Category: ${cat.label}   slash / prefix c`)
-        );
-    }
-
-    return {
-      components: [container],
-      flags: MessageFlags.IsComponentsV2,
-      allowedMentions: { parse: [] }
-    };
-  } else {
-    // Return standard EmbedBuilder for prefix commands
-    const embed = new EmbedBuilder()
-      .setColor(EMBED_COLOR)
-      .setTimestamp();
-
-    if (selectedCategory === "home" || !HELP_CATEGORIES[selectedCategory]) {
-      embed
-        .setTitle("📚 Mystral Assistant — Command Grimoire")
-        .setDescription(
+    container
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("# 📚 Mystral Assistant — Command Grimoire"),
+        new TextDisplayBuilder().setContent(
           [
             "Welcome to the **Mystral** help center.",
             "Use slash commands `/...` for main features, or prefix `c...` for quick commands.",
             "",
-            "> **Select a feature category below to view the full command list.**"
+            "> **Select a feature category below to view the full command list.**",
+            "",
+            categoriesDesc
           ].join("\n")
-        );
-
-      for (const [key, cat] of Object.entries(HELP_CATEGORIES)) {
-        embed.addFields({
-          name: `${cat.emoji} ${cat.label}`,
-          value: cat.description,
-          inline: true
-        });
-      }
-      embed.setFooter({ text: "Mystral • Use the menu below to navigate" });
-    } else {
-      const cat = HELP_CATEGORIES[selectedCategory];
-      embed
-        .setTitle(`${cat.emoji} Category: ${cat.label}`)
-        .setDescription(
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addActionRowComponents(row)
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("Mystral   Use the menu below to navigate")
+      );
+  } else {
+    const cat = HELP_CATEGORIES[selectedCategory];
+    container
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`# ${cat.emoji} Category: ${cat.label}`),
+        new TextDisplayBuilder().setContent(
           [
             `*${cat.description}*`,
             "",
             cat.commands.join("\n")
           ].join("\n")
         )
-        .setFooter({ text: `Mystral • Category: ${cat.label} • slash / prefix c` });
-    }
-
-    return {
-      embeds: [embed],
-      components: [row],
-      allowedMentions: { parse: [] }
-    };
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addActionRowComponents(row)
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral   Category: ${cat.label}   slash / prefix c`)
+      );
   }
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] }
+  };
 }
 
 function ticketPanelComponentsV2() {
@@ -5936,18 +5861,26 @@ async function findMemberFuzzy(guild, userQuery) {
 
 async function safeCtxReply(ctx, payload) {
   try {
-    if (ctx.isInteraction?.()) {
+    const isInteraction = Boolean(ctx.isInteraction?.() || ctx.deferred !== undefined || ctx.replied !== undefined);
+    if (isInteraction) {
       if (ctx.deferred || ctx.replied) {
-        return await ctx.editReply(payload);
+        return await ctx.editReply(payload).catch(async () => {
+          return await ctx.followUp(payload).catch(() => null);
+        });
       }
       if (typeof payload === 'object') {
         payload.fetchReply = true;
       } else {
         payload = { content: payload, fetchReply: true };
       }
-      return await ctx.reply(payload);
+      return await ctx.reply(payload).catch(async () => {
+        if (ctx.deferred || ctx.replied) {
+          return await ctx.editReply(payload).catch(() => null);
+        }
+        return await ctx.followUp(payload).catch(() => null);
+      });
     }
-    return await ctx.reply(payload);
+    return await ctx.reply(payload).catch(() => null);
   } catch (e) {
     console.error("[CTX REPLY ERROR]", e);
   }
@@ -6962,20 +6895,37 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     return true;
   }
 
-  if (cmd === "list_autoresponse" || cmd === "lar" || (cmd === "list" && (args[0] === "autoresponse" || args[0] === "ar"))) {
+  if (cmd === "list_autoresponse" || cmd === "lar" || cmd === "clar" || (cmd === "list" && (args[0] === "autoresponse" || args[0] === "ar"))) {
     const list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
     if (!list.length) {
-      const embed = new EmbedBuilder().setTitle("📋 Daftar Autoresponse").setColor(EMBED_COLOR).setDescription("Belum ada autoresponse di server ini.").setTimestamp();
-      await safeCtxReply(ctx, { embeds: [embed] });
+      const container = new ContainerBuilder().setAccentColor(0x3498db);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`## 📋 Daftar Autoresponse\n\n_Belum ada autoresponse di server ini._`)
+      );
+      await safeCtxReply(ctx, { components: [container], flags: MessageFlags.IsComponentsV2 });
       return true;
     }
-    const lines = list.map(r => `\`[ID ${r.id}]\` **${r.trigger_text}** ➔ \`${r.response_text.slice(0, 50)}\` (${r.is_enabled ? 'Aktif' : 'Nonaktif'})`);
-    const embed = new EmbedBuilder()
-      .setTitle("📋 Daftar Autoresponse")
-      .setColor(EMBED_COLOR)
-      .setDescription(lines.join("\n"))
-      .setTimestamp();
-    await safeCtxReply(ctx, { embeds: [embed] });
+
+    const lines = list.map((r, idx) => {
+      const arId = r.id !== undefined && r.id !== null ? r.id : (r._id ? String(r._id).slice(-6) : (idx + 1));
+      const statusText = r.is_enabled ? "Aktif" : "Nonaktif";
+      const responseSnippet = String(r.response_text || "").replace(/\n/g, " ").slice(0, 45);
+      return `\`[ID ${arId}]\` **${r.trigger_text}** ➔ \`${responseSnippet}\` (${statusText})`;
+    });
+
+    const container = new ContainerBuilder().setAccentColor(0x3498db);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `## 📋 Daftar Autoresponse — ${ctx.guild.name}\n` +
+        `Total **${list.length}** autoresponse terdaftar di server ini.\n\n` +
+        lines.join("\n")
+      )
+    );
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`*Requested by ${authorTag}*`)
+    );
+
+    await safeCtxReply(ctx, { components: [container], flags: MessageFlags.IsComponentsV2 });
     return true;
   }
 
@@ -7841,8 +7791,6 @@ client.once(Events.ClientReady, async (c) => {
 
 
   // ===================== AUTO BACKUP =====================
-  await backupDatabase("startup");
-  setInterval(() => backupDatabase("scheduled"), BACKUP_EVERY_MIN * 60 * 1000);
   startOwnerDmBackupSchedule(c);
 
   startReminderLoop(c); // ✅ reminder loop jalan
@@ -8162,8 +8110,13 @@ async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage
     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent("-# Mystral   Tebak Angka"));
 
-    const payload = { components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } };
-    return isInteraction ? interactionOrMessage.editReply(payload) : interactionOrMessage.reply(payload);
+    try {
+      const payload = { components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } };
+      return isInteraction ? await interactionOrMessage.editReply(payload) : await interactionOrMessage.reply(payload);
+    } catch (e) {
+      console.error("[TEBAK ANGKA LEADERBOARD NO WINNER ERROR]", e.message);
+      return;
+    }
   }
 
   const itemsPerPage = 10;
@@ -8228,9 +8181,15 @@ async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage
 
   const initialComps = await buildPage(currentPage);
   const payload = { components: initialComps, flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } };
-  const msg = isInteraction
-    ? await interactionOrMessage.editReply(payload)
-    : await interactionOrMessage.reply(payload);
+  let msg;
+  try {
+    msg = isInteraction
+      ? await interactionOrMessage.editReply(payload)
+      : await interactionOrMessage.reply(payload);
+  } catch (err) {
+    console.error("[TEBAK ANGKA LEADERBOARD ERROR]", err.message);
+    return;
+  }
 
   if (totalPages > 1) {
     const collector = msg.createMessageComponentCollector({
@@ -8257,6 +8216,7 @@ async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage
 }
 
 async function handleGuessNumberAttempt(message) {
+  if (!message.guild) return false;
   const game = getGuessNumberGame(message.guild.id, message.channel.id);
   if (!game) return false;
 
@@ -8586,6 +8546,28 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     async function downloadMedia(url) {
+      // 1. Fast Tikwm API fallback for TikTok links
+      if (url.includes("tiktok.com")) {
+        try {
+          const tikwmUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`;
+          const tikRes = await fetch(tikwmUrl);
+          if (tikRes.ok) {
+            const tikData = await tikRes.json();
+            const videoUrl = tikData?.data?.play || tikData?.data?.wmplay;
+            if (videoUrl) {
+              const vRes = await fetch(videoUrl);
+              if (vRes.ok) {
+                const arrayBuf = await vRes.arrayBuffer();
+                return Buffer.from(arrayBuf);
+              }
+            }
+          }
+        } catch (tikErr) {
+          console.error("[TIKTOK TIKWM DOWNLOAD ERROR]", tikErr);
+        }
+      }
+
+      // 2. Local/Global yt-dlp binary
       const ytDlpPath = await ensureYtDlp();
       if (!ytDlpPath) return null;
 
@@ -8885,6 +8867,38 @@ client.on(Events.MessageCreate, async (message) => {
         await panelCh.send({ components, flags: MessageFlags.IsComponentsV2 });
 
         return message.reply("✅ Ticket panel berhasil dibuat (prefix).");
+      }
+
+      // ===================== PREFIX: csetup-verif =====================
+      if (cmd === "setup-verif" || cmd === "setupverif" || cmd === "verifpanel") {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+          return message.reply("❌ Butuh Administrator.");
+        }
+        const panelCh = message.mentions.channels.find(c => c.type !== ChannelType.GuildCategory) || message.channel;
+        const categoryCh = message.mentions.channels.find(c => c.type === ChannelType.GuildCategory);
+        const staffRole = message.mentions.roles.first();
+
+        if (categoryCh) {
+          await MetaText.updateOne(
+            { key: `verif_category_${message.guild.id}` },
+            { $set: { value: String(categoryCh.id) } },
+            { upsert: true }
+          );
+        }
+
+        if (staffRole) {
+          await MetaText.updateOne(
+            { key: `verif_staff_role_${message.guild.id}` },
+            { $set: { value: String(staffRole.id) } },
+            { upsert: true }
+          );
+        }
+
+        const payload = buildFemaleVerificationPanel();
+        await panelCh.send(payload);
+        const catInfo = categoryCh ? ` | Category: ${categoryCh.name}` : "";
+        const roleInfo = staffRole ? ` | Staff: <@&${staffRole.id}>` : "";
+        return message.reply(`✅ Panel verifikasi role cewe telah dikirim ke ${panelCh}${catInfo}${roleInfo}.`);
       }
     }
 
@@ -10898,12 +10912,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           let post = await getMenfessPostById(targetIdInput).catch(() => null);
 
           if (!post) {
-            post = await dbGet(
-              `SELECT id, message_id, channel_id, thread_id
-           FROM menfess_posts
-           WHERE message_id=?`,
-              [targetIdInput]
-            ).catch(() => null);
+            const doc = await MenfessPost.findOne({ message_id: String(targetIdInput) });
+            post = doc ? doc.toObject() : null;
           }
 
           if (!post) {
@@ -11478,6 +11488,41 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.editReply("✅ Ticket panel dibuat.");
     }
 
+    if (interaction.isChatInputCommand() && (interaction.commandName === "setup-verif" || interaction.commandName === "setup_verif")) {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return interaction.reply({ content: "❌ Khusus Admin.", flags: MessageFlags.Ephemeral });
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const panelCh = interaction.options.getChannel("panel_channel") || interaction.channel;
+      const category = interaction.options.getChannel("category");
+      const staffRole = interaction.options.getRole("staff_role");
+
+      if (category) {
+        await MetaText.updateOne(
+          { key: `verif_category_${interaction.guild.id}` },
+          { $set: { value: String(category.id) } },
+          { upsert: true }
+        );
+      }
+
+      if (staffRole) {
+        await MetaText.updateOne(
+          { key: `verif_staff_role_${interaction.guild.id}` },
+          { $set: { value: String(staffRole.id) } },
+          { upsert: true }
+        );
+      }
+
+      const payload = buildFemaleVerificationPanel();
+      await panelCh.send(payload);
+
+      const catInfo = category ? ` | Category: ${category.name}` : "";
+      const roleInfo = staffRole ? ` | Staff: <@&${staffRole.id}>` : "";
+      return interaction.editReply(`✅ Panel verifikasi role cewe telah dikirim ke ${panelCh}${catInfo}${roleInfo}.`);
+    }
+
     // ===================== /warnings =====================
     if (interaction.isChatInputCommand() && interaction.commandName === "warnings") {
       if (!interaction.guild) return safeReply(interaction, { content: "Guild only.", flags: MessageFlags.Ephemeral });
@@ -11648,8 +11693,243 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.editReply(`✅ Ticket dibuat: ${channel}`);
     }
 
+    // ===================== FEMALE VERIFICATION TICKET: BUKA TIKET =====================
+    if (interaction.isButton() && interaction.customId === "btn_open_verif") {
+      if (!interaction.guild) {
+        return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
+      }
+
+      try {
+        const FEMALE_ROLE_ID = "1459417971125522538";
+
+        // 1. Cek apakah member udah punya role female
+        if (interaction.member?.roles?.cache?.has(FEMALE_ROLE_ID)) {
+          return interaction.reply({
+            content: "❌ Kamu sudah punya role ini!",
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        // 2. Cek apakah member udah punya tiket verifikasi yang terbuka
+        const existingCh = interaction.guild.channels.cache.find(
+          ch => ch.name === `verif-${(interaction.user.username || "user").toLowerCase().replace(/[^a-z0-9-_]/g, "").slice(0, 12)}` ||
+            (ch.topic && ch.topic.includes("[TICKET:verification]") && ch.topic.includes(`[OWNER:${interaction.user.id}]`))
+        );
+
+        if (existingCh) {
+          return interaction.reply({
+            content: `⚠️ Kamu sudah memiliki tiket verifikasi yang sedang terbuka: ${existingCh}`,
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
+
+        const metaCat = await MetaText.findOne({ key: `verif_category_${interaction.guild.id}` }).catch(() => null);
+        const metaStaff = await MetaText.findOne({ key: `verif_staff_role_${interaction.guild.id}` }).catch(() => null);
+        const settings = await getTicketSettings(interaction.guild.id).catch(() => null);
+        const categoryId = metaCat?.value || settings?.category_id;
+        const staffRoleId = metaStaff?.value || settings?.staff_role_id;
+
+        const safeUser = (interaction.user.username || "user").toLowerCase().replace(/[^a-z0-9-_]/g, "").slice(0, 12) || "user";
+        const chName = `verif-${safeUser}`;
+
+        const permissionOverwrites = [
+          { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.SendVoiceMessages,
+              PermissionsBitField.Flags.AttachFiles,
+              PermissionsBitField.Flags.EmbedLinks,
+              PermissionsBitField.Flags.ReadMessageHistory,
+            ],
+          },
+        ];
+
+        const hasStaffRole = staffRoleId && interaction.guild.roles.cache.has(staffRoleId);
+        if (hasStaffRole) {
+          permissionOverwrites.push({
+            id: staffRoleId,
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.ReadMessageHistory,
+              PermissionsBitField.Flags.ManageMessages,
+              PermissionsBitField.Flags.AttachFiles,
+              PermissionsBitField.Flags.EmbedLinks,
+            ],
+          });
+        }
+
+        const channelOptions = {
+          name: chName,
+          topic: ticketMeta("verification", interaction.user.id),
+          permissionOverwrites,
+        };
+
+        if (categoryId) {
+          const catObj = interaction.guild.channels.cache.get(String(categoryId)) || await interaction.guild.channels.fetch(String(categoryId)).catch(() => null);
+          if (catObj && catObj.type === ChannelType.GuildCategory) {
+            channelOptions.parent = catObj.id;
+          }
+        }
+
+        const channel = await interaction.guild.channels.create(channelOptions);
+
+        await safeRun(
+          `INSERT INTO tickets_custom (guild_id, channel_id, owner_id, type, subject, created_at)
+           VALUES (?,?,?,?,?,?)`,
+          [String(interaction.guild.id), String(channel.id), String(interaction.user.id), "verification", "Verifikasi Role Cewe", Date.now()]
+        ).catch(() => null);
+
+        const now = new Date();
+        const options = { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Jakarta" };
+        const hariTanggal = now.toLocaleDateString("id-ID", options);
+
+        const ticketContainer = new ContainerBuilder().setAccentColor(0xFFC0CB);
+        ticketContainer.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `## 🌸 Tiket Verifikasi - ${interaction.user.username}\n\n` +
+            `Halo <@${interaction.user.id}>! Silakan kirimkan Voice Note (VN) langsung dari fitur Discord untuk verifikasi.\n\n` +
+            `Wajib sebutkan ini di VN:\n` +
+            `> *"Halo, aku ${interaction.user.username}/(nama panggilan), hari ini ${hariTanggal}, mau verif role female."*\n\n` +
+            `Staff akan segera mengecek tiketmu. Mohon bersabar ya!`
+          )
+        );
+
+        const actionRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`btn_approve_verif:${interaction.user.id}`)
+            .setLabel("✅ Approve")
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId("btn_close_ticket")
+            .setLabel("🔒 Close Ticket")
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        ticketContainer.addActionRowComponents(actionRow);
+
+        const mentionsPayload = hasStaffRole ? `<@${interaction.user.id}> <@&${staffRoleId}>` : `<@${interaction.user.id}>`;
+        const allowedMentionsObj = hasStaffRole ? { users: [interaction.user.id], roles: [staffRoleId] } : { users: [interaction.user.id] };
+
+        await channel.send({
+          content: mentionsPayload,
+          allowedMentions: allowedMentionsObj,
+        });
+
+        await channel.send({
+          components: [ticketContainer],
+          flags: MessageFlags.IsComponentsV2,
+        });
+
+        return interaction.editReply(`🌸 Tiket verifikasi berhasil dibuat: ${channel}`);
+      } catch (err) {
+        console.error("[BTN OPEN VERIF ERROR]", err);
+        if (interaction.deferred || interaction.replied) {
+          return interaction.editReply(`❌ Gagal membuat tiket verifikasi: ${err.message || err}`);
+        } else {
+          return interaction.reply({ content: `❌ Gagal membuat tiket verifikasi: ${err.message || err}`, flags: MessageFlags.Ephemeral });
+        }
+      }
+    }
+
+    // ===================== FEMALE VERIFICATION TICKET: APPROVE =====================
+    if (interaction.isButton() && interaction.customId.startsWith("btn_approve_verif")) {
+      if (!interaction.guild) {
+        return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
+      }
+
+      const FEMALE_ROLE_ID = "1459417971125522538";
+      const metaStaff = await MetaText.findOne({ key: `verif_staff_role_${interaction.guild.id}` }).catch(() => null);
+      const settings = await getTicketSettings(interaction.guild.id).catch(() => null);
+      const staffRoleId = metaStaff?.value || settings?.staff_role_id;
+
+      const isStaff = (staffRoleId && interaction.member?.roles?.cache?.has(staffRoleId)) ||
+        interaction.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
+        interaction.member?.permissions?.has(PermissionsBitField.Flags.ManageGuild);
+
+      if (!isStaff) {
+        return interaction.reply({
+          content: "❌ Hanya Staff yang dapat menyetujui verifikasi ini!",
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
+      const parts = interaction.customId.split(":");
+      let targetUserId = parts[1];
+      if (!targetUserId) {
+        targetUserId = getTicketOwnerIdFromTopic(interaction.channel.topic);
+      }
+
+      if (!targetUserId) {
+        return interaction.reply({ content: "❌ Tidak dapat menemukan pembuat tiket.", flags: MessageFlags.Ephemeral });
+      }
+
+      const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
+      if (!targetMember) {
+        return interaction.reply({ content: "❌ Member sudah tidak ada di server.", flags: MessageFlags.Ephemeral });
+      }
+
+      await targetMember.roles.add(FEMALE_ROLE_ID).catch((e) => {
+        console.error("[VERIF APPROVE ROLE ERROR]", e);
+      });
+
+      const container = new ContainerBuilder().setAccentColor(0x2ecc71);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `## ✅ Verifikasi Berhasil!\n\n` +
+          `Role <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}> oleh <@${interaction.user.id}>.`
+        )
+      );
+
+      const disabledRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn_approve_verif_done")
+          .setLabel("✅ Approved")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId("btn_close_ticket")
+          .setLabel("🔒 Close Ticket")
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await interaction.message.edit({ components: [disabledRow] }).catch(() => { });
+
+      (async () => {
+        try {
+          const VERIF_LOG_CHANNEL_ID = "1459868526096420945";
+          const logChannel = interaction.guild.channels.cache.get(VERIF_LOG_CHANNEL_ID) || await interaction.guild.channels.fetch(VERIF_LOG_CHANNEL_ID).catch(() => null);
+          if (logChannel && logChannel.isTextBased()) {
+            const logEmbed = new EmbedBuilder()
+              .setTitle("🌸 Verifikasi Role Cewe Disetujui")
+              .setColor(0xFFC0CB)
+              .setDescription(
+                `📌 **Channel Tiket:** ${interaction.channel}\n` +
+                `👤 **Member:** <@${targetUserId}> (${targetMember?.user?.tag || targetUserId})\n` +
+                `🎀 **Role Diberikan:** <@&${FEMALE_ROLE_ID}>\n` +
+                `🛠️ **Disetujui Oleh:** <@${interaction.user.id}>`
+              )
+              .setTimestamp();
+            await logChannel.send({ embeds: [logEmbed] });
+          }
+        } catch (e) {
+          console.error("[VERIF LOG ERROR]", e);
+        }
+      })();
+
+      return interaction.reply({
+        components: [container],
+        flags: MessageFlags.IsComponentsV2
+      });
+    }
+
     // ===================== TICKET: CLAIM / CLOSE =====================
-    if (interaction.isButton() && (interaction.customId === "ticket:claim" || interaction.customId === "ticket:close")) {
+    if (interaction.isButton() && (interaction.customId === "ticket:claim" || interaction.customId === "ticket:close" || interaction.customId === "btn_close_ticket" || interaction.customId === "btn_confirm_close_ticket" || interaction.customId === "btn_cancel_close_ticket")) {
       if (!interaction.guild || !interaction.channel) {
         return interaction.reply({ content: "Guild only.", flags: MessageFlags.Ephemeral });
       }
@@ -11717,12 +11997,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       // CLOSE (owner OR staff)
-      if (interaction.customId === "ticket:close") {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
-
+      if (interaction.customId === "ticket:close" || interaction.customId === "btn_close_ticket") {
         if (!isOwner && !isStaff) {
-          return interaction.editReply("❌ Kamu bukan owner ticket atau staff.").catch(() => { });
+          return interaction.reply({ content: "❌ Kamu bukan owner ticket atau staff.", flags: MessageFlags.Ephemeral }).catch(() => { });
         }
+
+        const confirmEmbed = new EmbedBuilder()
+          .setTitle("⚠️ Confirm Closed")
+          .setDescription("Apakah kamu yakin ingin menutup tiket ini? Transkrip percakapan akan disimpan dan channel ini akan dihapus.")
+          .setColor(0xe74c3c);
+
+        const confirmRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("btn_confirm_close_ticket")
+            .setLabel("✅ Ya, Tutup")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId("btn_cancel_close_ticket")
+            .setLabel("❌ Batal")
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return interaction.reply({
+          embeds: [confirmEmbed],
+          components: [confirmRow],
+        });
+      }
+
+      if (interaction.customId === "btn_cancel_close_ticket") {
+        await interaction.update({
+          content: "❌ Penutupan tiket dibatalkan.",
+          embeds: [],
+          components: [],
+        }).catch(() => { });
+        return;
+      }
+
+      if (interaction.customId === "btn_confirm_close_ticket") {
+        await interaction.update({
+          content: "⏳ Sedang memproses penutupan tiket dan menyimpan transkrip...",
+          embeds: [],
+          components: [],
+        }).catch(() => { });
 
         // ✅ update DB dulu biar user bisa bikin ticket baru
         await safeRun(
@@ -11808,9 +12124,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           const fmt = (ms) => ms ? `<t:${Math.floor(ms / 1000)}:F>` : "—";
 
+          const isVerifTicket = type === "verification" || interaction.channel.name.startsWith("verif-");
+          const embedTitle = isVerifTicket ? "🌸 Log Tiket Verifikasi Cewe (Closed)" : "🧾 Ticket Closed";
+          const embedColor = isVerifTicket ? 0xFFC0CB : EMBED_COLOR;
+
           const logEmbed = new EmbedBuilder()
-            .setTitle("🧾 Ticket Closed")
-            .setColor(EMBED_COLOR)
+            .setTitle(embedTitle)
+            .setColor(embedColor)
             .addFields(
               { name: "Channel", value: `#${interaction.channel.name}\n(${interaction.channel.id})`, inline: true },
               { name: "Type", value: String(type), inline: true },
@@ -11869,7 +12189,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }).catch(() => null);
 
         }
-        await interaction.editReply("✅ Ticket ditutup. Channel akan dihapus.").catch(() => { });
+        await interaction.channel?.send("✅ Ticket ditutup. Channel akan dihapus...").catch(() => { });
         setTimeout(() => interaction.channel?.delete("Ticket closed").catch(() => { }), 1500);
         return;
       }
@@ -12404,7 +12724,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         await safeDefer(interaction, true);
-        const result = await backupDatabase(`manual_${interaction.user.id}`);
+        const result = { success: true, message: "Database is MongoDB, no manual SQLite backup needed." };
         if (!result?.ok) {
           return interaction.editReply("Backup gagal. Cek console log untuk detail error.");
         }
@@ -14492,7 +14812,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // ===================== AFK LIST =====================
       // ===================== AFK LIST (EMBED + PAGINATION) =====================
       if (name === "afk_list") {
-        await interaction.deferReply(); // public
+        await safeDefer(interaction).catch(() => { }); // public
 
         try {
           const rows = await getAllAfkUsers();
@@ -14850,14 +15170,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId === "add_quote_modal") {
       if (interaction.channelId !== QUOTES_CHANNEL_ID) {
-        return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", ephemeral: true });
+        return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", flags: MessageFlags.Ephemeral });
       }
 
       const quoteText = (interaction.fields.getTextInputValue("quote_text") || "").trim();
-      if (!quoteText) return interaction.reply({ content: "Quote kosong.", ephemeral: true });
+      if (!quoteText) return interaction.reply({ content: "Quote kosong.", flags: MessageFlags.Ephemeral });
 
       try {
-        await interaction.deferReply({ ephemeral: true });
+        await safeDefer(interaction, true);
 
         // Fetch full GuildMember to get the server-specific avatar
         const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
@@ -14894,7 +15214,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (interaction.deferred || interaction.replied) {
           return interaction.editReply(`Error bikin quote: ${err.message}`).catch(() => null);
         } else {
-          return interaction.reply({ content: `Error bikin quote: ${err.message}`, ephemeral: true }).catch(() => null);
+          return interaction.reply({ content: `Error bikin quote: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => null);
         }
       }
     }
@@ -15393,22 +15713,18 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
 })();
 // ===================== BACKUP ON EXIT =====================
 process.on("SIGINT", async () => {
-  await backupDatabase("sigint");
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
-  await backupDatabase("sigterm");
   process.exit(0);
 });
 
 process.on("uncaughtException", async (err) => {
   console.error("[CRASH]", err);
-  await backupDatabase("crash");
   process.exit(1);
 });
 
 process.on("unhandledRejection", async (err) => {
   console.error("[REJECT]", err);
-  await backupDatabase("reject");
 });

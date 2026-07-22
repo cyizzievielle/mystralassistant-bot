@@ -305,6 +305,27 @@ const commands = [
         .setRequired(false)),
 
   new SlashCommandBuilder()
+    .setName("setup-verif")
+    .setDescription("Setup panel verifikasi role cewe")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption(o =>
+      o.setName("panel_channel")
+        .setDescription("Channel untuk menempatkan panel verifikasi")
+        .setRequired(false)
+    )
+    .addChannelOption(o =>
+      o.setName("category")
+        .setDescription("Kategori tempat tiket verifikasi dibuat")
+        .addChannelTypes(ChannelType.GuildCategory)
+        .setRequired(false)
+    )
+    .addRoleOption(o =>
+      o.setName("staff_role")
+        .setDescription("Role staff yang bertugas memverifikasi")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
     .setName("afk")
     .setDescription("set status AFK")
     .addStringOption((o) => o.setName("reason").setDescription("alasan AFK (opsional)").setRequired(false)),

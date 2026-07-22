@@ -53,85 +53,21 @@ function isSameCalendarDayJakarta(ts1, ts2) {
 }
 
 // ===================== DATABASE STATE & HELPERS =====================
-let dbGet, dbAll, dbRun, dbExec;
+const {
+  StreakSetting,
+  StreakPair,
+  StreakDailyActivity,
+  StreakLog,
+  StreakAchievement,
+  StreakFreezeInventory
+} = require("./db");
 
-function setDb(wrappers) {
-  dbGet = wrappers.dbGet;
-  dbAll = wrappers.dbAll;
-  dbRun = wrappers.dbRun;
-  dbExec = wrappers.dbExec;
-}
-
-async function initTables() {
-  await dbExec(`
-    CREATE TABLE IF NOT EXISTS streak_settings (
-      guild_id TEXT PRIMARY KEY,
-      chat_channel TEXT,
-      card_channel TEXT,
-      reset_hour INTEGER DEFAULT 0,
-      cooldown INTEGER DEFAULT 60,
-      minimum_message INTEGER DEFAULT 1,
-      minimum_length INTEGER DEFAULT 5,
-      thread_enable INTEGER DEFAULT 0,
-      recovery_limit INTEGER DEFAULT 5,
-      log_channel TEXT,
-      enabled INTEGER DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS streak_pairs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT,
-      user_one TEXT,
-      user_two TEXT,
-      current_streak INTEGER DEFAULT 0,
-      highest_streak INTEGER DEFAULT 0,
-      recovery_left INTEGER DEFAULT 5,
-      status TEXT DEFAULT 'active',
-      created_at INTEGER,
-      last_active_at INTEGER,
-      last_streak_increment_at INTEGER,
-      progress_count INTEGER DEFAULT 0,
-      user_one_active_today INTEGER DEFAULT 0,
-      user_two_active_today INTEGER DEFAULT 0,
-      UNIQUE(guild_id, user_one, user_two)
-    );
-
-    CREATE TABLE IF NOT EXISTS streak_daily_activity (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      pair_id INTEGER,
-      user_id TEXT,
-      last_message_at INTEGER,
-      message_hash TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS streak_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT,
-      pair_id INTEGER,
-      user_id TEXT,
-      action TEXT,
-      timestamp INTEGER,
-      details TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS streak_achievements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id TEXT,
-      achievement_key TEXT,
-      unlocked_at INTEGER,
-      UNIQUE(user_id, achievement_key)
-    );
-  `);
-}
 
 async function getSettings(guildId) {
-  let settings = await dbGet("SELECT * FROM streak_settings WHERE guild_id = ?", [guildId]);
+  let settings = await StreakSetting.findOne({ guild_id: String(guildId) }).lean();
   if (!settings) {
-    await dbRun(
-      `INSERT INTO streak_settings (guild_id, enabled) VALUES (?, 1)`,
-      [guildId]
-    );
-    settings = await dbGet("SELECT * FROM streak_settings WHERE guild_id = ?", [guildId]);
+    await StreakSetting.create({ guild_id: String(guildId), enabled: 1 });
+    settings = await StreakSetting.findOne({ guild_id: String(guildId) }).lean();
   }
   return settings;
 }
@@ -145,167 +81,145 @@ async function updateSettings(guildId, key, value) {
   if (!allowedKeys.includes(key)) {
     throw new Error(`Invalid setting key: ${key}`);
   }
-  await dbRun(`UPDATE streak_settings SET ${key} = ? WHERE guild_id = ?`, [value, guildId]);
+  await StreakSetting.updateOne({ guild_id: String(guildId) }, { $set: { [key]: value } });
 }
 
 async function getPair(guildId, userA, userB) {
   const [u1, u2] = [userA, userB].sort();
-  return await dbGet("SELECT * FROM streak_pairs WHERE guild_id = ? AND user_one = ? AND user_two = ?", [guildId, u1, u2]);
+  const doc = await StreakPair.findOne({ guild_id: String(guildId), user_one: String(u1), user_two: String(u2) }); return doc ? doc.toObject() : null;
+}
+
+function getPairId(pair) {
+  if (pair === null || pair === undefined) return null;
+  if (typeof pair === "object") return String(pair._id || pair.id || "");
+  return String(pair);
+}
+
+function buildPairQuery(id) {
+  if (id === null || id === undefined) return { _id: null };
+  if (typeof id === "object") {
+    const realId = id._id || id.id;
+    if (realId) return buildPairQuery(realId);
+  }
+  const strId = String(id);
+  if (/^[0-9a-fA-F]{24}$/.test(strId)) {
+    return { _id: strId };
+  }
+  return { $or: [{ _id: id }, { id: Number(id) }, { id: strId }] };
 }
 
 async function getPairById(id) {
-  return await dbGet("SELECT * FROM streak_pairs WHERE id = ?", [id]);
+  const doc = await StreakPair.findOne(buildPairQuery(id)); return doc ? doc.toObject() : null;
 }
 
 async function getActivePairForUser(guildId, userId) {
-  return await dbGet(
-    `SELECT * FROM streak_pairs 
-     WHERE guild_id = ? 
-       AND (user_one = ? OR user_two = ?) 
-       AND status IN ('active', 'warning')
-     ORDER BY current_streak DESC LIMIT 1`,
-    [guildId, userId, userId]
-  );
+  const doc = await StreakPair.findOne({ guild_id: String(guildId), $or: [{ user_one: String(userId) }, { user_two: String(userId) }], status: { $in: ["active", "warning"] } }).sort({ current_streak: -1 });
+  return doc ? doc.toObject() : null;
 }
 
 async function getBrokenPairForUser(guildId, userId) {
-  return await dbGet(
-    `SELECT * FROM streak_pairs 
-     WHERE guild_id = ? 
-       AND (user_one = ? OR user_two = ?) 
-       AND status = 'broken'
-     ORDER BY current_streak DESC LIMIT 1`,
-    [guildId, userId, userId]
-  );
+  const doc = await StreakPair.findOne({ guild_id: String(guildId), $or: [{ user_one: String(userId) }, { user_two: String(userId) }], status: "broken" }).sort({ current_streak: -1 });
+  return doc ? doc.toObject() : null;
 }
 
 async function getAllActivePairsForUser(guildId, userId) {
-  return await dbAll(
-    `SELECT * FROM streak_pairs 
-     WHERE guild_id = ? 
-       AND (user_one = ? OR user_two = ?) 
-       AND status IN ('active', 'warning')
-     ORDER BY current_streak DESC`,
-    [guildId, userId, userId]
-  );
+  const docs = await StreakPair.find({
+    guild_id: String(guildId),
+    $or: [{ user_one: String(userId) }, { user_two: String(userId) }],
+    status: { $in: ["active", "warning"] }
+  }).sort({ current_streak: -1 });
+  return docs.map(d => d.toObject());
 }
 
 async function getActivePairCountForUser(guildId, userId) {
-  const row = await dbGet(
-    `SELECT COUNT(*) as cnt FROM streak_pairs 
-     WHERE guild_id = ? 
-       AND (user_one = ? OR user_two = ?) 
-       AND status IN ('active', 'warning', 'forming')`,
-    [guildId, userId, userId]
-  );
-  return row ? row.cnt : 0;
+  const count = await StreakPair.countDocuments({
+    guild_id: String(guildId),
+    $or: [{ user_one: String(userId) }, { user_two: String(userId) }],
+    status: { $in: ["active", "warning", "forming"] }
+  });
+  return count;
 }
 
 async function createPair(guildId, userA, userB) {
   const [u1, u2] = [userA, userB].sort();
   const now = Date.now();
-  await dbRun(
-    `INSERT INTO streak_pairs (guild_id, user_one, user_two, current_streak, highest_streak, recovery_left, status, created_at, last_active_at, progress_count)
-     VALUES (?, ?, ?, 0, 0, 5, 'forming', ?, ?, 1)`,
-    [guildId, u1, u2, now, now]
-  );
+  const maxDoc = await StreakPair.findOne().sort({ id: -1 });
+  const newId = maxDoc ? (maxDoc.id || 0) + 1 : 1;
+  await StreakPair.create({
+    id: newId,
+    guild_id: String(guildId),
+    user_one: String(u1),
+    user_two: String(u2),
+    current_streak: 0,
+    highest_streak: 0,
+    recovery_left: 5,
+    status: 'forming',
+    created_at: now,
+    last_active_at: now,
+    progress_count: 1
+  });
   return await getPair(guildId, u1, u2);
 }
 
 async function updatePair(id, updates) {
-  const keys = Object.keys(updates);
-  const vals = Object.values(updates);
-  const setString = keys.map(k => `${k} = ?`).join(", ");
-  await dbRun(`UPDATE streak_pairs SET ${setString} WHERE id = ?`, [...vals, id]);
+  await StreakPair.updateOne(buildPairQuery(id), { $set: updates });
 }
 
 async function deletePair(id) {
-  await dbRun("DELETE FROM streak_pairs WHERE id = ?", [id]);
+  await StreakPair.deleteOne(buildPairQuery(id));
 }
 
 async function resetAllGuildStreaks(guildId) {
-  await dbRun("DELETE FROM streak_daily_activity WHERE pair_id IN (SELECT id FROM streak_pairs WHERE guild_id = ?)", [guildId]);
-  await dbRun("DELETE FROM streak_logs WHERE guild_id = ?", [guildId]);
-  await dbRun("DELETE FROM streak_pairs WHERE guild_id = ?", [guildId]);
+  const pairs = await StreakPair.find({ guild_id: String(guildId) }); const pairIds = pairs.map(p => getPairId(p)); await StreakDailyActivity.deleteMany({ pair_id: { $in: pairIds } });
+  await StreakLog.deleteMany({ guild_id: String(guildId) });
+  await StreakPair.deleteMany({ guild_id: String(guildId) });
 }
 
 async function resetUserGuildStreaks(guildId, userId) {
-  await dbRun(
-    `DELETE FROM streak_daily_activity 
-     WHERE pair_id IN (SELECT id FROM streak_pairs WHERE guild_id = ? AND (user_one = ? OR user_two = ?))`,
-    [guildId, userId, userId]
-  );
-  await dbRun(
-    `DELETE FROM streak_logs 
-     WHERE pair_id IN (SELECT id FROM streak_pairs WHERE guild_id = ? AND (user_one = ? OR user_two = ?))`,
-    [guildId, userId, userId]
-  );
-  await dbRun(
-    `DELETE FROM streak_pairs WHERE guild_id = ? AND (user_one = ? OR user_two = ?)`,
-    [guildId, userId, userId]
-  );
+  const pairs = await StreakPair.find({
+    guild_id: String(guildId),
+    $or: [{ user_one: String(userId) }, { user_two: String(userId) }]
+  });
+  const pairIds = pairs.map(p => getPairId(p));
+  await StreakDailyActivity.deleteMany({ pair_id: { $in: pairIds } });
+  await StreakLog.deleteMany({ pair_id: { $in: pairIds } });
+  await StreakPair.deleteMany({ _id: { $in: pairIds } });
 }
 
 async function getLastActivity(pairId, userId) {
-  return await dbGet(
-    "SELECT * FROM streak_daily_activity WHERE pair_id = ? AND user_id = ? ORDER BY last_message_at DESC LIMIT 1",
-    [pairId, userId]
-  );
+  const doc = await StreakDailyActivity.findOne({ pair_id: getPairId(pairId), user_id: String(userId) }).sort({ last_message_at: -1 });
+  return doc ? doc.toObject() : null;
 }
 
 async function addActivity(pairId, userId, timestamp, hash) {
-  await dbRun(
-    "INSERT INTO streak_daily_activity (pair_id, user_id, last_message_at, message_hash) VALUES (?, ?, ?, ?)",
-    [pairId, userId, timestamp, hash]
-  );
+  await StreakDailyActivity.create({ pair_id: getPairId(pairId), user_id: String(userId), last_message_at: timestamp, message_hash: String(hash) });
 }
 
 async function clearActivity(pairId) {
-  await dbRun("DELETE FROM streak_daily_activity WHERE pair_id = ?", [pairId]);
+  await StreakDailyActivity.deleteMany({ pair_id: getPairId(pairId) });
 }
 
 async function addLog(guildId, pairId, userId, action, details) {
   const now = Date.now();
-  await dbRun(
-    "INSERT INTO streak_logs (guild_id, pair_id, user_id, action, timestamp, details) VALUES (?, ?, ?, ?, ?, ?)",
-    [guildId, pairId, userId, action, now, details]
-  );
+  await StreakLog.create({ guild_id: String(guildId), pair_id: getPairId(pairId), user_id: String(userId), action: String(action), timestamp: now, details: String(details) });
 }
 
 async function getLogsForPair(pairId, limit = 5) {
-  return await dbAll("SELECT * FROM streak_logs WHERE pair_id = ? ORDER BY timestamp DESC LIMIT ?", [pairId, limit]);
+  const docs = await StreakLog.find({ pair_id: getPairId(pairId) }).sort({ timestamp: -1 }).limit(Number(limit)); return docs.map(d => d.toObject());
 }
 
 async function getLeaderboard(guildId, type, limit = 10) {
   switch (type) {
     case "top_pair":
-      return await dbAll(
-        `SELECT * FROM streak_pairs 
-         WHERE guild_id = ? AND status = 'active'
-         ORDER BY current_streak DESC LIMIT ?`,
-        [guildId, limit]
-      );
+      const docs1 = await StreakPair.find({ guild_id: String(guildId), status: "active" }).sort({ current_streak: -1 }).limit(Number(limit)); return docs1.map(d => d.toObject());
     case "top_longest":
-      return await dbAll(
-        `SELECT * FROM streak_pairs 
-         WHERE guild_id = ? 
-         ORDER BY highest_streak DESC LIMIT ?`,
-        [guildId, limit]
-      );
+      const docs2 = await StreakPair.find({ guild_id: String(guildId) }).sort({ highest_streak: -1 }).limit(Number(limit)); return docs2.map(d => d.toObject());
     case "top_active":
-      return await dbAll(
-        `SELECT * FROM streak_pairs 
-         WHERE guild_id = ? AND status = 'active'
-         ORDER BY last_active_at DESC LIMIT ?`,
-        [guildId, limit]
-      );
+      const docs3 = await StreakPair.find({ guild_id: String(guildId), status: "active" }).sort({ last_active_at: -1 }).limit(Number(limit));
+      return docs3.map(d => d.toObject());
     case "top_recovery":
-      return await dbAll(
-        `SELECT * FROM streak_pairs 
-         WHERE guild_id = ? 
-         ORDER BY (5 - recovery_left) DESC LIMIT ?`,
-        [guildId, limit]
-      );
+      const docs4 = await StreakPair.find({ guild_id: String(guildId) }).sort({ recovery_left: 1 }).limit(Number(limit));
+      return docs4.map(d => d.toObject());
     default:
       return [];
   }
@@ -1087,7 +1001,7 @@ async function handleMessageActivity(client, message) {
   const settings = await getSettings(guildId);
 
   if (!settings || !settings.enabled) return;
-  if (message.channel.id !== settings.chat_channel) return;
+  if (settings.chat_channel && message.channel.id !== settings.chat_channel) return;
   if (!isValidContent(message, settings)) return;
 
   const userA = message.author.id;
@@ -1122,18 +1036,18 @@ async function handleMessageActivity(client, message) {
       return; // Limit 25 pasangan aktif
     }
     pair = await createPair(guildId, u1, u2);
-    await addLog(guildId, pair.id, userA, "create_forming_pair", `Forming pair created between ${userA} and ${userB}`);
+    await addLog(guildId, getPairId(pair), userA, "create_forming_pair", `Forming pair created between ${userA} and ${userB}`);
   }
 
   const hash = crypto.createHash("md5").update(message.content.trim().toLowerCase()).digest("hex");
-  const lastAct = await getLastActivity(pair.id, userA);
+  const lastAct = await getLastActivity(getPairId(pair), userA);
 
   if (lastAct) {
     if (now - lastAct.last_message_at < settings.cooldown * 1000) return;
     if (lastAct.message_hash === hash) return;
   }
 
-  await addActivity(pair.id, userA, now, hash);
+  await addActivity(getPairId(pair), userA, now, hash);
 
   const updateData = {};
   if (pair.user_one === userA && !pair.user_one_active_today) {
@@ -1144,12 +1058,12 @@ async function handleMessageActivity(client, message) {
 
   let isCompletingMessage = false;
   if (Object.keys(updateData).length > 0) {
-    await updatePair(pair.id, updateData);
-    const reloadedPair = await getPairById(pair.id);
-    if (reloadedPair.user_one_active_today === 1 && reloadedPair.user_two_active_today === 1) {
+    await updatePair(getPairId(pair), updateData);
+    const reloadedPair = await getPairById(getPairId(pair));
+    if (reloadedPair && reloadedPair.user_one_active_today === 1 && reloadedPair.user_two_active_today === 1) {
       isCompletingMessage = true;
     }
-    pair = reloadedPair;
+    if (reloadedPair) pair = reloadedPair;
     // await logToGuild(client, guildId, `<@${userA}> melakukan interaksi hari ini untuk streak dengan <@${userB}>.`);
   }
 
@@ -1161,26 +1075,26 @@ async function handleMessageActivity(client, message) {
       const highest = Math.max(pair.highest_streak, newStreak);
       const isMilestone = MILESTONES.includes(newStreak) || (newStreak > 1000 && newStreak % 100 === 0);
 
-      await updatePair(pair.id, {
+      await updatePair(getPairId(pair), {
         current_streak: newStreak,
         highest_streak: highest,
         status: "active",
         last_streak_increment_at: now
       });
 
-      await addLog(guildId, pair.id, null, "daily_increment", `Streak incremented to ${newStreak} in real-time`);
+      await addLog(guildId, getPairId(pair), null, "daily_increment", `Streak incremented to ${newStreak} in real-time`);
       await logToGuild(client, guildId, `🔥 **Streak Berlanjut!** Streak <@${pair.user_one}> & <@${pair.user_two}> naik menjadi **${newStreak} Hari**!`);
 
       // Card hanya muncul mulai hari ke-3
       if (newStreak >= 3) {
         if (isMilestone) {
-          await sendStreakCardNotification(client, guildId, pair.id, "Milestone");
+          await sendStreakCardNotification(client, guildId, getPairId(pair), "Milestone");
         } else {
-          await sendStreakCardNotification(client, guildId, pair.id, "Daily Progress");
+          await sendStreakCardNotification(client, guildId, getPairId(pair), "Daily Progress");
         }
       }
     } else if (pair.status === "forming") {
-      await updatePair(pair.id, {
+      await updatePair(getPairId(pair), {
         status: "active",
         current_streak: 1,
         highest_streak: Math.max(pair.highest_streak, 1),
@@ -1190,7 +1104,7 @@ async function handleMessageActivity(client, message) {
         progress_count: 1
       });
 
-      await addLog(guildId, pair.id, null, "streak_formed", `Active streak pair formed between ${u1} and ${u2}`);
+      await addLog(guildId, getPairId(pair), null, "streak_formed", `Active streak pair formed between ${u1} and ${u2}`);
       // Hari ke-1: tidak ada card, hanya log internal
       await logToGuild(client, guildId, `🔥 **Streak Dimulai!** <@${u1}> & <@${u2}> sudah saling berinteraksi hari ini. Ayo jaga terus selama 3 hari untuk mendapat kartu pertama!`);
     }
@@ -1389,7 +1303,7 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
       embedTitle = "<a:22593alert:1523238009393123409> Streak Hampir Padam!";
       content = `<@${pair.user_one}> & <@${pair.user_two}>, salah satu dari kalian belum aktif hari ini. Segera berinteraksi sebelum reset pukul 00:00 WIB!`;
     } else if (cardType === "Broken") {
-      embedTitle = "<a:aw_heartbreak1091957075757781032:1523337514599841842> Streak Padam...";
+      embedTitle = "💔 Streak Padam...";
       content = `Sayang sekali streak <@${pair.user_one}> & <@${pair.user_two}> terputus. Gunakan \`/streak recover\` jika ingin memulihkannya.`;
     } else if (cardType === "Milestone") {
       embedTitle = `${emoji} Milestone Terlampaui!`;
@@ -1436,32 +1350,31 @@ async function runDailyEvaluation(client) {
       for (const pair of pairs) {
         if (pair.status === "forming" || pair.status === "broken") continue;
 
+        const pId = getPairId(pair);
         const u1Active = pair.user_one_active_today;
         const u2Active = pair.user_two_active_today;
 
         if (u1Active && u2Active) {
-          await updatePair(pair.id, {
+          await updatePair(pId, {
             user_one_active_today: 0,
             user_two_active_today: 0
           });
-          await clearActivity(pair.id);
+          await clearActivity(pId);
         } else {
           if (pair.status === "active" || pair.status === "warning") {
-            await updatePair(pair.id, {
+            await updatePair(pId, {
               status: "broken",
               user_one_active_today: 0,
               user_two_active_today: 0
             });
-            await addLog(guildId, pair.id, null, "broken_status", "Streak set to broken status immediately");
-            await sendStreakCardNotification(client, guildId, pair.id, "Broken");
+            await addLog(guildId, pId, null, "broken_status", "Streak set to broken status immediately");
+            await sendStreakCardNotification(client, guildId, pId, "Broken");
           }
         }
       }
-      await dbRun(
-        `UPDATE streak_pairs 
-         SET user_one_active_today = 0, user_two_active_today = 0 
-         WHERE guild_id = ? AND status = 'forming'`,
-        [guildId]
+      await StreakPair.updateMany(
+        { guild_id: String(guildId), status: 'forming' },
+        { $set: { user_one_active_today: 0, user_two_active_today: 0 } }
       );
     } catch (err) {
       console.error(`[STREAK EVAL ERROR] Guild ${guildId}:`, err);
@@ -1472,7 +1385,7 @@ async function runDailyEvaluation(client) {
 async function sendDmReminders(client) {
   console.log("[STREAK] Running 22:00 WIB DM Reminders...");
   try {
-    const pairs = await dbAll(`SELECT * FROM streak_pairs WHERE status IN ('active', 'warning')`);
+    const pairs = await StreakPair.find({ status: { $in: ["active", "warning"] } }).lean();
     for (const pair of pairs) {
       const u1Active = pair.user_one_active_today;
       const u2Active = pair.user_two_active_today;
@@ -1525,7 +1438,7 @@ async function sendDmReminders(client) {
 
 async function sendPublicWarningReminders(client) {
   try {
-    const pairs = await dbAll(`SELECT * FROM streak_pairs WHERE status IN ('active', 'warning')`);
+    const pairs = await StreakPair.find({ status: { $in: ["active", "warning"] } }).lean();
     for (const pair of pairs) {
       if (pair.user_one_active_today && pair.user_two_active_today) continue;
 
@@ -1568,12 +1481,7 @@ async function recoverStreak(guildId, userId) {
   }
 
   // Get the latest broken_status log for this pair to prevent same-day recovery
-  const latestBrokenLog = await dbGet(
-    `SELECT timestamp FROM streak_logs 
-     WHERE pair_id = ? AND action = 'broken_status' 
-     ORDER BY timestamp DESC LIMIT 1`,
-    [pair.id]
-  ).catch(() => null);
+  const latestBrokenLog = await StreakLog.findOne({ pair_id: String(pair.id), action: 'broken_status' }).sort({ timestamp: -1 }).lean();
 
   const now = Date.now();
   if (latestBrokenLog && latestBrokenLog.timestamp) {
@@ -1616,15 +1524,15 @@ async function resetMonthlyRecoveryTokens(client) {
   console.log("[STREAK] Running Monthly Recovery Tokens Reset...");
   try {
     // Reset default ke 5 untuk seluruh pasangan
-    await dbRun("UPDATE streak_pairs SET recovery_left = 5");
+    await StreakPair.updateMany({}, { $set: { recovery_left: 5 } });
 
     // Sesuaikan dengan pengaturan spesifik guild jika ada
-    const settingsList = await dbAll("SELECT guild_id, recovery_limit FROM streak_settings");
+    const settingsList = await StreakSetting.find({}, { guild_id: 1, recovery_limit: 1, _id: 0 }).lean();
     for (const setting of settingsList) {
       const limit = setting.recovery_limit !== null ? setting.recovery_limit : 5;
-      await dbRun(
-        "UPDATE streak_pairs SET recovery_left = ? WHERE guild_id = ?",
-        [limit, setting.guild_id]
+      await StreakPair.updateMany(
+        { guild_id: String(setting.guild_id) },
+        { $set: { recovery_left: Number(limit) } }
       );
       await logToGuild(
         client,
@@ -1640,6 +1548,7 @@ async function resetMonthlyRecoveryTokens(client) {
 
 let cronInterval = null;
 const initializedClients = new WeakSet();
+let lastCronExecutedKey = "";
 function startScheduler(client) {
   if (cronInterval) clearInterval(cronInterval);
   cronInterval = setInterval(async () => {
@@ -1649,7 +1558,7 @@ function startScheduler(client) {
         timeZone: "Asia/Jakarta",
         hour: "numeric",
         minute: "numeric",
-        hour12: false
+        hourCycle: "h23"
       });
       const parts = formatter.formatToParts(now);
       const hourPart = parts.find(p => p.type === "hour");
@@ -1658,8 +1567,11 @@ function startScheduler(client) {
       if (hourPart && minutePart) {
         const hh = parseInt(hourPart.value, 10);
         const mm = parseInt(minutePart.value, 10);
+        const key = `${hh}:${mm}:${now.getDate()}`;
 
-        if (hh === 0 && mm === 0) {
+        if ((hh === 0 || hh === 24) && mm === 0) {
+          if (lastCronExecutedKey === key) return;
+          lastCronExecutedKey = key;
           console.log("[STREAK] Running 00:00 WIB Reset Evaluation...");
           await runDailyEvaluation(client);
 
@@ -1847,14 +1759,12 @@ async function handlePrefixCommand(message, client) {
     }
     if (!targetUser) targetUser = message.author;
 
-    const allPairs = await dbAll(
-      `SELECT * FROM streak_pairs 
-       WHERE guild_id = ? 
-         AND (user_one = ? OR user_two = ?) 
-         AND status != 'forming'
-       ORDER BY current_streak DESC`,
-      [guildId, targetUser.id, targetUser.id]
-    );
+    const docs = await StreakPair.find({
+      guild_id: String(guildId),
+      $or: [{ user_one: String(targetUser.id) }, { user_two: String(targetUser.id) }],
+      status: { $ne: 'forming' }
+    }).sort({ current_streak: -1 });
+    const allPairs = docs.map(d => d.toObject());
 
     if (!allPairs.length) {
       return message.reply(`❌ **${targetUser.username}** belum memiliki pasangan streak.\nAjak temanmu mengobrol di channel khusus <#${settings.chat_channel || "belum di-set"}> untuk mulai membentuk streak harian! ✨`);
@@ -1906,13 +1816,13 @@ async function handlePrefixCommand(message, client) {
       const row = new ActionRowBuilder();
       const prevBtn = new ButtonBuilder()
         .setCustomId("prev")
-        .setLabel("prev")
+        .setLabel("◀ Prev")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(index === 0);
 
       const nextBtn = new ButtonBuilder()
         .setCustomId("next")
-        .setLabel("next")
+        .setLabel("Next ▶")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(index === allPairs.length - 1);
 
@@ -1956,23 +1866,19 @@ async function handlePrefixCommand(message, client) {
     }
     if (!targetUser) targetUser = message.author;
 
-    const allActive = await dbAll(
-      `SELECT * FROM streak_pairs 
-       WHERE guild_id = ? 
-         AND (user_one = ? OR user_two = ?) 
-         AND status IN ('active', 'warning')
-       ORDER BY current_streak DESC`,
-      [guildId, targetUser.id, targetUser.id]
-    );
+    const docsActive = await StreakPair.find({
+      guild_id: String(guildId),
+      $or: [{ user_one: String(targetUser.id) }, { user_two: String(targetUser.id) }],
+      status: { $in: ["active", "warning"] }
+    }).sort({ current_streak: -1 });
+    const allActive = docsActive.map(d => d.toObject());
 
-    const allBroken = await dbAll(
-      `SELECT * FROM streak_pairs 
-       WHERE guild_id = ? 
-         AND (user_one = ? OR user_two = ?) 
-         AND status = 'broken'
-       ORDER BY current_streak DESC`,
-      [guildId, targetUser.id, targetUser.id]
-    );
+    const docsBroken = await StreakPair.find({
+      guild_id: String(guildId),
+      $or: [{ user_one: String(targetUser.id) }, { user_two: String(targetUser.id) }],
+      status: 'broken'
+    }).sort({ current_streak: -1 });
+    const allBroken = docsBroken.map(d => d.toObject());
 
     if (!allActive.length && !allBroken.length) {
       return message.reply(`❌ **${targetUser.username}** belum memiliki pasangan streak aktif maupun padam.`);
@@ -2022,41 +1928,43 @@ async function handlePrefixCommand(message, client) {
             const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
             const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
             const name = partner ? partner.username : partnerId;
-            return `• <:aw_heartbreak1091957075757781032:1523337514599841842> **${name}** — \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`;
+            return `- **${name}** — \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`;
           })
         );
         lines.push(...renderedBroken);
       }
 
-      return new EmbedBuilder()
-        .setTitle(`📜 Daftar Streak — ${targetUser.username}`)
-        .setDescription(lines.join("\n"))
-        .setColor(0xff7700)
-        .setFooter({ text: `Halaman ${page + 1} dari ${totalPages} (Total ${totalItems.length} pasangan)` })
-        .setTimestamp();
+      const container = new ContainerBuilder().setAccentColor(0xff7700);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`## 📜 Daftar Streak — ${targetUser.username}\n\n` + lines.join("\n"))
+      );
+
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`*Halaman ${page + 1} dari ${totalPages} (Total ${totalItems.length} pasangan)*`)
+      );
+
+      if (totalPages > 1) {
+        const prevBtn = new ButtonBuilder()
+          .setCustomId("prev")
+          .setLabel("◀ Prev")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page === 0);
+
+        const nextBtn = new ButtonBuilder()
+          .setCustomId("next")
+          .setLabel("Next ▶")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page === totalPages - 1);
+
+        const buttonRow = new ActionRowBuilder().addComponents(prevBtn, nextBtn);
+        container.addActionRowComponents(buttonRow);
+      }
+
+      return container;
     }
 
-    function buildButtons(page) {
-      const row = new ActionRowBuilder();
-      const prevBtn = new ButtonBuilder()
-        .setCustomId("prev")
-        .setLabel("prev")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page === 0);
-
-      const nextBtn = new ButtonBuilder()
-        .setCustomId("next")
-        .setLabel("next")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page === totalPages - 1);
-
-      row.addComponents(prevBtn, nextBtn);
-      return row;
-    }
-
-    const embed = await buildPage(0);
-    const components = totalPages > 1 ? [buildButtons(0)] : [];
-    const replyMsg = await message.reply({ embeds: [embed], components });
+    const container = await buildPage(0);
+    const replyMsg = await message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
 
     if (totalPages > 1) {
       const filter = (i) => i.user.id === runnerId;
@@ -2068,15 +1976,27 @@ async function handlePrefixCommand(message, client) {
         } else if (i.customId === "next") {
           currentPage = Math.min(totalPages - 1, currentPage + 1);
         }
-        const nextEmbed = await buildPage(currentPage);
-        await i.update({ embeds: [nextEmbed], components: [buildButtons(currentPage)] });
+        const nextContainer = await buildPage(currentPage);
+        await i.update({ components: [nextContainer], flags: MessageFlags.IsComponentsV2 });
       });
 
       collector.on("end", () => {
-        replyMsg.edit({ components: [] }).catch(() => { });
+        buildPage(currentPage).then(finalContainer => {
+          replyMsg.edit({ components: [finalContainer], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
+        }).catch(() => { });
       });
     }
     return;
+  }
+
+  // Subcommand: EVAL (Manual Run Evaluasi Harian)
+  if (subcommand === "eval" || subcommand === "evaluate") {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return message.reply("❌ Perintah ini khusus Administrator.");
+    }
+    await message.reply("⚙️ Menjalankan evaluasi harian streak...");
+    await runDailyEvaluation(client);
+    return message.channel.send("✅ Evaluasi harian streak selesai dijalankan!");
   }
 
   // Subcommand: RESET
@@ -2181,7 +2101,7 @@ async function handlePrefixCommand(message, client) {
         warning_status: "Peringatan Padam ⚠️",
         broken_status: "Streak Padam 🕯️",
         streak_recovered: "Streak Dipulihkan 🩹",
-        streak_dissolved: "Streak Dibubarkan <a:aw_heartbreak1091957075757781032:1523337514599841842>"
+        streak_dissolved: "Streak Dibubarkan 💔"
       };
       const label = actionLabels[l.action] || l.action;
       return `${timeStr} — **${label}**\n> *Detail:* ${l.details}`;
@@ -2202,8 +2122,16 @@ async function handlePrefixCommand(message, client) {
     const partnerUser = await client.users.fetch(res.partner).catch(() => null);
     const partnerName = partnerUser ? partnerUser.username : "Partner";
 
+    const container = new ContainerBuilder().setAccentColor(0xff7700);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent("## <a:vssparkly:1523181259323473990> Yash! Streak berhasil dipulihkan!"));
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`Streak kamu dengan **${partnerName}** telah kembali aktif menjadi **${res.newStreak} Hari**! 🔥`));
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Sisa token pemulihan pasangan: **${res.recoveryLeft} / 5**`));
+
     await message.reply({
-      content: `<a:vssparkly:1523181259323473990> **Yash! Streak berhasil dipulihkan!**\nStreak kamu dengan **${partnerName}** telah kembali aktif menjadi **${res.newStreak} Hari**! 🔥\n*(Sisa token pemulihan pasangan: **${res.recoveryLeft} / 5**)*`
+      components: [container],
+      flags: MessageFlags.IsComponentsV2
     });
 
     const pair = await getPair(guildId, runnerId, res.partner);
@@ -2225,7 +2153,7 @@ async function handlePrefixCommand(message, client) {
     const partnerName = partnerUser ? partnerUser.username : "Partner";
 
     return message.reply({
-      content: `<a:aw_heartbreak1091957075757781032:1523337514599841842> **Hubungan streak dibubarkan.**\nKamu telah memutuskan hubungan streak dengan **${partnerName}**. Rekor kalian telah dihapus dan kalian sekarang bebas membentuk streak dengan partner baru.`
+      content: `💔 **Hubungan streak dibubarkan.**\nKamu telah memutuskan hubungan streak dengan **${partnerName}**. Rekor kalian telah dihapus dan kalian sekarang bebas membentuk streak dengan partner baru.`
     });
   }
 
@@ -2275,14 +2203,12 @@ async function handleInteraction(interaction, client) {
     await interaction.deferReply();
     const targetUser = interaction.options.getUser("user") || interaction.user;
 
-    const allPairs = await dbAll(
-      `SELECT * FROM streak_pairs 
-       WHERE guild_id = ? 
-         AND (user_one = ? OR user_two = ?) 
-         AND status != 'forming'
-       ORDER BY current_streak DESC`,
-      [guildId, targetUser.id, targetUser.id]
-    );
+    const docs = await StreakPair.find({
+      guild_id: String(guildId),
+      $or: [{ user_one: String(targetUser.id) }, { user_two: String(targetUser.id) }],
+      status: { $ne: 'forming' }
+    }).sort({ current_streak: -1 });
+    const allPairs = docs.map(d => d.toObject());
 
     if (!allPairs.length) {
       return interaction.editReply({
@@ -2335,13 +2261,13 @@ async function handleInteraction(interaction, client) {
       const row = new ActionRowBuilder();
       const prevBtn = new ButtonBuilder()
         .setCustomId("prev")
-        .setLabel("prev")
+        .setLabel("◀ Prev")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(index === 0);
 
       const nextBtn = new ButtonBuilder()
         .setCustomId("next")
-        .setLabel("next")
+        .setLabel("Next ▶")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(index === allPairs.length - 1);
 
@@ -2379,23 +2305,19 @@ async function handleInteraction(interaction, client) {
     await interaction.deferReply();
     const targetUser = interaction.options.getUser("user") || interaction.user;
 
-    const allActive = await dbAll(
-      `SELECT * FROM streak_pairs 
-       WHERE guild_id = ? 
-         AND (user_one = ? OR user_two = ?) 
-         AND status IN ('active', 'warning')
-       ORDER BY current_streak DESC`,
-      [guildId, targetUser.id, targetUser.id]
-    );
+    const docsActive = await StreakPair.find({
+      guild_id: String(guildId),
+      $or: [{ user_one: String(targetUser.id) }, { user_two: String(targetUser.id) }],
+      status: { $in: ["active", "warning"] }
+    }).sort({ current_streak: -1 });
+    const allActive = docsActive.map(d => d.toObject());
 
-    const allBroken = await dbAll(
-      `SELECT * FROM streak_pairs 
-       WHERE guild_id = ? 
-         AND (user_one = ? OR user_two = ?) 
-         AND status = 'broken'
-       ORDER BY current_streak DESC`,
-      [guildId, targetUser.id, targetUser.id]
-    );
+    const docsBroken = await StreakPair.find({
+      guild_id: String(guildId),
+      $or: [{ user_one: String(targetUser.id) }, { user_two: String(targetUser.id) }],
+      status: 'broken'
+    }).sort({ current_streak: -1 });
+    const allBroken = docsBroken.map(d => d.toObject());
 
     if (!allActive.length && !allBroken.length) {
       return interaction.editReply(`❌ **${targetUser.username}** belum memiliki pasangan streak aktif maupun padam.`);
@@ -2445,41 +2367,43 @@ async function handleInteraction(interaction, client) {
             const partnerId = pair.user_one === targetUser.id ? pair.user_two : pair.user_one;
             const partner = client.users.cache.get(partnerId) || await client.users.fetch(partnerId).catch(() => null);
             const name = partner ? partner.username : partnerId;
-            return `• <:aw_heartbreak1091957075757781032:1523337514599841842> **${name}** — \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`;
+            return `  💔 **${name}** - \`${pair.current_streak} Hari\` (Gunakan \`/streak recover\`)`;
           })
         );
         lines.push(...renderedBroken);
       }
 
-      return new EmbedBuilder()
-        .setTitle(`📜 Daftar Streak — ${targetUser.username}`)
-        .setDescription(lines.join("\n"))
-        .setColor(0xff7700)
-        .setFooter({ text: `Halaman ${page + 1} dari ${totalPages} (Total ${totalItems.length} pasangan)` })
-        .setTimestamp();
+      const container = new ContainerBuilder().setAccentColor(0xff7700);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`## 📜 Daftar Streak — ${targetUser.username}\n\n` + lines.join("\n"))
+      );
+
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`*Halaman ${page + 1} dari ${totalPages} (Total ${totalItems.length} pasangan)*`)
+      );
+
+      if (totalPages > 1) {
+        const prevBtn = new ButtonBuilder()
+          .setCustomId("prev")
+          .setLabel("◀ Prev")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page === 0);
+
+        const nextBtn = new ButtonBuilder()
+          .setCustomId("next")
+          .setLabel("Next ▶")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page === totalPages - 1);
+
+        const buttonRow = new ActionRowBuilder().addComponents(prevBtn, nextBtn);
+        container.addActionRowComponents(buttonRow);
+      }
+
+      return container;
     }
 
-    function buildButtons(page) {
-      const row = new ActionRowBuilder();
-      const prevBtn = new ButtonBuilder()
-        .setCustomId("prev")
-        .setLabel("prev")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page === 0);
-
-      const nextBtn = new ButtonBuilder()
-        .setCustomId("next")
-        .setLabel("next")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page === totalPages - 1);
-
-      row.addComponents(prevBtn, nextBtn);
-      return row;
-    }
-
-    const embed = await buildPage(0);
-    const components = totalPages > 1 ? [buildButtons(0)] : [];
-    const replyMsg = await interaction.editReply({ embeds: [embed], components });
+    const container = await buildPage(0);
+    const replyMsg = await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
 
     if (totalPages > 1) {
       const filter = (i) => i.user.id === interaction.user.id;
@@ -2491,14 +2415,26 @@ async function handleInteraction(interaction, client) {
         } else if (i.customId === "next") {
           currentPage = Math.min(totalPages - 1, currentPage + 1);
         }
-        const nextEmbed = await buildPage(currentPage);
-        await i.update({ embeds: [nextEmbed], components: [buildButtons(currentPage)] });
+        const nextContainer = await buildPage(currentPage);
+        await i.update({ components: [nextContainer], flags: MessageFlags.IsComponentsV2 });
       });
 
       collector.on("end", () => {
-        interaction.editReply({ components: [] }).catch(() => { });
+        buildPage(currentPage).then(finalContainer => {
+          interaction.editReply({ components: [finalContainer], flags: MessageFlags.IsComponentsV2 }).catch(() => { });
+        }).catch(() => { });
       });
     }
+  }
+
+  // Subcommand: EVAL (Manual Run Evaluasi Harian)
+  if (subcommand === "eval" || subcommand === "evaluate") {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: "❌ Perintah ini khusus Administrator.", flags: MessageFlags.Ephemeral });
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await runDailyEvaluation(interaction.client);
+    return interaction.editReply("✅ Evaluasi harian streak selesai dijalankan!");
   }
 
   if (subcommand === "reset") {
@@ -2594,7 +2530,7 @@ async function handleInteraction(interaction, client) {
         warning_status: "Peringatan Padam ⚠️",
         broken_status: "Streak Padam 🕯️",
         streak_recovered: "Streak Dipulihkan 🩹",
-        streak_dissolved: "Streak Dibubarkan <a:aw_heartbreak1091957075757781032:1523337514599841842>"
+        streak_dissolved: "Streak Dibubarkan 💔"
       };
       const label = actionLabels[l.action] || l.action;
       return `${timeStr} — **${label}**\n> *Detail:* ${l.details}`;
@@ -2615,8 +2551,16 @@ async function handleInteraction(interaction, client) {
     const partnerUser = await client.users.fetch(res.partner).catch(() => null);
     const partnerName = partnerUser ? partnerUser.username : "Partner";
 
+    const container = new ContainerBuilder().setAccentColor(0xff7700);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent("## <a:vssparkly:1523181259323473990> Yash! Streak berhasil dipulihkan!"));
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`Streak kamu dengan **${partnerName}** telah kembali aktif menjadi **${res.newStreak} Hari**! 🔥`));
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Sisa token pemulihan pasangan: **${res.recoveryLeft} / 5**`));
+
     await interaction.editReply({
-      content: `<a:vssparkly:1523181259323473990> **Yash! Streak berhasil dipulihkan!**\nStreak kamu dengan **${partnerName}** telah kembali aktif menjadi **${res.newStreak} Hari**! 🔥\n*(Sisa token pemulihan pasangan: **${res.recoveryLeft} / 5**)*`
+      components: [container],
+      flags: MessageFlags.IsComponentsV2
     });
 
     const pair = await getPair(guildId, runnerId, res.partner);
@@ -2637,7 +2581,7 @@ async function handleInteraction(interaction, client) {
     const partnerName = partnerUser ? partnerUser.username : "Partner";
 
     await interaction.editReply({
-      content: `<a:aw_heartbreak1091957075757781032:1523337514599841842> **Hubungan streak dibubarkan.**\nKamu telah memutuskan hubungan streak dengan **${partnerName}**. Rekor kalian telah dihapus dan kalian sekarang bebas membentuk streak dengan partner baru.`
+      content: `💔 **Hubungan streak dibubarkan.**\nKamu telah memutuskan hubungan streak dengan **${partnerName}**. Rekor kalian telah dihapus dan kalian sekarang bebas membentuk streak dengan partner baru.`
     });
   }
 
@@ -2742,7 +2686,7 @@ function setupListeners(client) {
       if (pair) {
         await deletePair(pair.id);
         await addLog(guildId, pair.id, userId, "streak_dissolved", `Streak dissolved because member left the guild: ${userId}`);
-        await logToGuild(client, guildId, `<a:aw_heartbreak1091957075757781032:1523337514599841842> Streak antara <@${pair.user_one}> & <@${pair.user_two}> dibubarkan karena salah satu member meninggalkan server.`);
+        await logToGuild(client, guildId, `💔 Streak antara <@${pair.user_one}> & <@${pair.user_two}> dibubarkan karena salah satu member meninggalkan server.`);
       }
     } catch (err) {
       console.error("[STREAK EVENT MEMBER_REMOVE ERROR]", err);
@@ -2774,8 +2718,7 @@ async function init(client, dbWrappers) {
     }
 
     console.log("[STREAK] Initializing Mystral Flame Streak Subsystem (Single-file)...");
-    setDb(dbWrappers);
-    await initTables();
+
     setupListeners(client);
     startScheduler(client);
     initializedClients.add(client);

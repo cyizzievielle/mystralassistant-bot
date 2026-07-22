@@ -1,0 +1,1 @@
+const { connectMongo } = require('./db'); const mongoose = require('mongoose'); connectMongo().then(async () => { const MetaText = mongoose.model('MetaText'); await MetaText.updateOne({ key: 'menfess_last_id' }, { $set: { value: '1991' } }, { upsert: true }); console.log('Successfully updated menfess_last_id to 1991'); process.exit(0); });
