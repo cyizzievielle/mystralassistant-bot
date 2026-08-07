@@ -167,6 +167,9 @@ const commands = [
       sc.setName("tebakangka").setDescription("Leaderboard tebak angka")
     )
     .addSubcommand((sc) =>
+      sc.setName("all").setDescription("Lihat peringkat keaktifan keseluruhan server (termasuk staff)")
+    )
+    .addSubcommand((sc) =>
       sc.setName("support")
         .setDescription("Lihat leaderboard support (Sponsor & Donatur)")
         .addChannelOption((o) =>

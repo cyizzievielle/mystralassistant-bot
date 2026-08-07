@@ -47,6 +47,53 @@ const {
 const { createCanvas, loadImage, GlobalFonts } = require("@napi-rs/canvas");
 const { joinVoiceChannel, VoiceConnectionStatus, getVoiceConnection } = require("@discordjs/voice");
 
+async function removeImageBackground(imageBuffer) {
+  const { createCanvas, loadImage } = require("@napi-rs/canvas");
+  const img = await loadImage(imageBuffer);
+  const canvas = createCanvas(img.width, img.height);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+
+  const imgData = ctx.getImageData(0, 0, img.width, img.height);
+  const data = imgData.data;
+  const W = img.width;
+  const H = img.height;
+
+  const samplePoints = [
+    [0, 0], [W - 1, 0], [0, H - 1], [W - 1, H - 1],
+    [Math.floor(W / 2), 0], [Math.floor(W / 2), H - 1],
+    [0, Math.floor(H / 2)], [W - 1, Math.floor(H / 2)]
+  ];
+
+  let bgR = 0, bgG = 0, bgB = 0;
+  for (const [x, y] of samplePoints) {
+    const idx = (y * W + x) * 4;
+    bgR += data[idx];
+    bgG += data[idx + 1];
+    bgB += data[idx + 2];
+  }
+  bgR = Math.round(bgR / samplePoints.length);
+  bgG = Math.round(bgG / samplePoints.length);
+  bgB = Math.round(bgB / samplePoints.length);
+
+  const tolerance = 48;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    const dist = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
+    if (dist < tolerance) {
+      const alphaFactor = dist / tolerance;
+      data[i + 3] = Math.floor(data[i + 3] * Math.pow(alphaFactor, 2.5));
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toBuffer("image/png");
+}
+
 // ===================== CONFIG =====================
 const BRAND_NAME = "Mystral Assistant";
 const ID_CARD_TITLE = "MYSTRAL IDENTITY CARD";
@@ -488,7 +535,8 @@ function parseQueryFromSql(sql, params = []) {
     const eqLit = cond.match(/^([`"]?[\w_]+[`"]?)\s*=\s*['"]?(.*?)['"]?$/i);
     if (eqLit) {
       const field = eqLit[1].replace(/[`"]/g, "");
-      query[field] = eqLit[2];
+      const val = eqLit[2];
+      query[field] = /^\d+$/.test(val) ? Number(val) : val;
       continue;
     }
   }
@@ -773,6 +821,45 @@ async function mongoAll(sql, params = []) {
       return docs.map((d) => d.toObject());
     }
 
+    if (s.includes("autoresponses")) {
+      const gId = params[0] ? String(params[0]) : null;
+      let query = {};
+      if (gId) query.guild_id = gId;
+      if (s.includes("is_enabled=1") || s.includes("is_enabled = 1")) {
+        query.$or = [{ is_enabled: 1 }, { is_enabled: "1" }, { is_enabled: true }, { is_enabled: { $exists: false } }];
+      } else if (s.includes("is_enabled=0") || s.includes("is_enabled = 0")) {
+        query.$or = [{ is_enabled: 0 }, { is_enabled: "0" }, { is_enabled: false }];
+      }
+      const AR = getMongoModel("autoresponses");
+      const docs = await AR.find(query);
+      return docs.map((d) => d.toObject());
+    }
+
+    if (s.includes("activity_daily_channel") && s.includes("group by")) {
+      const datePattern = params[0] || "";
+      const regexStr = "^" + String(datePattern).replace(/%/g, ".*");
+      const model = getMongoModel("activity_daily_channel");
+      if (model) {
+        const limitMatch = s.match(/limit\s+(\d+)/i);
+        const limitVal = limitMatch ? parseInt(limitMatch[1], 10) : 50;
+
+        const matchStage = { day: { $regex: new RegExp(regexStr) } };
+        const chParams = params.slice(1).flat().filter(Boolean);
+        if (chParams.length > 0) {
+          matchStage.channel_id = { $in: chParams.map(String) };
+        }
+
+        const docs = await model.aggregate([
+          { $match: matchStage },
+          { $group: { _id: "$user_id", total: { $sum: "$msg_count" } } },
+          { $sort: { total: -1 } },
+          { $limit: limitVal },
+          { $project: { _id: 0, user_id: "$_id", total: 1 } }
+        ]);
+        return docs;
+      }
+    }
+
     if (s.includes("activity_daily") && s.includes("group by")) {
       const datePattern = params[0] || "";
       const regexStr = "^" + String(datePattern).replace(/%/g, ".*");
@@ -878,6 +965,26 @@ async function syncToMongo(sql, params = []) {
 
   try {
     // 0. Activity & Voice Activity Daily
+    if (s.includes("activity_daily_channel")) {
+      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const dayVal = params[0];
+        const gId = params[1];
+        const cId = params[2];
+        const uId = params[3];
+        if (dayVal && uId) {
+          const model = getMongoModel("activity_daily_channel");
+          if (model) {
+            await model.updateOne(
+              { day: String(dayVal), guild_id: String(gId), channel_id: String(cId), user_id: String(uId) },
+              { $inc: { msg_count: 1 } },
+              { upsert: true }
+            );
+          }
+        }
+      }
+      return;
+    }
+
     if (s.includes("activity_daily")) {
       if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
         const dayVal = params[0];
@@ -1361,10 +1468,27 @@ const client = new Client({
   ],
 });
 
+// Helper to check for expired/acknowledged interaction REST errors
+function isIgnorableDiscordError(err) {
+  if (!err) return false;
+  const code = err.code || err.rawError?.code;
+  const status = err.status || err.rawError?.status;
+  return code === 10062 || code === 40060 || code === 10008 || code === 50027 || status === 404;
+}
+
 // anti-crash
-process.on("unhandledRejection", (reason) => console.error("[unhandledRejection]", reason));
-process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
-client.on("error", (err) => console.error("[client error]", err));
+process.on("unhandledRejection", (reason) => {
+  if (isIgnorableDiscordError(reason)) return;
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  if (isIgnorableDiscordError(err)) return;
+  console.error("[uncaughtException]", err);
+});
+client.on("error", (err) => {
+  if (isIgnorableDiscordError(err)) return;
+  console.error("[client error]", err);
+});
 
 // taruh di atas / utils
 const BOT_OWNER_IDS = String(process.env.BOT_OWNER_ID || "")
@@ -1505,14 +1629,12 @@ async function upsertMusicControlCenter(guild) {
     const prevMsgId = prev?.messageId;
     const prevChId = prev?.channelId;
 
-    // Kalau sebelumnya ada, coba edit
+    // Kalau sebelumnya ada, coba edit pesan yang sudah ada
     if (prevMsgId && prevChId === String(MUSIC_CONTROL_CHANNEL_ID)) {
       const msg = await ch.messages.fetch(prevMsgId).catch(() => null);
       if (msg) {
-        if (msg.flags?.has?.(MessageFlags.IsComponentsV2)) {
-          await msg.edit({ components: [panel] }).catch(() => { });
-          return;
-        }
+        const edited = await msg.edit({ components: [panel] }).catch(() => null);
+        if (edited) return; // Berhasil edit pesan yang ada
         await msg.delete().catch(() => { });
       }
     }
@@ -2222,7 +2344,7 @@ async function buildProfileEmbed({ guild, user, member }) {
   // DB data
   const idData = await getIdCard(user.id).catch(() => null);
   const sorted = await getSortedUser(user.id).catch(() => null);
-  const afk = await getAfk(user.id).catch(() => null);
+  const afk = await getAfk(user.id, guild?.id).catch(() => null);
 
   // timeline
   const createdUnix = Math.floor((user.createdTimestamp || Date.now()) / 1000);
@@ -2364,21 +2486,14 @@ function safeText(s, max = 32) {
 
 async function safeReply(interaction, payload) {
   try {
-    // kalau sudah pernah defer/reply, normalnya editReply / followUp
     if (interaction.deferred) {
       try {
         return await interaction.editReply(payload);
       } catch (e) {
-        // ✅ FIX: kalau token interaction invalid, jangan loop editReply lagi
-        if (e?.code === 50027) {
-          console.error("[safeReply] Invalid Webhook Token (50027) — skip editReply");
-
-          // optional fallback: kirim ke channel biar user tetap dapat output (tanpa “thinking” fix, tapi minimal output ada)
+        if (isIgnorableDiscordError(e)) {
           const ch = interaction.channel;
           if (ch?.isTextBased?.()) {
             const clone = { ...payload };
-
-            // payload edit/reply kadang punya flags/ephemeral — buang untuk channel.send
             delete clone.flags;
             delete clone.ephemeral;
 
@@ -2391,9 +2506,10 @@ async function safeReply(interaction, payload) {
       }
     }
 
-    if (interaction.replied) return await interaction.followUp(payload);
+    if (interaction.replied) return await interaction.followUp(payload).catch(() => null);
     return await interaction.reply(payload);
   } catch (e) {
+    if (isIgnorableDiscordError(e)) return;
     console.error("[safeReply] failed:", e?.message || e);
   }
 }
@@ -2826,6 +2942,35 @@ async function initDb() {
       PRIMARY KEY (day, user_id)
     );
     CREATE INDEX IF NOT EXISTS idx_voice_act_day ON voice_activity_daily(day);
+
+    CREATE TABLE IF NOT EXISTS activity_daily_channel (
+      day TEXT NOT NULL,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      msg_count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day, guild_id, channel_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_act_chan_day_g_c ON activity_daily_channel(day, guild_id, channel_id);
+
+    CREATE TABLE IF NOT EXISTS leaderboard_lobby_channels (
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      added_at INTEGER NOT NULL,
+      PRIMARY KEY (guild_id, channel_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS monthly_recap_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      category TEXT NOT NULL,
+      rank INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
+      score INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS autoresponses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4083,16 +4228,26 @@ async function getAllIdCards() {
   `);
 }
 
-async function getAllAfkUsers() {
+async function getAllAfkUsers(guildId = null) {
+  const gId = guildId ? String(guildId) : null;
   try {
-    const docs = await AfkUser.find().sort({ since: 1 });
+    const filter = gId ? { guild_id: gId } : {};
+    const docs = await AfkUser.find(filter).sort({ since: 1 });
     if (docs.length) return docs.map(d => d.toObject());
   } catch { }
-  return await safeAll(`
+  if (gId) {
+    return (await safeAll(`
+      SELECT *
+      FROM afk_users
+      WHERE guild_id=?
+      ORDER BY since ASC
+    `, [gId])) || [];
+  }
+  return (await safeAll(`
     SELECT *
     FROM afk_users
     ORDER BY since ASC
-  `);
+  `)) || [];
 }
 
 async function upsertIdCard(userId, data) {
@@ -4189,14 +4344,16 @@ async function trySetMemberNick(member, nickOrNull) {
 }
 
 // ===================== AFK =====================
-async function setAfk(userId, reason) {
+async function setAfk(userId, reason, guildId = null) {
   const rText = safeText(reason || "AFK", 80);
   const since = Date.now();
+  const gId = guildId ? String(guildId) : null;
 
   try {
+    const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
     await AfkUser.updateOne(
-      { user_id: String(userId) },
-      { $set: { reason: rText, since } },
+      filter,
+      { $set: { guild_id: gId, user_id: String(userId), reason: rText, since } },
       { upsert: true }
     );
   } catch (e) {
@@ -4204,34 +4361,55 @@ async function setAfk(userId, reason) {
   }
 
   await safeRun(
-    `INSERT INTO afk_users (user_id, reason, since)
-     VALUES (?,?,?)
-     ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, since=excluded.since`,
-    [userId, rText, since]
-  ).catch(() => { });
+    `INSERT INTO afk_users (user_id, reason, since, guild_id)
+     VALUES (?,?,?,?)
+     ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, since=excluded.since, guild_id=excluded.guild_id`,
+    [userId, rText, since, gId]
+  ).catch(() => {
+    return safeRun(
+      `INSERT INTO afk_users (user_id, reason, since)
+       VALUES (?,?,?)
+       ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, since=excluded.since`,
+      [userId, rText, since]
+    ).catch(() => { });
+  });
 }
 
-async function clearAfk(userId) {
+async function clearAfk(userId, guildId = null) {
   let removed = false;
+  const gId = guildId ? String(guildId) : null;
+
   try {
-    const res = await AfkUser.deleteOne({ user_id: String(userId) });
+    const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
+    const res = await AfkUser.deleteOne(filter);
     if (res.deletedCount > 0) removed = true;
   } catch { }
 
   try {
-    const r = await safeRun(`DELETE FROM afk_users WHERE user_id=?`, [userId]);
-    if ((r?.changes || 0) > 0) removed = true;
+    if (gId) {
+      const r = await safeRun(`DELETE FROM afk_users WHERE user_id=? AND (guild_id=? OR guild_id IS NULL)`, [userId, gId]);
+      if ((r?.changes || 0) > 0) removed = true;
+    } else {
+      const r = await safeRun(`DELETE FROM afk_users WHERE user_id=?`, [userId]);
+      if ((r?.changes || 0) > 0) removed = true;
+    }
   } catch { }
 
   return removed;
 }
 
-async function clearAllAfkUsers() {
+async function clearAllAfkUsers(guildId = null) {
+  const gId = guildId ? String(guildId) : null;
   try {
-    await AfkUser.deleteMany({});
+    const filter = gId ? { guild_id: gId } : {};
+    await AfkUser.deleteMany(filter);
   } catch { }
 
   try {
+    if (gId) {
+      const r = await safeRun(`DELETE FROM afk_users WHERE guild_id=?`, [gId]);
+      return r?.changes || 0;
+    }
     const r = await safeRun(`DELETE FROM afk_users`);
     return r?.changes || 0;
   } catch {
@@ -4239,13 +4417,19 @@ async function clearAllAfkUsers() {
   }
 }
 
-async function getAfk(userId) {
+async function getAfk(userId, guildId = null) {
+  const gId = guildId ? String(guildId) : null;
   try {
-    const doc = await AfkUser.findOne({ user_id: String(userId) });
-    if (doc) return { reason: doc.reason, since: doc.since };
+    const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
+    const doc = await AfkUser.findOne(filter);
+    if (doc) return { reason: doc.reason, since: doc.since, guild_id: doc.guild_id };
   } catch { }
 
   try {
+    if (gId) {
+      const row = await safeGet(`SELECT reason, since, guild_id FROM afk_users WHERE user_id=? AND (guild_id=? OR guild_id IS NULL)`, [userId, gId]);
+      if (row) return row;
+    }
     return (await safeGet(`SELECT reason, since FROM afk_users WHERE user_id=?`, [userId])) || null;
   } catch {
     return null;
@@ -5416,45 +5600,6 @@ function menfessPanelRow() {
 }
 
 const HELP_CATEGORIES = {
-  assistant: {
-    emoji: "🤖",
-    label: "Management Assistant",
-    description: "Core assistant queries, server stats, and voice tracking.",
-    commands: [
-      "`/c <query>` - Run assistant text queries directly.",
-      "`c server stats` / `ss` / `stats` / `/serverstats` - View detailed server statistics.",
-      "`c voice check` / `vc` / `vcc` / `/voicecheck` - Show active voice channel states.",
-      "`cvc <user>` / `cv` / `cvc` / `cfind` - Check a member's active voice channel.",
-      "**Autoresponder Engine**:",
-      "- `cadd autoresponse ...` / `aar` - Add a new autoresponse.",
-      "- `cedit autoresponse ...` / `ear` - Edit an existing autoresponse.",
-      "- `cdelete autoresponse <id>` / `dar` - Delete an autoresponse.",
-      "- `clist autoresponse` / `clar` / `lar` - List all autoresponses.",
-      "- `cenable/disable autoresponse <id>` / `enar` / `disar` - Toggle autoresponse state."
-    ]
-  },
-  roles_mod: {
-    emoji: "🛠️",
-    label: "Role & Moderation Quick Actions",
-    description: "Prefix commands for roles, voice control, sticky messages, and moderation.",
-    commands: [
-      "**Role Management**:",
-      "- `c add <role> to <user> [days]` - Assign a role with optional duration.",
-      "- `c remove <role> from <user>` - Remove a role from a member.",
-      "- `c list <role>` / `c who <role>` - List all members holding a role.",
-      "**Voice Control**:",
-      "- `c move voice <user> <channel>` / `mv vc` - Move member to another voice channel.",
-      "- `c disconnect voice <user>` / `dc vc` - Disconnect member from voice.",
-      "- `c mute voice <user>` / `mu vc` - Server-mute member in voice.",
-      "- `c deafen voice <user>` / `df vc` - Server-deafen member in voice.",
-      "**Moderation & Utilities**:",
-      "- `c timeout <user> <duration>` / `to` - Timeout a member.",
-      "- `c untimeout <user>` / `unto` - Remove timeout from a member.",
-      "- `c purge <amount>` / `pg` / `cl` - Bulk delete messages.",
-      "- `c sticky set <content>` / `c sticky remove` - Sticky message management.",
-      "- `c media enable/disable/status` - Universal Media Embed settings."
-    ]
-  },
   streak: {
     emoji: "🔥",
     label: "Flame Streak System",
@@ -5465,7 +5610,8 @@ const HELP_CATEGORIES = {
       "`csp` / `cstreak profile` / `/streak profile` - View interactive streak profile card.",
       "`csc` / `cstreak cards` / `/streak cards` - View interactive streak cards.",
       "`csi` / `cstreak info` / `/streak info` - Check streak status with a member.",
-      "`csr` / `cstreak recover` / `/streak recover` - Recover a broken streak."
+      "`csr` / `cstreak recover` / `/streak recover` - Recover a broken streak.",
+      "`cstreak resetbg` / `removebg` - Hapus background custom kartu streak."
     ]
   },
   general: {
@@ -5474,6 +5620,9 @@ const HELP_CATEGORIES = {
     description: "General commands, status checks, latency ping, and calculator.",
     commands: [
       "`/help` / `chelp` - Display this help grimoire.",
+      "`c leaderboard recap` / `/leaderboard recap` - Lihat peringkat keaktifan Member of the Month (Non-staff).",
+      "`c leaderboard all` / `c lb all` / `/leaderboard all` - Lihat peringkat keaktifan keseluruhan server (Termasuk staff).",
+      "`cremovebg` / `crembg` / `cnobg` - Hapus background gambar otomatis (PNG transparan).",
       "`/ping` / `cping` - Check bot connection & latency.",
       "`/botstatus` - Check memory usage and bot status.",
       "`/halo` / `chalo` - Warm greetings from the assistant.",
@@ -5506,8 +5655,7 @@ const HELP_CATEGORIES = {
     commands: [
       "`/idcard` - Create, update, or design your Mystral Identity Card.",
       "`/registry` - Access the list of registered Mystral members.",
-      "`/myhouse` - Show your hostel/affiliation from the sorting ritual.",
-      "`/sortingpanel` - Deploy the sorting ritual panel *(Owner Only)*."
+      "`/myhouse` - Show your hostel/affiliation from the sorting ritual."
     ]
   },
   social: {
@@ -5525,8 +5673,7 @@ const HELP_CATEGORIES = {
       "`/afk_list` - View the list of currently AFK members.",
       "`/remind_in <duration> <message>` - Set a reminder alarm based on duration.",
       "`/remind_at <time> <message>` - Set a reminder alarm at a specific time (WIB).",
-      "`/remind_list` - View or delete your active reminders.",
-      "`/menfesspanel` - Send the anonymous menfess panel *(Owner Only)*."
+      "`/remind_list` - View or delete your active reminders."
     ]
   },
   games: {
@@ -5538,26 +5685,7 @@ const HELP_CATEGORIES = {
       "`/hint` / `chint` - Get range hints for the active guessing game.",
       "`/stopgame` / `cstopgame` - Terminate the active guessing game.",
       "`/leaderboard tebakangka` / `clb angka` - View top guessers leaderboard.",
-      "`/tarot` / `ctarot` - Open daily tarot card reading.",
-      "`/giveaway_start` - Start a new giveaway event.",
-      "`/giveaway_end` - End the active giveaway and draw winners.",
-      "`/giveaway_list` - List all active giveaways.",
-      "`/giveaway_entries` - View entries for a specific giveaway.",
-      "`/giveaway_delete` - Cancel/delete a specific giveaway.",
-      "`/giveaway_reroll` - Reroll winners for a giveaway."
-    ]
-  },
-  support: {
-    emoji: "🎫",
-    label: "Support Desk & Verification",
-    description: "Support ticket management, verification, reporting, and logs.",
-    commands: [
-      "`/ticket_setup` - Set up log channels and ticket categories.",
-      "`/ticketpanel` - Send the private support ticket panel *(Owner Only)*.",
-      "**Ticket Operations**:",
-      "- `claim` - Claim a ticket by staff to start support.",
-      "- `close` - Permanently close a ticket with confirmation & transcript log.",
-      "- `approve` - Approve female verification ticket & log."
+      "`/tarot` / `ctarot` - Open daily tarot card reading."
     ]
   },
   faq: {
@@ -5567,45 +5695,104 @@ const HELP_CATEGORIES = {
     commands: [
       "`/faq_view <tag>` - View FAQ answers by key tag.",
       "`/faq_search <query>` - Search for relevant FAQ articles.",
-      "`/faq_list` - Display the full list of registered FAQs.",
-      "`/faq_add` - Add a new FAQ article *(Staff/Admin)*.",
-      "`/faq_edit` - Modify an existing FAQ article *(Staff/Admin)*.",
-      "`/faq_delete` - Remove an FAQ article *(Staff/Admin)*.",
-      "`/faq_panel` - Send the interactive FAQ search panel *(Staff/Admin)*."
+      "`/faq_list` - Display the full list of registered FAQs."
+    ]
+  }
+};
+
+const ADMIN_HELP_CATEGORIES = {
+  admin_roles: {
+    emoji: "🎨",
+    label: "Role & Custom Role Management",
+    description: "Perintah kelola role masal, warna gradien, dan icon role.",
+    commands: [
+      "`ccr <nama_role> [#hex1] [#hex2] [icon]` - Buat role baru secara cepat.",
+      "`crole color @role #hex1 [#hex2]` - Ubah warna role (Mendukung 2 warna gradien).",
+      "`crole icon @role <url|lampiran>` - Pasang icon/gambar pada role (Boost Level 2).",
+      "`crole removeicon @role` - Hapus icon dari role.",
+      "`crole add @role <@user|all|human|bot>` - Tambahkan role ke user, semua member, human, atau bot.",
+      "`crole remove @role <@user|all|human|bot>` - Hapus role dari user, semua member, human, atau bot.",
+      "`crole addall @role` / `addhuman` / `addbot` - Perintah cepat tambah role masal.",
+      "`crole removeall @role` / `removehuman` / `removebot` - Perintah cepat hapus role masal.",
+      "`crole info @role` - Lihat informasi & statistik detail role.",
+      "`crole members @role` / `clist role @role` - Lihat daftar member pemilik role (mention / unmention).",
+      "`crole rename @role <nama_baru>` - Ubah nama role.",
+      "`crole delete @role` - Hapus role dari server."
     ]
   },
-  moderation: {
+  admin_moderation: {
     emoji: "🛡️",
-    label: "Moderation Shield",
-    description: "Security features, warnings, and moderating members.",
+    label: "Server Moderation Shield",
+    description: "Perintah moderasi member, warning, timeout, kick, dan ban.",
     commands: [
-      "`/warn` - Warn a member with a recorded infraction.",
-      "`/warnings` - Check warnings history of a member.",
-      "`/clearwarn` - Clear all warnings from a member.",
-      "`/unwarn` - Revoke the last warning of a member.",
-      "`/timeout` - Timeout a member for a specified duration.",
-      "`/untimeout` - Remove timeout from a member early.",
-      "`/mute` / `/unmute` - Server-mute/unmute a member in voice.",
-      "`/kick` - Kick a member from the academy server.",
-      "`/ban` / `/unban` - Ban/unban a member from the server."
+      "`cwarn <user> [alasan]` / `/warn` - Berikan warning ke member (tersimpan di DB).",
+      "`cwarnings <user>` / `/warnings` - Lihat riwayat warning member.",
+      "`cclearwarn <user>` / `/clearwarn` - Hapus semua warning dari member.",
+      "`cunwarn <user> <id>` / `/unwarn` - Hapus 1 warning spesifik berdasarkan ID.",
+      "`ctimeout <user> <durasi> [alasan]` / `to` - Timeout member.",
+      "`cuntimeout <user>` / `unto` - Cabut timeout member.",
+      "`cpurge <jumlah>` / `pg` / `cl` - Hapus pesan masal dalam channel.",
+      "`cmute <user>` / `cunmute` - Mute/unmute voice member.",
+      "`ckick <user> [alasan]` / `/kick` - Kick member dari server.",
+      "`cban <user> [alasan]` / `/ban` / `cunban` - Ban/unban member dari server."
     ]
   },
-  admin: {
-    emoji: "🔐",
-    label: "Admin & Owner Tools",
-    description: "Role panels, data backups, and custom embed builders.",
+  admin_automation: {
+    emoji: "🤖",
+    label: "Autoresponder & Sticky Messages",
+    description: "Pengaturan respon otomatis, pesan sticky, dan media embed.",
     commands: [
-      "`/selfrolespanel` - Send the self-assignable roles setup panel.",
-      "`/idcard_export` - Export ID Card database to JSON format.",
-      "`/backup_now` - Perform an instant backup of the database.",
-      "`/tod_add` - Add custom Truth/Dare questions to the database.",
-      "`/sendembed` / `/sendembedv2` - Send custom embed messages."
+      "`cadd autoresponse <trigger> | <response>` / `aar` - Tambah autoresponse baru.",
+      "`cedit autoresponse <id> <trigger> | <response>` / `ear` - Edit autoresponse.",
+      "`cdelete autoresponse <id>` / `dar` - Hapus autoresponse.",
+      "`clist autoresponse` / `clar` / `lar` - Lihat daftar semua autoresponse.",
+      "`cenable/disable autoresponse <id>` - Aktifkan atau nonaktifkan autoresponse.",
+      "`c sticky set <content>` / `c sticky remove` - Atur/hapus pesan sticky channel.",
+      "`c media enable/disable/status` - Atur Universal Media Embed."
+    ]
+  },
+  admin_voice: {
+    emoji: "🔊",
+    label: "Voice Channel Control",
+    description: "Kelola member di voice channel (move, disconnect, mute, deafen).",
+    commands: [
+      "`c move voice <user> <channel>` / `mv vc` - Pindahkan member ke channel voice lain.",
+      "`c disconnect voice <user>` / `dc vc` - Putuskan member dari voice channel.",
+      "`c mute voice <user>` / `mu vc` - Server-mute member di voice.",
+      "`c deafen voice <user>` / `df vc` - Server-deafen member di voice."
+    ]
+  },
+  admin_panels: {
+    emoji: "📋",
+    label: "Panel Setup & Deploy",
+    description: "Pengiriman panel tiket, verifikasi, sorting, dan menfess.",
+    commands: [
+      "`c leaderboard send [#channel]` - Pasang panel Live Leaderboard (auto-update 3-5 menit).",
+      "`c leaderboard lobby add #channel` - Tambahkan channel ke hitungan Top Chat Lobby.",
+      "`c leaderboard lobby remove #channel` - Hapus channel dari hitungan Top Chat Lobby.",
+      "`c leaderboard lobby list` - Lihat daftar channel Chat Lobby.",
+      "`/ticketpanel` - Kirim panel tiket bantuan private.",
+      "`/setup-verif` / `c verif setup` - Kirim panel verifikasi role cewe/member.",
+      "`/sortingpanel` - Kirim panel ritual pembagian House Sorting.",
+      "`/menfesspanel` - Kirim panel pengirim pesan anonim Menfess.",
+      "`/selfrolespanel` - Kirim panel pilihan role mandiri (Self Roles).",
+      "`/faq_panel` - Kirim panel pencarian FAQ interaktif."
+    ]
+  },
+  admin_tools: {
+    emoji: "🔐",
+    label: "Admin & Owner System Tools",
+    description: "Backup database, export data, dan pembuat embed custom.",
+    commands: [
+      "`/backup_now` - Lakukan backup instant database MongoDB/SQLite.",
+      "`/idcard_export` - Export database ID Card ke format JSON.",
+      "`/tod_add` - Tambahkan pertanyaan/tantangan Truth or Dare custom.",
+      "`/sendembed` / `/sendembedv2` - Buat dan kirim pesan embed custom."
     ]
   }
 };
 
 function buildHelpUI(selectedCategory = "home", userId = null) {
-  // Create Select Menu
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`help:menu:${userId || "any"}`)
     .setPlaceholder("📖 Choose a Feature Category...")
@@ -5652,7 +5839,7 @@ function buildHelpUI(selectedCategory = "home", userId = null) {
       .addActionRowComponents(row)
       .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("Mystral   Use the menu below to navigate")
+        new TextDisplayBuilder().setContent("Mystral Help • 🛡️ Khusus Admin/Mod: Ketik 'chelp mod' atau 'chelp admin'")
       );
   } else {
     const cat = HELP_CATEGORIES[selectedCategory];
@@ -5672,6 +5859,83 @@ function buildHelpUI(selectedCategory = "home", userId = null) {
       .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
       .addTextDisplayComponents(
         new TextDisplayBuilder().setContent(`Mystral - Category: ${cat.label}   slash / prefix c`)
+      );
+  }
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] }
+  };
+}
+
+function buildAdminHelpUI(selectedCategory = "home", userId = null) {
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`help:adminmenu:${userId || "any"}`)
+    .setPlaceholder("🛠️ Choose an Admin/Mod Category...")
+    .addOptions(
+      {
+        label: "Main Admin Menu",
+        value: "home",
+        description: "Kembali ke halaman utama panduan admin & moderator.",
+        emoji: "👑",
+        default: selectedCategory === "home"
+      },
+      ...Object.entries(ADMIN_HELP_CATEGORIES).map(([key, cat]) => ({
+        label: cat.label,
+        value: key,
+        description: cat.description.length > 50 ? cat.description.slice(0, 47) + "..." : cat.description,
+        emoji: cat.emoji,
+        default: selectedCategory === key
+      }))
+    );
+
+  const row = new ActionRowBuilder().addComponents(selectMenu);
+
+  const container = new ContainerBuilder();
+  if (selectedCategory === "home" || !ADMIN_HELP_CATEGORIES[selectedCategory]) {
+    const categoriesDesc = Object.entries(ADMIN_HELP_CATEGORIES)
+      .map(([key, cat]) => `${cat.emoji} **${cat.label}**`)
+      .join("\n");
+
+    container
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("# 🛠️ Mystral Assistant — Admin & Moderator Grimoire"),
+        new TextDisplayBuilder().setContent(
+          [
+            "Selamat datang di pusat bantuan **Admin & Moderator Server**.",
+            "Gunakan panduan perintah di bawah untuk kelola role masal, moderasi, autoresponse, dan panel setup.",
+            "",
+            "> **Pilih kategori fitur pengelola di menu bawah untuk melihat rincian perintah.**",
+            "",
+            categoriesDesc
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addActionRowComponents(row)
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("Mystral Admin Shield • Khusus Administrator & Moderator")
+      );
+  } else {
+    const cat = ADMIN_HELP_CATEGORIES[selectedCategory];
+    container
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`# ${cat.emoji} Category: ${cat.label}`),
+        new TextDisplayBuilder().setContent(
+          [
+            `*${cat.description}*`,
+            "",
+            cat.commands.join("\n")
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addActionRowComponents(row)
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral Admin • ${cat.label}`)
       );
   }
 
@@ -6985,7 +7249,129 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     return true;
   }
 
-  if (cmd === "add_autoresponse" || cmd === "create_autoresponse" || cmd === "aar" || ((cmd === "add" || cmd === "create") && (args[0] === "autoresponse" || args[0] === "ar"))) {
+  // Helper to extract ID argument from args (numeric, hex MongoDB ID, etc.)
+  const getArIdArg = (argsList, parsedObj) => {
+    if (parsedObj && parsedObj.id) return String(parsedObj.id).trim();
+    const subCmds = new Set(["autoresponse", "ar", "add", "create", "edit", "delete", "del", "enable", "disable", "clean", "dedupe"]);
+    const clean = argsList.filter(x => !subCmds.has(x.toLowerCase()) && !x.includes("="));
+    if (!clean.length) return null;
+    return clean[0].trim();
+  };
+
+  // Helper to find an autoresponse in guild by numeric ID, Mongo _id (or last 6 hex chars), or 1-based index
+  const findAutoResponseDoc = async (guildId, targetId) => {
+    if (!targetId) return null;
+    const list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [guildId]);
+    if (!list || !list.length) return null;
+    const tid = String(targetId).trim().toLowerCase();
+
+    return list.find((r, idx) => {
+      if (r.id !== undefined && r.id !== null && String(r.id).toLowerCase() === tid) return true;
+      if (r._id) {
+        const fullHex = String(r._id).toLowerCase();
+        if (fullHex === tid || fullHex.slice(-6) === tid) return true;
+      }
+      if (String(idx + 1) === tid) return true;
+      return false;
+    }) || null;
+  };
+
+  // Helper to delete an autoresponse doc
+  const deleteAutoResponseDoc = async (guildId, arDoc) => {
+    const AR = getMongoModel("autoresponses");
+    if (AR && arDoc._id) {
+      await AR.deleteOne({ _id: arDoc._id });
+    } else if (arDoc.id !== undefined && arDoc.id !== null) {
+      await safeRun(`DELETE FROM autoresponses WHERE id=? AND guild_id=?`, [arDoc.id, guildId]);
+    }
+  };
+
+  // Helper to update autoresponse enabled status
+  const setAutoResponseStatusDoc = async (guildId, arDoc, isEnabled) => {
+    const AR = getMongoModel("autoresponses");
+    if (AR && arDoc._id) {
+      await AR.updateOne({ _id: arDoc._id }, { $set: { is_enabled: isEnabled ? 1 : 0 } });
+    } else if (arDoc.id !== undefined && arDoc.id !== null) {
+      await safeRun(`UPDATE autoresponses SET is_enabled=? WHERE id=? AND guild_id=?`, [isEnabled ? 1 : 0, arDoc.id, guildId]);
+    }
+  };
+
+  if (cmd === "clean_autoresponse" || cmd === "cleanar" || cmd === "leanar" || cmd === "leanar" || cmd === "cdedupe" || cmd === "dedupe_autoresponse" || cmd === "dedupe" || ((cmd === "clean" || cmd === "dedupe" || cmd === "lean") && (args[0] === "autoresponse" || args[0] === "ar" || args[0] === "dup" || args[0] === "duplikat"))) {
+    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+    const list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+    if (!list.length) {
+      const embed = new EmbedBuilder().setTitle("ℹ️ Pembersihan Autoresponse").setColor(0x3498db).setDescription("Belum ada autoresponse di server ini.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    const seen = new Map();
+    const duplicates = [];
+
+    for (const item of list) {
+      const key = String(item.trigger_text || "").trim().toLowerCase();
+      if (!seen.has(key)) {
+        seen.set(key, item);
+      } else {
+        duplicates.push(item);
+      }
+    }
+
+    if (!duplicates.length) {
+      const embed = new EmbedBuilder().setTitle("✅ Pembersihan Selesai").setColor(0x2ecc71).setDescription("Tidak ditemukan autoresponse duplikat di server ini. Semua trigger sudah unik.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    for (const dup of duplicates) {
+      await deleteAutoResponseDoc(ctx.guild.id, dup);
+    }
+
+    const embedSuccess = new EmbedBuilder()
+      .setTitle("🧹 Autoresponse Duplikat Dibersihkan")
+      .setColor(0x2ecc71)
+      .setDescription(`Berhasil menghapus **${duplicates.length}** autoresponse duplikat.\nSekarang tersisa **${seen.size}** autoresponse unik di server ini.`)
+      .setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embedSuccess] });
+    return true;
+  }
+
+  if (cmd === "seed_autoresponses" || cmd === "seedar" || cmd === "defaultar" || cmd === "seed" || ((cmd === "seed" || cmd === "default") && (args[0] === "autoresponse" || args[0] === "ar"))) {
+    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    const existingList = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+    const existingTriggers = new Set(existingList.map(r => String(r.trigger_text || "").trim().toLowerCase()));
+
+    let addedCount = 0;
+    for (const item of defaultList) {
+      if (!existingTriggers.has(item.trigger.toLowerCase())) {
+        await safeRun(
+          `INSERT INTO autoresponses (guild_id, trigger_text, response_text, match_type, ignore_case, cooldown, reply_mode, mention_user, embed_response)
+           VALUES (?, ?, ?, 'exact', 1, 0, 'reply', 0, 0)`,
+          [ctx.guild.id, item.trigger, item.response]
+        );
+        addedCount++;
+      }
+    }
+
+    const embedSuccess = new EmbedBuilder()
+      .setTitle("🌱 Autoresponse Bawaan Berhasil Ditambahkan")
+      .setColor(0x2ecc71)
+      .setDescription(`Berhasil menambahkan **${addedCount}** autoresponse bawaan standar ke server ini.\n*(Autoresponse yang sudah ada dilewati agar tidak terjadi duplikasi)*`)
+      .setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embedSuccess] });
+    return true;
+  }
+
+  if (cmd === "add_autoresponse" || cmd === "create_autoresponse" || cmd === "ar" || cmd === "aar" || cmd === "arr" || cmd === "car" || cmd === "caar" || cmd === "carr" || cmd === "ccar" || ((cmd === "add" || cmd === "create") && (args[0] === "autoresponse" || args[0] === "ar"))) {
     if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
       const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
@@ -6994,25 +7380,68 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const startIdx = (cmd === "add" || cmd === "create") ? 1 : 0;
     const text = args.slice(startIdx).join(" ");
     const parsed = parseKeyValueArgs(text);
-    if (!parsed.trigger || !parsed.response) {
+    let trigger = parsed.trigger;
+    let response = parsed.response;
+
+    if (!trigger || !response) {
+      const rawText = text.trim();
+      if (rawText.includes("|")) {
+        const parts = rawText.split("|");
+        trigger = parts[0].trim();
+        response = parts.slice(1).join("|").trim();
+      } else {
+        const quoteMatches = [...rawText.matchAll(/"([^"]+)"|'([^']+)'/g)];
+        if (quoteMatches.length >= 2) {
+          trigger = quoteMatches[0][1] || quoteMatches[0][2];
+          response = quoteMatches[1][1] || quoteMatches[1][2];
+        } else {
+          const cleanTokens = args.slice(startIdx).filter(x => !x.includes("="));
+          if (cleanTokens.length >= 2) {
+            trigger = cleanTokens[0];
+            response = cleanTokens.slice(1).join(" ");
+          }
+        }
+      }
+    }
+
+    if (!trigger || !response) {
       const embed = new EmbedBuilder()
         .setTitle("💡 Cara Menambahkan Autoresponse")
         .setColor(EMBED_COLOR)
-        .setDescription(`Format:\n\`${PREFIX} add autoresponse trigger="keyword" response="balasan" [opsi]\``)
+        .setDescription(
+          `**Format yang Didukung:**\n` +
+          `1. \`${PREFIX} car trigger="hai" response="Halo {mention}!"\`\n` +
+          `2. \`${PREFIX} car hai | Halo {mention}!\` *(Menggunakan garis tegak ` | `)*\n` +
+          `3. \`${PREFIX} car "hai" "Halo {mention}!"\`\n` +
+          `4. \`${PREFIX} car hai Halo {mention}!\``
+        )
         .addFields({
-          name: "Opsi Tambahan",
-          value: "• `match=exact|contains|regex`\n• `ignore_case=1|0`\n• `cooldown=detik`\n• `embed=1|0`\n• `reply=1|0`\n• `mention=1|0`\n• `random=\"hai;halo\"`\n• `attachment=\"https://...\"`\n• `button=\"Label\" button_url=\"https://...\"`\n• `select=\"Opsi A;Opsi B\"`"
+          name: "Opsi Tambahan (Key-Value)",
+          value: "• `match=exact|contains|regex`\n• `ignore_case=1|0`\n• `cooldown=detik`\n• `embed=1|0`\n• `reply=1|0`\n• `mention=1|0`\n• `random=\"hai;halo\"`\n• `attachment=\"https://...\"`\n• `button=\"Label\" button_url=\"https://...\"`"
         })
         .setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const trigger = parsed.trigger;
-    const response = parsed.response;
+
+    // Check duplicate trigger
+    const existingList = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+    const existing = existingList.find(r => String(r.trigger_text || "").trim().toLowerCase() === trigger.trim().toLowerCase());
+    if (existing) {
+      const exId = existing.id !== undefined && existing.id !== null ? existing.id : (existing._id ? String(existing._id).slice(-6) : "?");
+      const embed = new EmbedBuilder()
+        .setTitle("⚠️ Trigger Sudah Terdaftar")
+        .setColor(0xffaa00)
+        .setDescription(`Autoresponse untuk trigger \`${trigger}\` sudah ada di server ini (ID \`${exId}\`).\nGunakan komando \`edit_autoresponse\` jika ingin memperbarui balasannya.`)
+        .setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
     const matchType = parsed.match || 'exact';
     const ignoreCase = parsed.ignore_case !== undefined ? parseInt(parsed.ignore_case) : 1;
     const cooldown = parsed.cooldown ? parseInt(parsed.cooldown) : 0;
-    const embed = parsed.embed !== undefined ? parseInt(parsed.embed) : 0;
+    const embedVal = parsed.embed !== undefined ? parseInt(parsed.embed) : 0;
     const replyMode = (parsed.reply !== undefined && parseInt(parsed.reply) === 0) ? 'send' : 'reply';
     const mentionUser = parsed.mention !== undefined ? parseInt(parsed.mention) : 0;
     const randomResponses = parsed.random ? JSON.stringify(parsed.random.split(";")) : null;
@@ -7023,7 +7452,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     await safeRun(
       `INSERT INTO autoresponses (guild_id, trigger_text, response_text, match_type, ignore_case, cooldown, reply_mode, mention_user, embed_response, random_responses, attachment_url, button_label, button_url, select_menu_options)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ctx.guild.id, trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embed, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions]
+      [ctx.guild.id, trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions]
     );
     const embedSuccess = new EmbedBuilder()
       .setTitle("✅ Autoresponse Ditambahkan")
@@ -7044,25 +7473,20 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const text = args.slice(startIdx).join(" ");
     const parsed = parseKeyValueArgs(text);
 
-    let arId = null;
-    const idArg = args.find(x => /^\d+$/.test(x));
-    if (idArg) {
-      arId = parseInt(idArg);
-    } else if (parsed.id && /^\d+$/.test(parsed.id)) {
-      arId = parseInt(parsed.id);
-    }
-
-    if (!arId) {
+    const idArg = getArIdArg(args, parsed);
+    if (!idArg) {
       const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse yang ingin diedit.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const ar = await safeGet(`SELECT * FROM autoresponses WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
+
+    const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
     if (!ar) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Autoresponse dengan ID \`${idArg}\` tidak ditemukan.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
+
     const trigger = parsed.trigger !== undefined ? parsed.trigger : ar.trigger_text;
     const response = parsed.response !== undefined ? parsed.response : ar.response_text;
     const matchType = parsed.match !== undefined ? parsed.match : ar.match_type;
@@ -7076,14 +7500,38 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const buttonLabel = parsed.button !== undefined ? parsed.button : ar.button_label;
     const buttonUrl = parsed.button_url !== undefined ? parsed.button_url : ar.button_url;
     const selectMenuOptions = parsed.select !== undefined ? JSON.stringify(parsed.select.split(";")) : ar.select_menu_options;
-    await safeRun(
-      `UPDATE autoresponses SET trigger_text=?, response_text=?, match_type=?, ignore_case=?, cooldown=?, reply_mode=?, mention_user=?, embed_response=?, random_responses=?, attachment_url=?, button_label=?, button_url=?, select_menu_options=? WHERE id=? AND guild_id=?`,
-      [trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, arId, ctx.guild.id]
-    );
+
+    const AR = getMongoModel("autoresponses");
+    if (AR && ar._id) {
+      await AR.updateOne({ _id: ar._id }, {
+        $set: {
+          trigger_text: trigger,
+          response_text: response,
+          match_type: matchType,
+          ignore_case: ignoreCase,
+          cooldown: cooldown,
+          reply_mode: replyMode,
+          mention_user: mentionUser,
+          embed_response: embedVal,
+          random_responses: randomResponses,
+          attachment_url: attachmentUrl,
+          button_label: buttonLabel,
+          button_url: buttonUrl,
+          select_menu_options: selectMenuOptions
+        }
+      });
+    } else {
+      await safeRun(
+        `UPDATE autoresponses SET trigger_text=?, response_text=?, match_type=?, ignore_case=?, cooldown=?, reply_mode=?, mention_user=?, embed_response=?, random_responses=?, attachment_url=?, button_label=?, button_url=?, select_menu_options=? WHERE id=? AND guild_id=?`,
+        [trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, ar.id, ctx.guild.id]
+      );
+    }
+
+    const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
     const embedSuccess = new EmbedBuilder()
       .setTitle("✅ Autoresponse Diperbarui")
       .setColor(0x2ecc71)
-      .setDescription(`Autoresponse ID \`${arId}\` berhasil diperbarui.`)
+      .setDescription(`Autoresponse ID \`${displayId}\` berhasil diperbarui.`)
       .setTimestamp();
     await safeCtxReply(ctx, { embeds: [embedSuccess] });
     return true;
@@ -7099,34 +7547,30 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const text = args.slice(startIdx).join(" ");
     const parsed = parseKeyValueArgs(text);
 
-    let arId = null;
-    const idArg = args.find(x => /^\d+$/.test(x));
-    if (idArg) {
-      arId = parseInt(idArg);
-    } else if (parsed.id && /^\d+$/.test(parsed.id)) {
-      arId = parseInt(parsed.id);
-    }
-
-    if (!arId) {
+    const idArg = getArIdArg(args, parsed);
+    if (!idArg) {
       const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse yang ingin dihapus.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const ar = await safeGet(`SELECT * FROM autoresponses WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
+
+    const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
     if (!ar) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Autoresponse dengan ID \`${idArg}\` tidak ditemukan.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
+
+    const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
     const action = async () => {
-      await safeRun(`DELETE FROM autoresponses WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
-      const embedSuccess = new EmbedBuilder().setTitle("✅ Autoresponse Dihapus").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${arId}\` berhasil dihapus.`).setTimestamp();
+      await deleteAutoResponseDoc(ctx.guild.id, ar);
+      const embedSuccess = new EmbedBuilder().setTitle("✅ Autoresponse Dihapus").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${displayId}\` berhasil dihapus.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embedSuccess] });
     };
     const embedConfirm = new EmbedBuilder()
       .setTitle("⚠️ Konfirmasi Hapus Autoresponse")
       .setColor(0xffaa00)
-      .setDescription(`Anda akan menghapus autoresponse ID \`${arId}\` (Trigger: \`${ar.trigger_text}\`).`)
+      .setDescription(`Anda akan menghapus autoresponse ID \`${displayId}\` (Trigger: \`${ar.trigger_text}\`).`)
       .addFields({ name: "Aksi Konfirmasi", value: "Ketik `confirm` untuk melanjutkan." })
       .setFooter({ text: "Expired dalam 60 detik" })
       .setTimestamp();
@@ -7146,6 +7590,14 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       return true;
     }
 
+    const triggerCounts = new Map();
+    list.forEach(r => {
+      const key = String(r.trigger_text || "").trim().toLowerCase();
+      triggerCounts.set(key, (triggerCounts.get(key) || 0) + 1);
+    });
+    let dupTotal = 0;
+    triggerCounts.forEach(count => { if (count > 1) dupTotal += (count - 1); });
+
     const lines = list.map((r, idx) => {
       const arId = r.id !== undefined && r.id !== null ? r.id : (r._id ? String(r._id).slice(-6) : (idx + 1));
       const statusText = r.is_enabled ? "Aktif" : "Nonaktif";
@@ -7153,13 +7605,17 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       return `\`[ID ${arId}]\` **${r.trigger_text}** ➔ \`${responseSnippet}\` (${statusText})`;
     });
 
+    let contentStr = `## 📋 Daftar Autoresponse — ${ctx.guild.name}\n` +
+      `Total **${list.length}** autoresponse terdaftar di server ini.`;
+
+    if (dupTotal > 0) {
+      contentStr += `\n⚠️ *Terdeteksi **${dupTotal}** autoresponse duplikat. Ketik \`${PREFIX} cleanar\` untuk membersihkannya secara otomatis.*`;
+    }
+    contentStr += `\n\n` + lines.join("\n");
+
     const container = new ContainerBuilder().setAccentColor(0x3498db);
     container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `## 📋 Daftar Autoresponse — ${ctx.guild.name}\n` +
-        `Total **${list.length}** autoresponse terdaftar di server ini.\n\n` +
-        lines.join("\n")
-      )
+      new TextDisplayBuilder().setContent(contentStr)
     );
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`*Requested by ${authorTag}*`)
@@ -7175,21 +7631,22 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const idArg = args.find(x => /^\d+$/.test(x));
+    const idArg = getArIdArg(args, parseKeyValueArgs(args.join(" ")));
     if (!idArg) {
       const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const arId = parseInt(idArg);
-    const r = await safeRun(`UPDATE autoresponses SET is_enabled=1 WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
-    if (r.changes === 0) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+    const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
+    if (!ar) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Autoresponse dengan ID \`${idArg}\` tidak ditemukan.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
-    } else {
-      const embed = new EmbedBuilder().setTitle("✅ Autoresponse Diaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${arId}\` berhasil diaktifkan.`).setTimestamp();
-      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
     }
+    await setAutoResponseStatusDoc(ctx.guild.id, ar, true);
+    const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
+    const embed = new EmbedBuilder().setTitle("✅ Autoresponse Diaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${displayId}\` berhasil diaktifkan.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
     return true;
   }
 
@@ -7199,21 +7656,22 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const idArg = args.find(x => /^\d+$/.test(x));
+    const idArg = getArIdArg(args, parseKeyValueArgs(args.join(" ")));
     if (!idArg) {
       const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const arId = parseInt(idArg);
-    const r = await safeRun(`UPDATE autoresponses SET is_enabled=0 WHERE id=? AND guild_id=?`, [arId, ctx.guild.id]);
-    if (r.changes === 0) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Autoresponse tidak ditemukan.").setTimestamp();
+    const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
+    if (!ar) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Autoresponse dengan ID \`${idArg}\` tidak ditemukan.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
-    } else {
-      const embed = new EmbedBuilder().setTitle("✅ Autoresponse Dinonaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${arId}\` berhasil dinonaktifkan.`).setTimestamp();
-      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
     }
+    await setAutoResponseStatusDoc(ctx.guild.id, ar, false);
+    const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
+    const embed = new EmbedBuilder().setTitle("✅ Autoresponse Dinonaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${displayId}\` berhasil dinonaktifkan.`).setTimestamp();
+    await safeCtxReply(ctx, { embeds: [embed] });
     return true;
   }
 
@@ -7834,7 +8292,34 @@ async function buildSupportPayload(guild = null) {
   return leaderboardPayload([container]);
 }
 
-async function buildMonthlyRecapPayload(guild, month, year) {
+async function getLobbyChannelIds(guildId) {
+  if (!guildId) return [];
+  const rows = await safeAll(
+    "SELECT channel_id FROM leaderboard_lobby_channels WHERE guild_id = ?",
+    [guildId]
+  ).catch(() => []);
+  return rows.map(r => r.channel_id).filter(Boolean);
+}
+
+async function addLobbyChannelId(guildId, channelId) {
+  if (!guildId || !channelId) return false;
+  await safeRun(
+    "INSERT OR REPLACE INTO leaderboard_lobby_channels (guild_id, channel_id, added_at) VALUES (?, ?, ?)",
+    [guildId, channelId, Date.now()]
+  ).catch(() => null);
+  return true;
+}
+
+async function removeLobbyChannelId(guildId, channelId) {
+  if (!guildId || !channelId) return false;
+  await safeRun(
+    "DELETE FROM leaderboard_lobby_channels WHERE guild_id = ? AND channel_id = ?",
+    [guildId, channelId]
+  ).catch(() => null);
+  return true;
+}
+
+async function buildMonthlyRecapPayload(guild, month, year, filterStaff = true) {
   const now = Date.now();
   const wib = new Date(now + 7 * 60 * 60 * 1000);
   const currentMonth = wib.getMonth() + 1;
@@ -7850,7 +8335,25 @@ async function buildMonthlyRecapPayload(guild, month, year) {
   const monthLabel = monthsIndo[targetMonth - 1] || `Bulan ${targetMonth}`;
   const datePattern = `${targetYear}-${String(targetMonth).padStart(2, "0")}-%`;
 
-  const topChat = await safeAll(
+  const lobbyChIds = await getLobbyChannelIds(guild?.id);
+
+  // 1. Top Chat Lobby
+  let topChatLobbyRaw = [];
+  if (lobbyChIds.length > 0) {
+    const placeholders = lobbyChIds.map(() => "?").join(",");
+    topChatLobbyRaw = await safeAll(
+      `SELECT user_id, SUM(msg_count) AS total
+       FROM activity_daily_channel
+       WHERE day LIKE ? AND channel_id IN (${placeholders})
+       GROUP BY user_id
+       ORDER BY total DESC
+       LIMIT 50`,
+      [datePattern, ...lobbyChIds]
+    );
+  }
+
+  // 2. Top Chat All Channels
+  const topChatAllRaw = await safeAll(
     `SELECT user_id, SUM(msg_count) AS total
      FROM activity_daily
      WHERE day LIKE ?
@@ -7860,6 +8363,7 @@ async function buildMonthlyRecapPayload(guild, month, year) {
     [datePattern]
   );
 
+  // 3. Top Voice
   const dbVoice = await safeAll(
     `SELECT user_id, SUM(duration) AS total
      FROM voice_activity_daily
@@ -7875,21 +8379,29 @@ async function buildMonthlyRecapPayload(guild, month, year) {
   }
 
   if (targetMonth === currentMonth && targetYear === currentYear) {
-    const targetGuildId = process.env.GUILD_ID;
-    const activeGuild = targetGuildId ? client.guilds.cache.get(targetGuildId) : null;
-
     for (const [userId, joinTime] of voiceSessions.entries()) {
-      if (activeGuild) {
-        const member = activeGuild.members.cache.get(userId);
-        const vc = member?.voice?.channel;
-        if (!vc || vc.id === activeGuild.afkChannelId) {
-          continue;
+      let inValidVc = false;
+      if (guild) {
+        const vs = guild.voiceStates.cache.get(userId);
+        if (vs && vs.channel && vs.channel.id !== guild.afkChannelId) {
+          inValidVc = true;
+        }
+      } else {
+        for (const g of client.guilds.cache.values()) {
+          const vs = g.voiceStates.cache.get(userId);
+          if (vs && vs.channel && vs.channel.id !== g.afkChannelId) {
+            inValidVc = true;
+            break;
+          }
         }
       }
-      const elapsedSec = Math.floor((now - joinTime) / 1000);
-      if (elapsedSec > 0) {
-        const currentTotal = voiceMap.get(userId) || 0;
-        voiceMap.set(userId, currentTotal + elapsedSec);
+
+      if (inValidVc) {
+        const elapsedSec = Math.floor((now - joinTime) / 1000);
+        if (elapsedSec > 0) {
+          const currentTotal = voiceMap.get(userId) || 0;
+          voiceMap.set(userId, currentTotal + elapsedSec);
+        }
       }
     }
   }
@@ -7898,8 +8410,10 @@ async function buildMonthlyRecapPayload(guild, month, year) {
     .map(([user_id, total]) => ({ user_id, total }))
     .sort((a, b) => b.total - a.total);
 
-  const topChatPublic = await takeNonStaffRows(guild, topChat, 10);
-  const topVoice = await takeNonStaffRows(guild, topVoiceRaw, 10);
+  // Filter staff if requested
+  const topLobbyPublic = filterStaff ? await takeNonStaffRows(guild, topChatLobbyRaw, 10) : topChatLobbyRaw.slice(0, 10);
+  const topAllPublic = filterStaff ? await takeNonStaffRows(guild, topChatAllRaw, 10) : topChatAllRaw.slice(0, 10);
+  const topVoicePublic = filterStaff ? await takeNonStaffRows(guild, topVoiceRaw, 10) : topVoiceRaw.slice(0, 10);
 
   const formatVoiceDuration = (sec) => {
     const s = Number(sec || 0);
@@ -7911,32 +8425,67 @@ async function buildMonthlyRecapPayload(guild, month, year) {
     return `${h} jam ${remMin} menit`;
   };
 
-  const chatLines = [];
-  for (let i = 0; i < topChatPublic.length; i++) {
-    const r = topChatPublic[i];
-    const name = await resolveUsernameNoTag(guild, r.user_id, r.user_id);
-    chatLines.push(formatRankLine(i + 1, name, `\`${Number(r.total).toLocaleString("id-ID")} pesan\``, "💬"));
+  // Format Lobby Chat Lines
+  let lobbyChatText = "";
+  if (!lobbyChIds.length) {
+    lobbyChatText = "_Belum ada channel lobby yang di-set (`c leaderboard lobby add #channel`)._";
+  } else {
+    const lines = [];
+    for (let i = 0; i < topLobbyPublic.length; i++) {
+      const r = topLobbyPublic[i];
+      const name = await resolveUsernameNoTag(guild, r.user_id, r.user_id);
+      lines.push(formatRankLine(i + 1, name, `\`${Number(r.total).toLocaleString("id-ID")} pesan\``, "💬"));
+    }
+    lobbyChatText = lines.length ? lines.join("\n") : "_Belum ada aktivitas di channel lobby._";
   }
-  const chatList = chatLines.length ? chatLines.join("\n") : "_Belum ada aktivitas chat non-staff._";
 
+  // Format All Channels Chat Lines
+  const allChatLines = [];
+  for (let i = 0; i < topAllPublic.length; i++) {
+    const r = topAllPublic[i];
+    const name = await resolveUsernameNoTag(guild, r.user_id, r.user_id);
+    allChatLines.push(formatRankLine(i + 1, name, `\`${Number(r.total).toLocaleString("id-ID")} pesan\``, "🌐"));
+  }
+  const allChatText = allChatLines.length ? allChatLines.join("\n") : "_Belum ada aktivitas chat server._";
+
+  // Format Voice Lines
   const voiceLines = [];
-  for (let i = 0; i < topVoice.length; i++) {
-    const r = topVoice[i];
+  for (let i = 0; i < topVoicePublic.length; i++) {
+    const r = topVoicePublic[i];
     const name = await resolveUsernameNoTag(guild, r.user_id, r.user_id);
     voiceLines.push(formatRankLine(i + 1, name, `\`${formatVoiceDuration(r.total)}\``, "🎙️"));
   }
-  const voiceList = voiceLines.length ? voiceLines.join("\n") : "_Belum ada aktivitas voice non-staff._";
+  const voiceText = voiceLines.length ? voiceLines.join("\n") : "_Belum ada aktivitas voice server._";
 
-  const totalChat = topChatPublic.reduce((sum, row) => sum + Number(row.total || 0), 0);
-  const totalVoice = topVoice.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const totalLobbyChat = topLobbyPublic.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const totalAllChat = topAllPublic.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const totalVoice = topVoicePublic.reduce((sum, row) => sum + Number(row.total || 0), 0);
+
+  const headerTitle = filterStaff
+    ? "# <a:champions:1523182563332718767> Monthly Recap Mystral"
+    : "# 🌐 Overall Server Leaderboard — " + (guild?.name || "Mystral");
+
+  const headerDesc = filterStaff
+    ? `Periode: **${monthLabel} ${targetYear}**\nPeringkat ini menampilkan aktivitas member non-staff untuk kualifikasi **Member of the Month**.`
+    : `Periode: **${monthLabel} ${targetYear}**\nPeringkat keseluruhan server (termasuk staff & seluruh member).`;
+
+  const footerText = filterStaff
+    ? `Mystral • 🔴 Live Active • Updated <t:${Math.floor(Date.now() / 1000)}:R>`
+    : `Mystral • Overall Server Stats • Everyone Included • <t:${Math.floor(Date.now() / 1000)}:R>`;
 
   const container = new ContainerBuilder()
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("# <a:champions:1523182563332718767> Monthly Recap Mystral"),
+      new TextDisplayBuilder().setContent(headerTitle),
+      new TextDisplayBuilder().setContent(headerDesc)
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          `Periode: **${monthLabel} ${targetYear}**`,
-          "Peringkat ini menampilkan aktivitas member non-staff.",
+          "## 💬 Top Chat Lobby",
+          lobbyChatText,
+          "",
+          `Total lobby chat: \`${Number(totalLobbyChat).toLocaleString("id-ID")} pesan\``,
         ].join("\n")
       )
     )
@@ -7944,10 +8493,10 @@ async function buildMonthlyRecapPayload(guild, month, year) {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          "## 💬 Top Chat",
-          chatList,
+          "## 🌐 Top Chat All Channels",
+          allChatText,
           "",
-          `Total top chat: \`${Number(totalChat).toLocaleString("id-ID")} pesan\``,
+          `Total chat server: \`${Number(totalAllChat).toLocaleString("id-ID")} pesan\``,
         ].join("\n")
       )
     )
@@ -7956,7 +8505,7 @@ async function buildMonthlyRecapPayload(guild, month, year) {
       new TextDisplayBuilder().setContent(
         [
           "## 🎙️ Top Voice",
-          voiceList,
+          voiceText,
           "",
           `Total top voice: \`${formatVoiceDuration(totalVoice)}\``,
         ].join("\n")
@@ -7964,14 +8513,102 @@ async function buildMonthlyRecapPayload(guild, month, year) {
     )
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`Mystral • Monthly Recap • ${monthLabel} ${targetYear} • <t:${Math.floor(Date.now() / 1000)}:R>`)
+      new TextDisplayBuilder().setContent(footerText)
     );
 
   return leaderboardPayload([container]);
 }
 
+async function flushActiveVoiceSessions(client) {
+  try {
+    const now = Date.now();
+
+    for (const [userId, joinTime] of voiceSessions.entries()) {
+      let inValidVc = false;
+      for (const guild of client.guilds.cache.values()) {
+        const vs = guild.voiceStates.cache.get(userId);
+        if (vs && vs.channel && vs.channel.id !== guild.afkChannelId) {
+          inValidVc = true;
+          break;
+        }
+      }
+
+      if (!inValidVc) {
+        voiceSessions.delete(userId);
+        await safeRun("DELETE FROM active_voice_sessions WHERE user_id = ?", [userId]).catch(() => null);
+        continue;
+      }
+
+      const elapsedMs = now - joinTime;
+      const elapsedSec = Math.floor(elapsedMs / 1000);
+      if (elapsedSec >= 5) {
+        await saveVoiceActivity(userId, elapsedSec);
+        voiceSessions.set(userId, now);
+        await safeRun("INSERT OR REPLACE INTO active_voice_sessions (user_id, join_timestamp) VALUES (?, ?)", [userId, now]).catch(() => null);
+      }
+    }
+  } catch (err) {
+    console.error("[VOICE FLUSH ERROR]", err);
+  }
+}
+
+async function checkMonthlyRecapAutoSnapshot(client) {
+  try {
+    const now = Date.now();
+    const wib = new Date(now + 7 * 60 * 60 * 1000);
+    const dayOfMonth = wib.getUTCDate();
+    const hour = wib.getUTCHours();
+
+    // Check on 1st of month at 00:00 WIB
+    if (dayOfMonth !== 1 || hour !== 0) return;
+
+    let prevMonth = wib.getUTCMonth(); // 0-based index: 0 is Jan (so prev month was Dec of prev year)
+    let prevYear = wib.getUTCFullYear();
+    if (prevMonth === 0) {
+      prevMonth = 12;
+      prevYear -= 1;
+    }
+
+    const snapshotKey = `monthly_snapshot_${prevYear}_${prevMonth}`;
+    const alreadySnapshotted = await getMetaText(snapshotKey);
+    if (alreadySnapshotted) return;
+
+    console.log(`[MONTHLY RECAP] Executing end-of-month snapshot for ${prevMonth}/${prevYear}...`);
+
+    // Prioritize recap_log_channel_id, fallback to recap_live_channel_id
+    const logChId = (await getMetaText("recap_log_channel_id")) || (await getMetaText("recap_live_channel_id"));
+
+    for (const guild of client.guilds.cache.values()) {
+      const payload = await buildMonthlyRecapPayload(guild, prevMonth, prevYear, true);
+
+      await setMetaText(snapshotKey, JSON.stringify({
+        timestamp: Date.now(),
+        year: prevYear,
+        month: prevMonth
+      }));
+
+      if (logChId) {
+        const channel = await client.channels.fetch(logChId).catch(() => null);
+        if (channel && channel.isTextBased()) {
+          const monthsIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+          const monthLabel = monthsIndo[prevMonth - 1] || `Bulan ${prevMonth}`;
+
+          await channel.send({
+            content: `🏆 **REKAPITULASI RESMI MEMBER OF THE MONTH — ${monthLabel.toUpperCase()} ${prevYear}**\nBerikut adalah pengumuman resmi hasil akhir keaktifan member server bulan lalu!`,
+            ...payload
+          }).catch(() => null);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[MONTHLY RECAP SNAPSHOT ERROR]", err);
+  }
+}
+
 async function updateLiveLeaderboards(client) {
   try {
+    await flushActiveVoiceSessions(client);
+    await checkMonthlyRecapAutoSnapshot(client);
     const recapChId = await getMetaText("recap_live_channel_id");
     const recapMsgId = await getMetaText("recap_live_message_id");
     if (recapChId && recapMsgId) {
@@ -7979,7 +8616,7 @@ async function updateLiveLeaderboards(client) {
       if (channel && channel.isTextBased()) {
         const message = await channel.messages.fetch(recapMsgId).catch(() => null);
         if (message) {
-          const payload = await buildMonthlyRecapPayload(message.guild || channel.guild);
+          const payload = await buildMonthlyRecapPayload(message.guild || channel.guild, null, null, true);
           await message.edit(leaderboardEditPayload(payload.components)).catch(() => null);
         }
       }
@@ -8463,7 +9100,7 @@ async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage
 }
 
 async function handleGuessNumberAttempt(message) {
-  if (!message.guild) return false;
+  if (!message || !message.guild || !message.channel || !message.author) return false;
   const game = getGuessNumberGame(message.guild.id, message.channel.id);
   if (!game) return false;
 
@@ -8842,11 +9479,12 @@ client.on(Events.MessageCreate, async (message) => {
         const { execFile } = require("child_process");
         const filename = `temp_media_${Date.now()}.mp4`;
         const outputPath = path.join(__dirname, filename);
-        const formatArg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+        const formatArg = "b/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+        const ytArgs = ["--no-warnings", "--no-playlist", "-o", outputPath, "-f", formatArg, url];
 
-        execFile(ytDlpPath, ["-o", outputPath, "-f", formatArg, url], (error) => {
+        execFile(ytDlpPath, ytArgs, { maxBuffer: 50 * 1024 * 1024 }, (error) => {
           if (error) {
-            console.error("[LOCAL YTDL DOWNLOAD ERROR]", error);
+            console.error("[LOCAL YTDL DOWNLOAD ERROR]", error.message || error);
             if (fs.existsSync(outputPath)) {
               try { fs.unlinkSync(outputPath); } catch { }
             }
@@ -9003,7 +9641,7 @@ client.on(Events.MessageCreate, async (message) => {
             const dlUrl = getDownloadUrl(firstOriginalUrl);
             buttons.push(
               new ButtonBuilder()
-                .setLabel("⬇ Download Link")
+                .setLabel("⬇ Download")
                 .setStyle(ButtonStyle.Link)
                 .setURL(dlUrl)
             );
@@ -9068,9 +9706,9 @@ client.on(Events.MessageCreate, async (message) => {
     const day = wib.toISOString().slice(0, 10); // YYYY-MM-DD (WIB)
 
     // AFK auto clear on any message
-    const wasAfk = await getAfk(message.author.id);
+    const wasAfk = await getAfk(message.author.id, message.guild?.id);
     if (wasAfk) {
-      await clearAfk(message.author.id);
+      await clearAfk(message.author.id, message.guild?.id);
 
       // balikin nickname (hapus prefix [AFK])
       const member = await message.guild.members.fetch(message.author.id).catch(() => null);
@@ -9175,7 +9813,7 @@ client.on(Events.MessageCreate, async (message) => {
       const lines = [];
       for (const [uid, user] of message.mentions.users) {
         if (user.bot) continue;
-        const afk = await getAfk(uid);
+        const afk = await getAfk(uid, message.guild?.id);
         if (!afk) continue;
 
         const sinceUnix = Math.floor((Number(afk.since) || Date.now()) / 1000);
@@ -9209,6 +9847,14 @@ client.on(Events.MessageCreate, async (message) => {
       [day, message.author.id]
     );
 
+    await safeRun(
+      `INSERT INTO activity_daily_channel (day, guild_id, channel_id, user_id, msg_count)
+       VALUES (?, ?, ?, ?, 1)
+       ON CONFLICT(day, guild_id, channel_id, user_id) DO UPDATE SET
+         msg_count=activity_daily_channel.msg_count+1`,
+      [day, message.guild ? message.guild.id : "global", message.channel.id, message.author.id]
+    );
+
     if (await handleGuessNumberAttempt(message)) return;
 
     // ===================== ANTI-TOXIC =====================
@@ -9229,74 +9875,74 @@ client.on(Events.MessageCreate, async (message) => {
       const toxicTimeoutMin = Number(process.env.TOXIC_TIMEOUT_MIN || 10);
 
       const contentLow = String(message.content || "").toLowerCase();
-    const hit = toxicWords.find((w) => w && contentLow.includes(w));
+      const hit = toxicWords.find((w) => w && contentLow.includes(w));
 
-    if (hit) {
-      // delete message if possible
-      if (toxicAction === "delete" || toxicAction === "warn" || toxicAction === "timeout") {
-        await message.delete().catch(() => { });
-      }
-
-      const embed = new EmbedBuilder()
-        .setTitle("🛡️ Toxic Filter Triggered")
-        .setColor(0xef4444)
-        .setDescription(
-          [
-            `**User:** <@${message.author.id}> (${message.author.tag})`,
-            `**Word:** \`${hit}\``,
-            `**Channel:** <#${message.channelId}>`,
-            "",
-            `**Content (cut):** ${safeText(message.content, 180)}`,
-          ].join("\n")
-        )
-        .setTimestamp();
-
-      const logId = requireEnv("TOXIC_LOG_CHANNEL_ID");
-      if (logId) {
-        const logCh = await getTextChannelOrNull(message.guild, logId);
-        if (logCh) await logCh.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => { });
-      }
-
-      // optional action: warn/timeout (kalau mau dipakai)
-      if (toxicAction === "timeout") {
-        const member = await message.guild.members.fetch(message.author.id).catch(() => null);
-        if (member?.moderatable) {
-          await member.timeout(toxicTimeoutMin * 60 * 1000, `Toxic word: ${hit}`).catch(() => { });
-        }
-      } // ===================== AUTO WARN LOGIC (DM + REPLY) =====================
-      if (toxicAction === "warn") {
-        const reason = `Automated Warn: Penggunaan kata terlarang (${hit})`;
-
-        // 1. Catat ke Database
-        await addWarning(message.guild.id, message.author.id, client.user.id, reason);
-
-        const fields = [
-          { name: "👤 Student", value: `<@${message.author.id}>`, inline: true },
-          { name: "🛡️ Moderator", value: `<@${client.user.id}> (Auto System)`, inline: true },
-          { name: "📜 Alasan", value: `\`${reason}\`` }
-        ];
-
-        // 2. Kirim Log & Dapatkan Embed
-        const emb = await logMod(message.guild, "AUTOMATED DISCIPLINARY NOTICE", 0xff5252, fields, message.author);
-
-        // 3. Kirim DM ke Pengguna
-        try {
-          await message.author.send({
-            content: `⚠️ Kamu mendapatkan peringatan otomatis di server **${message.guild.name}** karena menggunakan kata terlarang: **${hit}**.\n*Pesan terdeteksi: "${safeText(message.content, 120)}"*`
-          });
-        } catch (e) {
-          console.log(`[DM FAIL] Gagal mengirim DM ke ${message.author.tag}.`);
+      if (hit) {
+        // delete message if possible
+        if (toxicAction === "delete" || toxicAction === "warn" || toxicAction === "timeout") {
+          await message.delete().catch(() => { });
         }
 
-        // 4. Kirim Reply di Channel (Hapus otomatis dalam 5 detik)
-        const warnReply = await message.channel.send({
-          content: `🛑 <@${message.author.id}>, pesan kamu telah dihapus dan peringatan otomatis telah dicatat karena menggunakan bahasa tidak pantas.`
-        }).catch(() => null);
+        const embed = new EmbedBuilder()
+          .setTitle("🛡️ Toxic Filter Triggered")
+          .setColor(0xef4444)
+          .setDescription(
+            [
+              `**User:** <@${message.author.id}> (${message.author.tag})`,
+              `**Word:** \`${hit}\``,
+              `**Channel:** <#${message.channelId}>`,
+              "",
+              `**Content (cut):** ${safeText(message.content, 180)}`,
+            ].join("\n")
+          )
+          .setTimestamp();
 
-        if (warnReply) setTimeout(() => warnReply.delete().catch(() => { }), 15000);
+        const logId = requireEnv("TOXIC_LOG_CHANNEL_ID");
+        if (logId) {
+          const logCh = await getTextChannelOrNull(message.guild, logId);
+          if (logCh) await logCh.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => { });
+        }
+
+        // optional action: warn/timeout (kalau mau dipakai)
+        if (toxicAction === "timeout") {
+          const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+          if (member?.moderatable) {
+            await member.timeout(toxicTimeoutMin * 60 * 1000, `Toxic word: ${hit}`).catch(() => { });
+          }
+        } // ===================== AUTO WARN LOGIC (DM + REPLY) =====================
+        if (toxicAction === "warn") {
+          const reason = `Automated Warn: Penggunaan kata terlarang (${hit})`;
+
+          // 1. Catat ke Database
+          await addWarning(message.guild.id, message.author.id, client.user.id, reason);
+
+          const fields = [
+            { name: "👤 Student", value: `<@${message.author.id}>`, inline: true },
+            { name: "🛡️ Moderator", value: `<@${client.user.id}> (Auto System)`, inline: true },
+            { name: "📜 Alasan", value: `\`${reason}\`` }
+          ];
+
+          // 2. Kirim Log & Dapatkan Embed
+          const emb = await logMod(message.guild, "AUTOMATED DISCIPLINARY NOTICE", 0xff5252, fields, message.author);
+
+          // 3. Kirim DM ke Pengguna
+          try {
+            await message.author.send({
+              content: `⚠️ Kamu mendapatkan peringatan otomatis di server **${message.guild.name}** karena menggunakan kata terlarang: **${hit}**.\n*Pesan terdeteksi: "${safeText(message.content, 120)}"*`
+            });
+          } catch (e) {
+            console.log(`[DM FAIL] Gagal mengirim DM ke ${message.author.tag}.`);
+          }
+
+          // 4. Kirim Reply di Channel (Hapus otomatis dalam 5 detik)
+          const warnReply = message.channel ? await message.channel.send({
+            content: `🛑 <@${message.author.id}>, pesan kamu telah dihapus dan peringatan otomatis telah dicatat karena menggunakan bahasa tidak pantas.`
+          }).catch(() => null) : null;
+
+          if (warnReply) setTimeout(() => warnReply.delete().catch(() => { }), 15000);
+        }
       }
     }
-  }
 
     // Check autoresponses
     const handledByAR = await checkAutoresponses(message);
@@ -9344,20 +9990,6 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    if (cmd === "afk") {
-      const targetCh = "1466628064002707518";
-      if (message.channel.id !== targetCh && !isBotOwner(message.author.id)) {
-        const warnMsg = await message.reply({
-          content: `❌ **AFK** (\`${PREFIX}${cmd}\`) hanya dapat digunakan di channel <#${targetCh}>!`
-        }).catch(() => null);
-
-        setTimeout(async () => {
-          await message.delete().catch(() => { });
-          if (warnMsg) await warnMsg.delete().catch(() => { });
-        }, 8000);
-        return;
-      }
-    }
 
     if (cmd === "welcometest") {
       if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -9458,8 +10090,76 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(stopped ? "🛑 Game tebak angka dihentikan." : "Tidak ada game tebak angka yang sedang berjalan di channel ini.");
     }
 
-    if ((cmd === "lb" && (args[0] || "").toLowerCase() === "angka") || (cmd === "leaderboard" && (args[0] || "").toLowerCase() === "tebakangka")) {
-      return handleTebakAngkaLeaderboard(client, message.guild.id, message, message.author.id);
+    // ===================== LEADERBOARD SYSTEM (PREFIX) =====================
+    if (cmd === "lb" || cmd === "leaderboard") {
+      const sub = (args[0] || "").toLowerCase();
+
+      if (sub === "angka" || sub === "tebakangka") {
+        return handleTebakAngkaLeaderboard(client, message.guild.id, message, message.author.id);
+      }
+
+      if (sub === "lobby") {
+        const action = (args[1] || "").toLowerCase();
+        if (action === "add") {
+          const isStaff = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild);
+          if (!isStaff) return message.reply("❌ Perintah ini khusus untuk Admin / Staff server.");
+
+          const ch = message.mentions.channels.first() || message.guild.channels.cache.get(args[2]);
+          if (!ch) return message.reply("Format: `c leaderboard lobby add #channel`");
+          await addLobbyChannelId(message.guild.id, ch.id);
+          return message.reply(`✅ Channel ${ch} berhasil ditambahkan ke daftar **Chat Lobby**.`);
+        }
+        if (action === "remove" || action === "delete" || action === "del") {
+          const isStaff = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild);
+          if (!isStaff) return message.reply("❌ Perintah ini khusus untuk Admin / Staff server.");
+
+          const ch = message.mentions.channels.first() || message.guild.channels.cache.get(args[2]);
+          if (!ch) return message.reply("Format: `c leaderboard lobby remove #channel`");
+          await removeLobbyChannelId(message.guild.id, ch.id);
+          return message.reply(`🗑️ Channel ${ch} telah dihapus dari daftar **Chat Lobby**.`);
+        }
+        if (action === "list" || !action) {
+          const ids = await getLobbyChannelIds(message.guild.id);
+          if (!ids.length) return message.reply("📭 Belum ada channel yang terdaftar sebagai Chat Lobby (`c leaderboard lobby add #channel`).");
+          const listStr = ids.map(id => `<#${id}>`).join("\n");
+          return message.reply(`💬 **Daftar Channel Chat Lobby**:\n${listStr}`);
+        }
+      }
+
+      if (sub === "send" || sub === "deploy") {
+        const isStaff = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild);
+        if (!isStaff) return message.reply("❌ Perintah ini khusus untuk Admin / Owner server.");
+
+        const destChannel = message.mentions.channels.first() || message.channel;
+        const payload = await buildMonthlyRecapPayload(message.guild, null, null, true);
+        const msg = await destChannel.send(payload);
+
+        await setMetaText("recap_live_channel_id", destChannel.id);
+        await setMetaText("recap_live_message_id", msg.id);
+
+        return message.reply(`✅ Live Leaderboard (Member of the Month) berhasil dikirim ke ${destChannel} dan terdaftar untuk pembaruan otomatis.`);
+      }
+
+      if (sub === "setlog" || sub === "logchannel" || sub === "log") {
+        const isStaff = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild);
+        if (!isStaff) return message.reply("❌ Perintah ini khusus untuk Admin / Staff server.");
+
+        const ch = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
+        if (!ch) return message.reply("Format: `c leaderboard setlog #channel` (contoh: `c leaderboard setlog #announcements`)");
+
+        await setMetaText("recap_log_channel_id", ch.id);
+        return message.reply(`✅ Channel log pengumuman **Member of the Month** berhasil di-set ke ${ch}. Setiap akhir bulan (tgl 1 jam 00:00 WIB), bot akan otomatis mengirimkan hasil akhir juara ke channel ini.`);
+      }
+
+      if (sub === "all" || sub === "full" || sub === "everyone") {
+        const payload = await buildMonthlyRecapPayload(message.guild, null, null, false);
+        return message.reply(payload);
+      }
+
+      if (sub === "recap" || sub === "top" || sub === "member" || !sub) {
+        const payload = await buildMonthlyRecapPayload(message.guild, null, null, true);
+        return message.reply(payload);
+      }
     }
 
     if (cmd === "ban") {
@@ -9585,6 +10285,594 @@ client.on(Events.MessageCreate, async (message) => {
 
         await target.timeout(null);
         return message.reply(`🔊 Timeout untuk **${target.user.tag}** berhasil dihapus.`);
+      }
+    }
+
+    // ===================== IMAGE REMOVE BACKGROUND (CREMOVEBG) =====================
+    if (cmd === "removebg" || cmd === "rembg" || cmd === "nobg" || cmd === "cremovebg" || cmd === "crembg" || cmd === "cnobg") {
+      let imageUrl = null;
+
+      if (message.attachments.size > 0) {
+        const att = message.attachments.first();
+        if (att.contentType && att.contentType.startsWith("image/")) {
+          imageUrl = att.url;
+        } else if (att.url) {
+          imageUrl = att.url;
+        }
+      }
+
+      if (!imageUrl && args[0] && /^https?:\/\/.+/i.test(args[0])) {
+        imageUrl = args[0];
+      }
+
+      if (!imageUrl && message.reference && message.reference.messageId) {
+        const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+        if (refMsg && refMsg.attachments.size > 0) {
+          const att = refMsg.attachments.first();
+          if (att.contentType && att.contentType.startsWith("image/")) {
+            imageUrl = att.url;
+          } else if (att.url) {
+            imageUrl = att.url;
+          }
+        }
+      }
+
+      if (!imageUrl) {
+        const embedHelp = new EmbedBuilder()
+          .setTitle("🖼️ Hapus Background Gambar (`cremovebg`)")
+          .setColor(0x3498db)
+          .setDescription(
+            `**Cara Penggunaan:**\n` +
+            `1. Upload/Lampirkan gambar dengan ketik \`${PREFIX} cremovebg\`\n` +
+            `2. Atau reply ke pesan yang berisi gambar lalu ketik \`${PREFIX} cremovebg\`\n` +
+            `3. Atau masukkan URL gambar: \`${PREFIX} cremovebg https://.../gambar.png\``
+          )
+          .setTimestamp();
+        return message.reply({ embeds: [embedHelp] });
+      }
+
+      const statusMsg = await message.reply("⏳ Sedang memproses & menghapus background gambar...");
+
+      try {
+        const res = await fetch(imageUrl);
+        if (!res.ok) throw new Error("Gagal mengunduh gambar.");
+        const arrayBuf = await res.arrayBuffer();
+        const imgBuffer = Buffer.from(arrayBuf);
+
+        const transparentBuffer = await removeImageBackground(imgBuffer);
+        const attachment = new AttachmentBuilder(transparentBuffer, { name: "no_background.png" });
+
+        const embedSuccess = new EmbedBuilder()
+          .setTitle("✨ Background Gambar Berhasil Dihapus")
+          .setColor(0x2ecc71)
+          .setDescription("Berikut hasil gambar dengan background transparan (PNG format).")
+          .setImage("attachment://no_background.png")
+          .setTimestamp();
+
+        await statusMsg.edit({ content: null, embeds: [embedSuccess], files: [attachment] });
+      } catch (err) {
+        console.error("[REMOVEBG FAIL]", err);
+        await statusMsg.edit(`❌ Gagal menghapus background gambar: ${err.message}`);
+      }
+      return;
+    }
+
+    // ===================== QUICK CREATE ROLE (CCR / CREATEROLE) =====================
+    if (cmd === "ccr" || cmd === "createrole" || cmd === "create_role") {
+      const isAllowed = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+      if (!isAllowed) {
+        return message.reply("❌ Kamu tidak memiliki izin `ManageRoles` untuk membuat role baru.");
+      }
+
+      if (!args.length) {
+        const embedHelp = new EmbedBuilder()
+          .setTitle("✨ Perintah Buat Role Cepat (`ccr`)")
+          .setColor(0x3498db)
+          .setDescription(
+            `**Format Penggunaan:**\n` +
+            `\`${PREFIX} ccr <Nama Role> [#warna1] [#warna2] [icon_url|lampiran]\`\n\n` +
+            `**Contoh:**\n` +
+            `1. \`${PREFIX} ccr VIP\` *(Buat role tanpa warna)*\n` +
+            `2. \`${PREFIX} ccr VIP #ff5733\` *(Buat role dengan warna)*\n` +
+            `3. \`${PREFIX} ccr VIP #ff5733 #8b5cf6\` *(Buat role dengan 2 warna gradien)*\n` +
+            `4. \`${PREFIX} ccr VIP #ff5733 https://.../icon.png\` *(Buat role + warna + icon)*`
+          )
+          .setTimestamp();
+        return message.reply({ embeds: [embedHelp] });
+      }
+
+      const hexRegex = /^#?([0-9A-F]{6})$/i;
+      const urlRegex = /^https?:\/\/.+/i;
+
+      const hexMatches = args.filter(a => hexRegex.test(a));
+      const urlMatches = args.filter(a => urlRegex.test(a));
+
+      let iconUrl = urlMatches[0] || null;
+      if (!iconUrl && message.attachments.size > 0) {
+        iconUrl = message.attachments.first().url;
+      }
+
+      const nameParts = args.filter(a => !hexRegex.test(a) && !urlRegex.test(a));
+      const roleName = nameParts.join(" ").trim();
+
+      if (!roleName) {
+        return message.reply("❌ Sebutkan nama role yang ingin dibuat. Contoh: `ccr VIP #ff5733`");
+      }
+
+      const color1 = hexMatches[0] ? (hexMatches[0].startsWith("#") ? hexMatches[0] : `#${hexMatches[0]}`) : "#99aab5";
+      const color2 = hexMatches[1] ? (hexMatches[1].startsWith("#") ? hexMatches[1] : `#${hexMatches[1]}`) : null;
+
+      try {
+        const createOptions = {
+          name: roleName,
+          color: color1,
+          reason: `Created by ${message.author.tag} via ccr`
+        };
+
+        const newRole = await message.guild.roles.create(createOptions);
+
+        let iconApplied = false;
+        let iconErrNote = "";
+        if (iconUrl) {
+          try {
+            await newRole.setIcon(iconUrl);
+            iconApplied = true;
+          } catch (iconErr) {
+            console.error("[CCR ICON FAIL]", iconErr);
+            iconErrNote = " *(Gagal memasang icon: Server butuh Boost Level 2)*";
+          }
+        }
+
+        if (color2) {
+          const CustomRoles = getMongoModel("custom_roles");
+          if (CustomRoles) {
+            await CustomRoles.updateOne(
+              { guild_id: message.guild.id, role_id: newRole.id },
+              { $set: { primary_color: color1, secondary_color: color2, updated_at: Date.now() } },
+              { upsert: true }
+            );
+          }
+        }
+
+        const embedSuccess = new EmbedBuilder()
+          .setTitle("✨ Role Baru Berhasil Dibuat")
+          .setColor(parseInt(color1.replace("#", ""), 16))
+          .setDescription(
+            `Role **${newRole.name}** (<@&${newRole.id}>) berhasil dibuat!\n\n` +
+            `• **Role ID:** \`${newRole.id}\`\n` +
+            `• **Warna Utama:** \`${color1}\`\n` +
+            (color2 ? `• **Warna Gradien Kedua:** \`${color2}\`\n` : "") +
+            (iconApplied ? `• **Icon:** Terpasang ✅\n` : (iconErrNote ? `• **Icon:** ${iconErrNote}\n` : ""))
+          )
+          .setTimestamp();
+
+        if (iconApplied) {
+          embedSuccess.setThumbnail(iconUrl);
+        }
+
+        return message.reply({ embeds: [embedSuccess] });
+      } catch (err) {
+        console.error("[CCR FAIL]", err);
+        return message.reply(`❌ Gagal membuat role baru: ${err.message}`);
+      }
+    }
+
+    // Helper function to find target role from arguments or mentions (mentioned or unmentioned)
+    function findTargetRole(argsList) {
+      if (!argsList || !argsList.length) return null;
+      if (message.mentions.roles.size > 0) {
+        return message.mentions.roles.first();
+      }
+      let filtered = [...argsList];
+      if (filtered[0] && (filtered[0].toLowerCase() === "role" || filtered[0].toLowerCase() === "roles")) {
+        filtered.shift();
+      }
+      if (!filtered.length) return null;
+
+      for (const a of filtered) {
+        if (!a) continue;
+        const cleanId = a.replace(/[<@&>]/g, "");
+        if (/^\d{17,20}$/.test(cleanId)) {
+          const r = message.guild.roles.cache.get(cleanId);
+          if (r) return r;
+        }
+      }
+
+      const text = filtered.join(" ").toLowerCase().trim();
+      if (text) {
+        const byExact = message.guild.roles.cache.find(r => r.name.toLowerCase() === text);
+        if (byExact) return byExact;
+
+        const byPartial = message.guild.roles.cache.find(r => r.name.toLowerCase().includes(text));
+        if (byPartial) return byPartial;
+      }
+      return null;
+    }
+
+    // ===================== CUSTOM ROLE & ROLE MANAGEMENT =====================
+    const isExplicitRoleList = (cmd === "clistrole" || cmd === "listrole" || cmd === "crolelist" || cmd === "rolelist" || cmd === "whorole" || cmd === "cwhorole") ||
+      ((cmd === "list" || cmd === "clist" || cmd === "who" || cmd === "cwho") && (args[0] === "role" || args[0] === "roles" || message.mentions.roles.size > 0 || findTargetRole(args)));
+
+    if (cmd === "crole" || cmd === "customrole" || cmd === "role" || cmd === "roles" || isExplicitRoleList) {
+      const isAllowed = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+      if (!isAllowed) {
+        return message.reply("❌ Kamu tidak memiliki izin `ManageRoles` untuk mengedit/mengelola role.");
+      }
+
+      let sub = args[0]?.toLowerCase();
+      if (isExplicitRoleList) {
+        sub = "members";
+      }
+
+      if (!sub || sub === "help") {
+        const embedHelp = new EmbedBuilder()
+          .setTitle("🎨 Perintah Manajemen & Custom Role (`crole` / `role`)")
+          .setColor(0x3498db)
+          .setDescription(
+            `**Daftar Perintah Kelola Role:**\n\n` +
+            `• \`${PREFIX} crole color @role #hex1 [#hex2]\` — Ubah warna role (Mendukung 2 warna gradien).\n` +
+            `• \`${PREFIX} crole icon @role <url|lampiran>\` — Pasang icon/gambar pada role (Boost Level 2).\n` +
+            `• \`${PREFIX} crole removeicon @role\` — Hapus icon pada role.\n` +
+            `• \`${PREFIX} crole add @role <@user|all|human|bot>\` — Tambahkan role ke user, semua member, human (non-bot), atau bot.\n` +
+            `• \`${PREFIX} crole remove @role <@user|all|human|bot>\` — Hapus role dari user, semua member, human (non-bot), atau bot.\n` +
+            `• \`${PREFIX} crole addall @role\` / \`${PREFIX} crole addhuman @role\` / \`${PREFIX} crole addbot @role\` — Perintah cepat tambah role masal.\n` +
+            `• \`${PREFIX} crole removeall @role\` / \`${PREFIX} crole removehuman @role\` / \`${PREFIX} crole removebot @role\` — Perintah cepat hapus role masal.\n` +
+            `• \`${PREFIX} crole info @role\` — Lihat rincian statistik, warna, izin, dan jumlah member role.\n` +
+            `• \`${PREFIX} crole members @role\` / \`${PREFIX} clist role @role\` — Lihat daftar member pemegang role tersebut.\n` +
+            `• \`${PREFIX} crole rename @role <nama_baru>\` — Ubah nama role.\n` +
+            `• \`${PREFIX} crole delete @role\` — Hapus role dari server.`
+          )
+          .setTimestamp();
+        return message.reply({ embeds: [embedHelp] });
+      }
+
+      const roleTarget = findTargetRole(isExplicitRoleList ? args : args.slice(1));
+      if (!roleTarget && sub !== "help") {
+        return message.reply("❌ Sebutkan/mention role yang ingin diatur. Contoh: `crole color @Role #ff5733`, `clist role @Role` atau `clist role Nama Role`");
+      }
+
+      // Check hierarchy if roleTarget exists
+      if (roleTarget && message.guild.members.me.roles.highest.position <= roleTarget.position) {
+        return message.reply(`❌ Bot tidak dapat mengedit role **${roleTarget.name}** karena posisi role bot lebih rendah.`);
+      }
+
+      // Action 1: COLOR (Single / Gradient Dual Color)
+      if (sub === "color" || sub === "setcolor" || sub === "gradient") {
+        const hexRegex = /^#?([0-9A-F]{6})$/i;
+        const colorArgs = args.slice(2).filter(a => hexRegex.test(a));
+
+        if (!colorArgs.length) {
+          return message.reply("❌ Sebutkan kode warna HEX yang valid. Contoh: `crole color @Role #ff5733` atau `crole color @Role #ff5733 #8b5cf6` (2 warna gradien)");
+        }
+
+        const color1 = colorArgs[0].startsWith("#") ? colorArgs[0] : `#${colorArgs[0]}`;
+        const color2 = colorArgs[1] ? (colorArgs[1].startsWith("#") ? colorArgs[1] : `#${colorArgs[1]}`) : null;
+
+        try {
+          await roleTarget.setColor(color1);
+
+          // Save gradient metadata to MongoDB custom_roles
+          const CustomRoles = getMongoModel("custom_roles");
+          if (CustomRoles) {
+            await CustomRoles.updateOne(
+              { guild_id: message.guild.id, role_id: roleTarget.id },
+              { $set: { primary_color: color1, secondary_color: color2, updated_at: Date.now() } },
+              { upsert: true }
+            );
+          }
+
+          const embed = new EmbedBuilder()
+            .setTitle("🎨 Warna Role Berhasil Diperbarui")
+            .setColor(parseInt(color1.replace("#", ""), 16))
+            .setDescription(
+              `Warna utama role **${roleTarget.name}** diubah menjadi \`${color1}\`.` +
+              (color2 ? `\n🌈 **Warna Gradien Kedua:** \`${color2}\` (Tersimpan sebagai tema gradien 2 warna).` : "")
+            )
+            .setTimestamp();
+          return message.reply({ embeds: [embed] });
+        } catch (err) {
+          console.error("[CROLE COLOR FAIL]", err);
+          return message.reply(`❌ Gagal mengubah warna role: ${err.message}`);
+        }
+      }
+
+      // Action 2: ICON (Set Role Icon Image)
+      if (sub === "icon" || sub === "seticon") {
+        let iconUrl = args[2];
+        if (message.attachments.size > 0) {
+          iconUrl = message.attachments.first().url;
+        }
+
+        if (!iconUrl) {
+          return message.reply("❌ Sertakan URL gambar atau lampirkan file gambar untuk dijadikan icon role.\nContoh: `crole icon @Role https://...` atau upload gambar langsung.");
+        }
+
+        try {
+          await roleTarget.setIcon(iconUrl);
+          const embed = new EmbedBuilder()
+            .setTitle("🖼️ Icon Role Berhasil Diperbarui")
+            .setColor(roleTarget.color || 0x2ecc71)
+            .setDescription(`Icon gambar untuk role **${roleTarget.name}** telah dipasang.`)
+            .setThumbnail(iconUrl)
+            .setTimestamp();
+          return message.reply({ embeds: [embed] });
+        } catch (err) {
+          console.error("[CROLE ICON FAIL]", err);
+          let errDesc = err.message;
+          if (err.code === 50013 || err.message.includes("boost") || err.message.includes("feature")) {
+            errDesc = "Server ini belum mencapai Server Boost Level 2 (Fitur Role Icons membutuhkan Boost Level 2).";
+          }
+          return message.reply(`❌ Gagal memasang icon role: ${errDesc}`);
+        }
+      }
+
+      // Action 3: REMOVE ICON
+      if (sub === "removeicon" || sub === "delicon" || sub === "clearicon") {
+        try {
+          await roleTarget.setIcon(null);
+          const embed = new EmbedBuilder()
+            .setTitle("🗑️ Icon Role Dihapus")
+            .setColor(roleTarget.color || 0xe74c3c)
+            .setDescription(`Icon pada role **${roleTarget.name}** telah dihapus.`)
+            .setTimestamp();
+          return message.reply({ embeds: [embed] });
+        } catch (err) {
+          console.error("[CROLE DELICON FAIL]", err);
+          return message.reply(`❌ Gagal menghapus icon role: ${err.message}`);
+        }
+      }
+
+      // Action 4: ADD & REMOVE ROLES (Single Member or Bulk: All / Human / Bot)
+      const addSubs = ["add", "give", "addall", "giveall", "addhuman", "givehuman", "addbot", "givebot"];
+      const removeSubs = ["remove", "take", "removeall", "takeall", "removehuman", "takehuman", "removebot", "takebot"];
+
+      if (addSubs.includes(sub) || removeSubs.includes(sub)) {
+        const isAdd = addSubs.includes(sub);
+
+        let targetScope = null; // "user", "all", "human", "bot"
+        let singleMemberTarget = null;
+
+        if (["addhuman", "givehuman", "removehuman", "takehuman"].includes(sub)) {
+          targetScope = "human";
+        } else if (["addbot", "givebot", "removebot", "takebot"].includes(sub)) {
+          targetScope = "bot";
+        } else if (["addall", "giveall", "removeall", "takeall"].includes(sub)) {
+          const secondOpt = args[2]?.toLowerCase();
+          if (secondOpt === "human" || secondOpt === "humans" || secondOpt === "user" || secondOpt === "users" || secondOpt === "manusia") {
+            targetScope = "human";
+          } else if (secondOpt === "bot" || secondOpt === "bots") {
+            targetScope = "bot";
+          } else {
+            targetScope = "all";
+          }
+        } else {
+          // sub === "add" || "give" || "remove" || "take"
+          const mentionedUser = message.mentions.members.first();
+          const targetArg = args.slice(1).find(a => {
+            const clean = a.toLowerCase().replace(/[<@&>!]/g, "");
+            return clean !== roleTarget.id;
+          });
+          const targetText = (targetArg || "").toLowerCase();
+
+          if (mentionedUser && mentionedUser.id !== client.user.id) {
+            targetScope = "user";
+            singleMemberTarget = mentionedUser;
+          } else if (targetText === "all" || targetText === "semua") {
+            targetScope = "all";
+          } else if (["human", "humans", "user", "users", "manusia"].includes(targetText)) {
+            targetScope = "human";
+          } else if (["bot", "bots"].includes(targetText)) {
+            targetScope = "bot";
+          } else if (targetText) {
+            const fetched = await message.guild.members.fetch(targetText.replace(/[<@!>]/g, "")).catch(() => null);
+            if (fetched) {
+              targetScope = "user";
+              singleMemberTarget = fetched;
+            }
+          }
+        }
+
+        if (!targetScope) {
+          return message.reply(
+            `❌ Format tidak valid. Contoh penggunaan:\n` +
+            `• \`${PREFIX} crole ${isAdd ? "add" : "remove"} @Role @User\` *(Ke 1 member)*\n` +
+            `• \`${PREFIX} crole ${isAdd ? "add" : "remove"} @Role all\` *(Ke semua member)*\n` +
+            `• \`${PREFIX} crole ${isAdd ? "add" : "remove"} @Role human\` *(Ke member manusia)*\n` +
+            `• \`${PREFIX} crole ${isAdd ? "add" : "remove"} @Role bot\` *(Ke bot)*`
+          );
+        }
+
+        // Single member operation
+        if (targetScope === "user" && singleMemberTarget) {
+          try {
+            if (isAdd) {
+              if (singleMemberTarget.roles.cache.has(roleTarget.id)) {
+                return message.reply(`ℹ️ **${singleMemberTarget.user.tag}** sudah memiliki role **${roleTarget.name}**.`);
+              }
+              await singleMemberTarget.roles.add(roleTarget.id, `Added by ${message.author.tag} via crole`);
+              const embed = new EmbedBuilder()
+                .setTitle("✅ Role Berhasil Ditambahkan")
+                .setColor(roleTarget.color || 0x2ecc71)
+                .setDescription(`Role **${roleTarget.name}** (<@&${roleTarget.id}>) telah diberikan kepada ${singleMemberTarget} (\`${singleMemberTarget.user.tag}\`).`)
+                .setTimestamp();
+              return message.reply({ embeds: [embed] });
+            } else {
+              if (!singleMemberTarget.roles.cache.has(roleTarget.id)) {
+                return message.reply(`ℹ️ **${singleMemberTarget.user.tag}** tidak memiliki role **${roleTarget.name}**.`);
+              }
+              await singleMemberTarget.roles.remove(roleTarget.id, `Removed by ${message.author.tag} via crole`);
+              const embed = new EmbedBuilder()
+                .setTitle("✅ Role Berhasil Dihapus")
+                .setColor(roleTarget.color || 0xe74c3c)
+                .setDescription(`Role **${roleTarget.name}** (<@&${roleTarget.id}>) telah dicabut dari ${singleMemberTarget} (\`${singleMemberTarget.user.tag}\`).`)
+                .setTimestamp();
+              return message.reply({ embeds: [embed] });
+            }
+          } catch (err) {
+            console.error("[CROLE SINGLE MEMBER FAIL]", err);
+            return message.reply(`❌ Gagal mengubah role member: ${err.message}`);
+          }
+        }
+
+        // Bulk member operation (all, human, bot)
+        await message.guild.members.fetch().catch(() => null);
+        let membersPool = Array.from(message.guild.members.cache.values());
+
+        if (targetScope === "human") {
+          membersPool = membersPool.filter(m => !m.user.bot);
+        } else if (targetScope === "bot") {
+          membersPool = membersPool.filter(m => m.user.bot);
+        }
+
+        let targetMembers = [];
+        if (isAdd) {
+          targetMembers = membersPool.filter(m => !m.roles.cache.has(roleTarget.id));
+        } else {
+          targetMembers = membersPool.filter(m => m.roles.cache.has(roleTarget.id));
+        }
+
+        const scopeLabel = targetScope === "human" ? "Human (Non-Bot)" : (targetScope === "bot" ? "Bot Only" : "Semua Member");
+        if (!targetMembers.length) {
+          return message.reply(`ℹ️ Tidak ada member kategori **${scopeLabel}** yang perlu di-${isAdd ? "tambahkan" : "hapus"} role **${roleTarget.name}**.`);
+        }
+
+        const actionText = isAdd ? "penambahan" : "penghapusan";
+        const statusMsg = await message.reply(`⏳ Memproses ${actionText} role **${roleTarget.name}** untuk **${targetMembers.length}** member (${scopeLabel})...`);
+
+        let successCount = 0;
+        let failCount = 0;
+
+        for (let i = 0; i < targetMembers.length; i++) {
+          const m = targetMembers[i];
+          try {
+            if (isAdd) {
+              await m.roles.add(roleTarget.id, `Bulk add by ${message.author.tag}`);
+            } else {
+              await m.roles.remove(roleTarget.id, `Bulk remove by ${message.author.tag}`);
+            }
+            successCount++;
+          } catch (e) {
+            failCount++;
+          }
+
+          if ((i + 1) % 5 === 0) {
+            await new Promise(r => setTimeout(r, 150));
+          }
+        }
+
+        const embedResult = new EmbedBuilder()
+          .setTitle(isAdd ? "✅ Penambahan Role Masal Selesai" : "✅ Penghapusan Role Masal Selesai")
+          .setColor(roleTarget.color || (isAdd ? 0x2ecc71 : 0xe74c3c))
+          .setDescription(
+            `Operasi role **${roleTarget.name}** (<@&${roleTarget.id}>) selesai.\n\n` +
+            `• **Target Filter:** \`${scopeLabel}\`\n` +
+            `• **Berhasil:** \`${successCount}\` member\n` +
+            (failCount > 0 ? `• **Gagal:** \`${failCount}\` member\n` : "") +
+            `• **Total Diproses:** \`${targetMembers.length}\` member`
+          )
+          .setTimestamp();
+
+        return statusMsg.edit({ content: null, embeds: [embedResult] });
+      }
+
+      // Action 5: INFO (Role Details)
+      if (sub === "info" || sub === "status" || sub === "view") {
+        await message.guild.members.fetch().catch(() => null);
+        const roleMembers = roleTarget.members;
+        const totalCount = roleMembers.size;
+        const humanCount = roleMembers.filter(m => !m.user.bot).size;
+        const botCount = roleMembers.filter(m => m.user.bot).size;
+        const hexColor = roleTarget.hexColor.toUpperCase();
+        const createdUnix = Math.floor(roleTarget.createdTimestamp / 1000);
+
+        const permNames = roleTarget.permissions.toArray();
+        const keyPerms = permNames.slice(0, 8).map(p => `\`${p}\``).join(", ") || "None";
+        const extraPerms = permNames.length > 8 ? `...dan ${permNames.length - 8} izin lainnya` : "";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`ℹ️ Detail Role: ${roleTarget.name}`)
+          .setColor(roleTarget.color || 0x3498db)
+          .setThumbnail(roleTarget.iconURL() || null)
+          .addFields(
+            { name: "🆔 Role ID", value: `\`${roleTarget.id}\``, inline: true },
+            { name: "🎨 Warna HEX", value: `\`${hexColor}\``, inline: true },
+            { name: "Mention", value: `<@&${roleTarget.id}>`, inline: true },
+            { name: "👥 Total Member", value: `**${totalCount}** member (\`${humanCount}\` Humans, \`${botCount}\` Bots)`, inline: false },
+            { name: "⚙️ Pengaturan", value: `• Hoist (Terpisah): **${roleTarget.hoist ? "Ya" : "Tidak"}**\n• Mentionable: **${roleTarget.mentionable ? "Ya" : "Tidak"}**\n• Posisi: **#${roleTarget.position}**`, inline: true },
+            { name: "📅 Dibuat Pada", value: `<t:${createdUnix}:F> (<t:${createdUnix}:R>)`, inline: true },
+            { name: "🔐 Izin Kunci (Permissions)", value: `${keyPerms} ${extraPerms}`, inline: false }
+          )
+          .setTimestamp();
+
+        return message.reply({ embeds: [embed] });
+      }
+
+      // Action 6: MEMBERS / WHO (List members with role)
+      if (sub === "members" || sub === "who" || sub === "list") {
+        await message.guild.members.fetch().catch(() => null);
+        const membersArr = Array.from(roleTarget.members.values());
+        const totalCount = membersArr.length;
+        const humanCount = membersArr.filter(m => !m.user.bot).length;
+        const botCount = membersArr.filter(m => m.user.bot).length;
+
+        if (!totalCount) {
+          return message.reply(`ℹ️ Belum ada member yang memiliki role **${roleTarget.name}**.`);
+        }
+
+        const shownMembers = membersArr.slice(0, 20).map((m, idx) => `${idx + 1}. ${m} (\`${m.user.tag}\`)`).join("\n");
+        const remaining = totalCount > 20 ? `\n*...dan **${totalCount - 20}** member lainnya.*` : "";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`👥 Member Pemegang Role: ${roleTarget.name}`)
+          .setColor(roleTarget.color || 0x3498db)
+          .setDescription(
+            `**Total:** \`${totalCount}\` member (\`${humanCount}\` Humans, \`${botCount}\` Bots)\n\n` +
+            `${shownMembers}${remaining}`
+          )
+          .setTimestamp();
+
+        return message.reply({ embeds: [embed] });
+      }
+
+      // Action 7: RENAME ROLE
+      if (sub === "rename") {
+        const newName = args.slice(2).join(" ").trim();
+        if (!newName) {
+          return message.reply("❌ Sebutkan nama baru untuk role ini. Contoh: `crole rename @Role Admin Super`");
+        }
+
+        try {
+          const oldName = roleTarget.name;
+          await roleTarget.setName(newName, `Renamed by ${message.author.tag} via crole`);
+
+          const embed = new EmbedBuilder()
+            .setTitle("✏️ Nama Role Berhasil Diubah")
+            .setColor(roleTarget.color || 0x2ecc71)
+            .setDescription(`Nama role **${oldName}** telah diubah menjadi **${newName}** (<@&${roleTarget.id}>).`)
+            .setTimestamp();
+          return message.reply({ embeds: [embed] });
+        } catch (err) {
+          console.error("[CROLE RENAME FAIL]", err);
+          return message.reply(`❌ Gagal mengubah nama role: ${err.message}`);
+        }
+      }
+
+      // Action 8: DELETE ROLE
+      if (sub === "delete" || sub === "del") {
+        try {
+          const roleName = roleTarget.name;
+          await roleTarget.delete(`Deleted by ${message.author.tag} via crole`);
+
+          const embed = new EmbedBuilder()
+            .setTitle("🗑️ Role Berhasil Dihapus")
+            .setColor(0xe74c3c)
+            .setDescription(`Role **${roleName}** telah dihapus dari server.`)
+            .setTimestamp();
+          return message.reply({ embeds: [embed] });
+        } catch (err) {
+          console.error("[CROLE DELETE FAIL]", err);
+          return message.reply(`❌ Gagal menghapus role: ${err.message}`);
+        }
       }
     }
 
@@ -10012,9 +11300,28 @@ Enjoy your reward ✨`
       await handleBotStatus(message);
       return;
     }
-    // chelp / chalp
+    // chelp mod / chelp admin / chelpmod / chelpadmin / cmodhelp / cadminhelp
+    const isHelpAdminCmd = (cmd === "helpmod" || cmd === "helpadmin" || cmd === "modhelp" || cmd === "adminhelp" || cmd === "chelpmod" || cmd === "chelpadmin") ||
+      ((cmd === "help" || cmd === "chelp") && (args[0]?.toLowerCase() === "mod" || args[0]?.toLowerCase() === "admin" || args[0]?.toLowerCase() === "staff"));
+
+    if (isHelpAdminCmd) {
+      const isStaff = isBotOwner(message.author.id) ||
+        hasPerm(message.member, PermissionsBitField.Flags.ManageRoles) ||
+        hasPerm(message.member, PermissionsBitField.Flags.ManageMessages) ||
+        hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers) ||
+        hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+
+      if (!isStaff) {
+        return message.reply("❌ Perintah ini khusus untuk Administrator dan Moderator server (`ManageRoles` / `ManageMessages` / `ModerateMembers`).");
+      }
+
+      const ui = buildAdminHelpUI("home", message.author.id);
+      return message.reply({ ...ui, allowedMentions: { repliedUser: false, parse: [] } });
+    }
+
+    // chelp / help biasa
     if (cmd === "help" || cmd === "hai") {
-      const ui = buildHelpUI("home", message.author.id, false);
+      const ui = buildHelpUI("home", message.author.id);
       return message.reply({ ...ui, allowedMentions: { repliedUser: false, parse: [] } });
     }
 
@@ -10480,7 +11787,7 @@ Enjoy your reward ✨`
     // cafk
     if (cmd === "afk") {
       const reason = args.join(" ") || "AFK";
-      await setAfk(message.author.id, reason);
+      await setAfk(message.author.id, reason, message.guild?.id);
 
       // set nickname jadi [AFK] ...
       const member = await message.guild.members.fetch(message.author.id).catch(() => null);
@@ -10763,8 +12070,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // ===================== INTERACTIVE HELP CATEGORY CHANGE =====================
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("help:menu:")) {
-      const [, , commandCallerId] = interaction.customId.split(":");
+    if (interaction.isStringSelectMenu() && (interaction.customId.startsWith("help:menu:") || interaction.customId.startsWith("help:adminmenu:"))) {
+      const parts = interaction.customId.split(":");
+      const isAdminMenu = parts[1] === "adminmenu";
+      const commandCallerId = parts[2];
 
       // Security check: Only the caller can interact
       if (commandCallerId !== "any" && interaction.user.id !== commandCallerId) {
@@ -10774,9 +12083,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
+      if (isAdminMenu) {
+        const isStaff = isBotOwner(interaction.user.id) ||
+          hasPerm(interaction.member, PermissionsBitField.Flags.ManageRoles) ||
+          hasPerm(interaction.member, PermissionsBitField.Flags.ManageMessages) ||
+          hasPerm(interaction.member, PermissionsBitField.Flags.ModerateMembers) ||
+          hasPerm(interaction.member, PermissionsBitField.Flags.Administrator);
+
+        if (!isStaff) {
+          return interaction.reply({
+            content: "❌ Menu bantuan ini khusus untuk Administrator dan Moderator server.",
+            flags: MessageFlags.Ephemeral
+          });
+        }
+      }
+
       const selectedCategory = interaction.values[0];
-      const isOriginalV2 = interaction.message.flags?.has?.(MessageFlags.IsComponentsV2);
-      const ui = buildHelpUI(selectedCategory, commandCallerId, isOriginalV2);
+      const ui = isAdminMenu
+        ? buildAdminHelpUI(selectedCategory, commandCallerId)
+        : buildHelpUI(selectedCategory, commandCallerId);
 
       await interaction.update(ui).catch(() => { });
       return;
@@ -11082,7 +12407,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
           }
 
-          let embedColor = EMBED_COLOR;
+          let embedColor = Math.floor(Math.random() * 0xFFFFFF);
           if (rawWarna) {
             const cleanWarna = rawWarna.replace("#", "");
             if (/^[0-9a-fA-F]{6}$/.test(cleanWarna)) {
@@ -11213,7 +12538,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           const embed = new EmbedBuilder()
             .setTitle(`🤫 Balasan Anonim #${replyId}`)
-            .setColor(EMBED_COLOR)
+            .setColor(Math.floor(Math.random() * 0xFFFFFF))
             .setDescription(
               [
                 msg,
@@ -12917,15 +14242,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      if (name === "afk") {
-        const targetCh = "1466628064002707518";
-        if (interaction.channelId !== targetCh && !isBotOwner(interaction.user.id)) {
-          return safeReply(interaction, {
-            content: `❌ **/afk** hanya dapat digunakan di channel <#${targetCh}>!`,
-            flags: MessageFlags.Ephemeral
-          });
-        }
-      }
 
       if (name === "ping") return safeReply(interaction, { content: `🏓 pong! ${client.ws.ping}ms` });
 
@@ -13124,6 +14440,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (sub === "tebakangka") {
           return handleTebakAngkaLeaderboard(interaction.client, interaction.guild.id, interaction, interaction.user.id);
+        }
+
+        if (sub === "all") {
+          await safeDefer(interaction, false);
+          const payload = await buildMonthlyRecapPayload(interaction.guild, null, null, false);
+          return interaction.editReply(payload);
         }
 
         if (sub === "support") {
@@ -14662,7 +15984,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       //afk
       if (name === "afk") {
         const reason = interaction.options.getString("reason") || "AFK";
-        await setAfk(interaction.user.id, reason);
+        await setAfk(interaction.user.id, reason, interaction.guildId);
 
         // set nickname jadi [AFK] ...
         const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
@@ -14683,7 +16005,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const targetUser = interaction.options.getUser("user", true);
-        const removed = await clearAfk(targetUser.id);
+        const removed = await clearAfk(targetUser.id, interaction.guildId);
         const member = await interaction.guild?.members.fetch(targetUser.id).catch(() => null);
         if (member) {
           const restored = stripAfkPrefix(member.nickname || member.user.username);
@@ -14710,8 +16032,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         await safeDefer(interaction, true);
-        const rows = await getAllAfkUsers();
-        const removed = await clearAllAfkUsers();
+        const rows = await getAllAfkUsers(interaction.guildId);
+        const removed = await clearAllAfkUsers(interaction.guildId);
 
         let nickRestored = 0;
         for (const row of rows) {
@@ -15083,7 +16405,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await safeDefer(interaction).catch(() => { }); // public
 
         try {
-          const rows = await getAllAfkUsers();
+          const rows = await getAllAfkUsers(interaction.guildId);
           if (!rows.length) {
             return interaction.editReply("✅ Tidak ada user yang sedang AFK.");
           }
@@ -15488,18 +16810,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
   } catch (err) {
+    if (isIgnorableDiscordError(err)) return;
     console.error("[INTERACTION ERROR]", err);
 
     try {
       if (interaction.deferred && !interaction.replied) {
-        return await interaction.editReply({ content: "⚠️ ada error di bot, coba lagi ya." });
+        return await interaction.editReply({ content: "⚠️ ada error di bot, coba lagi ya." }).catch(() => null);
       }
 
       if (!interaction.replied && !interaction.deferred) {
         return await interaction.reply({
           content: "⚠️ ada error di bot, coba lagi ya.",
           flags: MessageFlags.Ephemeral,
-        });
+        }).catch(() => null);
       }
     } catch { }
   }
@@ -15972,6 +17295,33 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
     } catch { }
 
     console.log(` ├── [DB] Engine: MongoDB Atlas Cloud (Mongoose) ✅`);
+
+    // Built-in Web Server for Terms of Service & Privacy Policy endpoints
+    const http = require("http");
+    const webPort = process.env.PORT || 3000;
+    const webServer = http.createServer((req, res) => {
+      const urlPath = req.url.split("?")[0];
+      if (urlPath === "/terms" || urlPath === "/terms.html") {
+        const termsPath = path.join(__dirname, "terms.html");
+        if (fs.existsSync(termsPath)) {
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          return res.end(fs.readFileSync(termsPath));
+        }
+      }
+      if (urlPath === "/privacy" || urlPath === "/privacy.html") {
+        const privacyPath = path.join(__dirname, "privacy.html");
+        if (fs.existsSync(privacyPath)) {
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          return res.end(fs.readFileSync(privacyPath));
+        }
+      }
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("CYZA - Mystral Assistant Bot Web Service Running OK");
+    });
+    webServer.listen(webPort, () => {
+      console.log(` ├── [HTTP] Web server active on port ${webPort} (/terms, /privacy)`);
+    }).on("error", () => { });
+
     console.log(" ├── [CLIENT] Connecting to Discord Gateway...");
     client.login(process.env.DISCORD_TOKEN);
   } catch (e) {
@@ -15989,10 +17339,12 @@ process.on("SIGTERM", async () => {
 });
 
 process.on("uncaughtException", async (err) => {
+  if (isIgnorableDiscordError(err)) return;
   console.error("[CRASH]", err);
   process.exit(1);
 });
 
 process.on("unhandledRejection", async (err) => {
+  if (isIgnorableDiscordError(err)) return;
   console.error("[REJECT]", err);
 });

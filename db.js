@@ -51,7 +51,8 @@ const idCardUserSchema = new mongoose.Schema({
 }, { strict: false, collection: "idcard_users" });
 
 const afkUserSchema = new mongoose.Schema({
-  user_id: { type: String, unique: true, required: true },
+  guild_id: String,
+  user_id: { type: String, required: true },
   reason: String,
   since: Number,
 }, { strict: false, collection: "afk_users" });

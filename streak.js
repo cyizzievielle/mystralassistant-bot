@@ -1,4 +1,13 @@
-// streak.js
+/**
+ * ============================================================================
+ * 🔥 MYSTRAL FLAME STREAK SUBSYSTEM
+ * ----------------------------------------------------------------------------
+ *  Core Module : streak.js
+ *  Description : Daily Partner Flame Streak System with Custom Profile Canvas,
+ *                Streak Freeze, Auto Reminders, and Daily Activity Tracking.
+ *  Author      : CYZA / Mystral Development
+ * ============================================================================
+ */
 const { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, PermissionFlagsBits, ChannelType, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, MessageFlags } = require("discord.js");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const crypto = require("crypto");
@@ -292,16 +301,16 @@ function buildMilestonesContainerV2() {
       "Berikut adalah tingkatan Flame Streak berdasarkan jumlah hari interaksi berturut-turut:\n\n" +
       "• `3 Hari` — <:3haritiktokorangeflame:1523332105319485562> **Orange Flame**\n" +
       "• `7 Hari` — <:7haribrightorangeflame:1523332107533811744> **Bright Orange Flame**\n" +
-      "• `30 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> **Golden Orange Flame**\n" +
-      "• `100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> **Royal Flame**\n" +
+      "• `30 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> **Purple Royal Flame**\n" +
+      "• `100 Hari` — <:30100hari_flamepurpleroyal:1523332110067306656> **Purple Royal Flame**\n" +
       "• `200 Hari` — <:200haricrystalflamegrey:1523332112030371940> **Crystal Flame**\n" +
       "• `300 Hari` — <:300hariemeralflame:1523332114819579944> **Emerald Flame**\n" +
       "• `400 Hari` — <:400harirubyredflame:1523332117193293966> **Ruby Flame**\n" +
-      "• `500 Hari` — <:500600_blueroyalfame:1523332118917152779> **Diamond Flame (Blue)**\n" +
-      "• `600 Hari` — <:500600_blueroyalfame:1523332118917152779> **Celestial Flame**\n" +
-      "• `700 Hari` — <:700haridiamondflame:1523332121333334016> **Diamond Flame (Cyan)**\n" +
+      "• `500 Hari` — <:500600_blueroyalfame:1523332118917152779> **Blue Royal Flame**\n" +
+      "• `600 Hari` — <:500600_blueroyalfame:1523332118917152779> **Blue Royal Flame**\n" +
+      "• `700 Hari` — <:700haridiamondflame:1523332121333334016> **Diamond Flame**\n" +
       "• `800 Hari` — <:800900hariauroraflame:1523332124667805746> **Aurora Flame**\n" +
-      "• `900 Hari` — <:800900hariauroraflame:1523332124667805746> **Cosmic Aurora Flame**\n" +
+      "• `900 Hari` — <:800900hariauroraflame:1523332124667805746> **Aurora Flame**\n" +
       "• `1000 Hari` — <:1000haridanseterusnyalegendaryeternalflame:1523332127176003805> **Legendary Eternal Flame**\n\n" +
       "*Jaga keaktifan setiap hari agar apimu tidak padam!*"
     )
@@ -345,16 +354,16 @@ function getFlameImageName(streak) {
 
 function getMilestoneInfo(streak) {
   if (streak >= 1000) return { name: "Legendary Eternal Flame", color: "#ffd700", outer: ["#f5af19", "#ffd700", "#ffffff"], inner: ["#ffffff", "#ffffff"], particles: 25, crown: true, glow: 35 };
-  if (streak >= 900) return { name: "Cosmic Aurora Flame", color: "#00e5ff", outer: ["#00e5ff", "#e040fb", "#ffff00"], inner: ["#ffffff", "#ffffff"], particles: 20, glow: 30 };
+  if (streak >= 900) return { name: "Aurora Flame", color: "#00e5ff", outer: ["#00e5ff", "#e040fb", "#ffff00"], inner: ["#ffffff", "#ffffff"], particles: 20, glow: 30 };
   if (streak >= 800) return { name: "Aurora Flame", color: "#e040fb", outer: ["#ff007f", "#00e5ff", "#a8ff78"], inner: ["#ffffff", "#ffffff"], particles: 18, glow: 28 };
   if (streak >= 700) return { name: "Diamond Flame", color: "#70e1ff", outer: ["#00e5ff", "#0072ff", "#ffffff"], inner: ["#ffffff", "#ffffff"], particles: 16, glow: 26 };
-  if (streak >= 600) return { name: "Celestial Flame", color: "#928dab", outer: ["#1f1c2c", "#928dab", "#c3bef7"], inner: ["#e2dbff", "#ffffff"], particles: 14, glow: 24 };
-  if (streak >= 500) return { name: "Diamond Flame", color: "#0072ff", outer: ["#00c6ff", "#0072ff", "#00f2fe"], inner: ["#c2f0fc", "#ffffff"], particles: 12, glow: 22 };
+  if (streak >= 600) return { name: "Blue Royal Flame", color: "#3b82f6", outer: ["#1d4ed8", "#3b82f6", "#93c5fd"], inner: ["#dbeafe", "#ffffff"], particles: 14, glow: 24 };
+  if (streak >= 500) return { name: "Blue Royal Flame", color: "#0072ff", outer: ["#00c6ff", "#0072ff", "#00f2fe"], inner: ["#c2f0fc", "#ffffff"], particles: 12, glow: 22 };
   if (streak >= 400) return { name: "Ruby Flame", color: "#ef473a", outer: ["#cb2d3e", "#ef473a", "#ff7e79"], inner: ["#ffc1c1", "#ffffff"], particles: 10, glow: 20 };
   if (streak >= 300) return { name: "Emerald Flame", color: "#38ef7d", outer: ["#11998e", "#38ef7d", "#a8ff78"], inner: ["#c1ffc1", "#ffffff"], particles: 8, glow: 18 };
   if (streak >= 200) return { name: "Crystal Flame", color: "#e2ebf0", outer: ["#cfd9df", "#e2ebf0", "#ffffff"], inner: ["#ffffff", "#ffffff"], particles: 6, glow: 16 };
-  if (streak >= 100) return { name: "Royal Flame", color: "#7f00ff", outer: ["#b92b27", "#7f00ff", "#d9a7c7"], inner: ["#f5d6ff", "#ffffff"], particles: 4, glow: 14 };
-  if (streak >= 30) return { name: "Golden Orange Flame", color: "#ffcc00", outer: ["#ff9100", "#ffea00", "#ffff00"], inner: ["#ffffc0", "#ffffff"], particles: 2, glow: 12 };
+  if (streak >= 100) return { name: "Purple Royal Flame", color: "#7f00ff", outer: ["#b92b27", "#7f00ff", "#d9a7c7"], inner: ["#f5d6ff", "#ffffff"], particles: 4, glow: 14 };
+  if (streak >= 30) return { name: "Purple Royal Flame", color: "#a855f7", outer: ["#7c3aed", "#a855f7", "#d8b4fe"], inner: ["#ede9fe", "#ffffff"], particles: 2, glow: 12 };
   if (streak >= 7) return { name: "Bright Orange Flame", color: "#ffdd00", outer: ["#ff3d00", "#ff9100", "#ffea00"], inner: ["#ffe57f", "#ffffff"], particles: 0, glow: 10 };
   return { name: "Orange Flame", color: "#ffea00", outer: ["#ff3d00", "#ff9100", "#ffea00"], inner: ["#ffe57f", "#ffffff"], particles: 0, glow: 8 };
 }
@@ -1306,11 +1315,11 @@ async function sendStreakCardNotification(client, guildId, pairId, cardType) {
         };
       } else if (streak >= 30) {
         return {
-          title: `${emoji} Golden Orange Flame!`,
+          title: `${emoji} Purple Royal Flame!`,
           body: getRandomBody([
-            `Hangat dan menyenangkan. Pasangan <@${pair.user_one}> & <@${pair.user_two}> berhasil mempertahankan nyala Golden Orange Flame hingga **${streak} hari**.`,
-            `Sebulan yang penuh warna. <@${pair.user_one}> & <@${pair.user_two}> sukses merawat pesona Golden Orange Flame genap selama **${streak} hari**.`,
-            `Terus bersinar dengan lembut. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas rutinitas manis **${streak} hari** bersama Golden Orange Flame.`
+            `Hangat dan memikat. Pasangan <@${pair.user_one}> & <@${pair.user_two}> berhasil mempertahankan nyala Purple Royal Flame hingga **${streak} hari**.`,
+            `Sebulan yang penuh warna. <@${pair.user_one}> & <@${pair.user_two}> sukses merawat pesona Purple Royal Flame genap selama **${streak} hari**.`,
+            `Terus bersinar dengan indah. Selamat <@${pair.user_one}> & <@${pair.user_two}> atas rutinitas manis **${streak} hari** bersama Purple Royal Flame.`
           ])
         };
       } else if (streak >= 7) {
@@ -1818,7 +1827,8 @@ async function handlePrefixCommand(message, client) {
 
   // Subcommand: SET / GRANT (Owner Only)
   if (subcommand === "set" || subcommand === "grant") {
-    const isOwner = message.author.id === process.env.BOT_OWNER_ID;
+    const ownerIds = String(process.env.BOT_OWNER_ID || "").split(",").map(x => x.trim()).filter(Boolean);
+    const isOwner = ownerIds.includes(message.author.id);
     if (!isOwner) {
       return message.reply("❌ Perintah ini hanya dapat dijalankan oleh Bot Owner.");
     }
@@ -1833,12 +1843,22 @@ async function handlePrefixCommand(message, client) {
     }
 
     if (userIds.length < 2) {
-      return message.reply("❌ **Format Salah!** Harap mention 2 user atau berikan 2 ID user.\nContoh: `cstreak set @UserA @UserB 30`");
+      const errReply = await message.reply("❌ **Format Salah!** Harap mention 2 user atau berikan 2 ID user.\nContoh: `cstreak set @UserA @UserB 30`").catch(() => null);
+      setTimeout(async () => {
+        await message.delete().catch(() => { });
+        if (errReply) await errReply.delete().catch(() => { });
+      }, 15000);
+      return;
     }
 
     const dayArg = args.find(arg => /^\d+$/.test(arg) && !userIds.includes(arg));
     if (!dayArg) {
-      return message.reply("❌ **Format Salah!** Harap tentukan jumlah hari (angka).\nContoh: `cstreak set @UserA @UserB 30`");
+      const errReply = await message.reply("❌ **Format Salah!** Harap tentukan jumlah hari (angka).\nContoh: `cstreak set @UserA @UserB 30`").catch(() => null);
+      setTimeout(async () => {
+        await message.delete().catch(() => { });
+        if (errReply) await errReply.delete().catch(() => { });
+      }, 15000);
+      return;
     }
 
     const days = parseInt(dayArg, 10);
@@ -2114,6 +2134,33 @@ async function handlePrefixCommand(message, client) {
       });
     }
     return;
+  }
+
+  // Subcommand: RESETBG / REMOVEBG (Hapus background custom)
+  if (subcommand === "resetbg" || subcommand === "removebg" || subcommand === "delbg" || subcommand === "clearbg") {
+    let targetUser = message.mentions.users.first();
+    if (!targetUser && args[0]) {
+      const cleanedId = args[0].replace(/[<@!>]/g, "");
+      targetUser = await client.users.fetch(cleanedId).catch(() => null);
+    }
+    if (!targetUser) targetUser = message.author;
+
+    const isAllowed = (targetUser.id === message.author.id) || message.member.permissions.has(PermissionFlagsBits.ManageGuild);
+    if (!isAllowed) {
+      return message.reply("❌ Kamu hanya bisa menghapus background kartu milikmu sendiri.");
+    }
+
+    await StreakPair.updateMany(
+      { guild_id: String(guildId), $or: [{ user_one: String(targetUser.id) }, { user_two: String(targetUser.id) }] },
+      { $unset: { custom_bg: 1 } }
+    );
+
+    const embed = new EmbedBuilder()
+      .setTitle("🖼️ Background Streak Direset")
+      .setColor(0x2ecc71)
+      .setDescription(`Berhasil menghapus background custom kartu streak milik **${targetUser.username}**.\nKartu streak kini kembali menggunakan tema default.`)
+      .setTimestamp();
+    return message.reply({ embeds: [embed] });
   }
 
   // Subcommand: EVAL (Manual Run Evaluasi Harian)
@@ -2871,12 +2918,17 @@ function setupListeners(client) {
         await handleInteraction(interaction, client);
       }
     } catch (err) {
-      console.error("[STREAK EVENT INTERACTION_CREATE ERROR]", err);
-      if (interaction.deferred || interaction.replied) {
-        await interaction.followUp({ content: "❌ Terjadi kesalahan dalam memproses perintah ini.", flags: MessageFlags.Ephemeral }).catch(() => { });
-      } else {
-        await interaction.reply({ content: "❌ Terjadi kesalahan dalam memproses perintah ini.", flags: MessageFlags.Ephemeral }).catch(() => { });
+      if (err?.code === 10062 || err?.code === 50027 || err?.status === 404 || err?.status === 401) {
+        return;
       }
+      console.error("[STREAK EVENT INTERACTION_CREATE ERROR]", err);
+      try {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({ content: "❌ Terjadi kesalahan dalam memproses perintah ini.", flags: MessageFlags.Ephemeral }).catch(() => { });
+        } else {
+          await interaction.reply({ content: "❌ Terjadi kesalahan dalam memproses perintah ini.", flags: MessageFlags.Ephemeral }).catch(() => { });
+        }
+      } catch (_) { }
     }
   });
 }

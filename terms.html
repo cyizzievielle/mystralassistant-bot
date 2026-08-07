@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Terms of Service — CYZA Mystral Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #07090e;
+      --card-bg: rgba(15, 21, 34, 0.85);
+      --card-border: rgba(124, 58, 237, 0.22);
+      --card-hover-border: rgba(167, 139, 250, 0.55);
+      --accent-purple: #7c3aed;
+      --accent-violet: #a78bfa;
+      --accent-pink: #ec4899;
+      --accent-cyan: #06b6d4;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg-dark);
+      background-image: 
+        radial-gradient(circle at 10% 10%, rgba(124, 58, 237, 0.18) 0%, transparent 45%),
+        radial-gradient(circle at 90% 90%, rgba(236, 72, 153, 0.15) 0%, transparent 45%),
+        radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.08) 0%, transparent 60%);
+      background-attachment: fixed;
+      color: var(--text-main);
+      line-height: 1.7;
+      min-height: 100vh;
+      padding: 40px 16px;
+    }
+
+    /* Top Glass Navbar */
+    .navbar {
+      max-width: 900px;
+      margin: 0 auto 30px auto;
+      background: rgba(15, 21, 34, 0.7);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 50px;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: #ffffff;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      background-color: #10b981;
+      border-radius: 50%;
+      box-shadow: 0 0 10px #10b981;
+      display: inline-block;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .nav-btn {
+      background: linear-gradient(135deg, var(--accent-purple), #6d28d9);
+      color: #ffffff;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: 20px;
+      text-decoration: none;
+      transition: all 0.25 ease;
+      box-shadow: 0 4px 15px rgba(124, 58, 237, 0.3);
+    }
+
+    .nav-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(124, 58, 237, 0.5);
+      color: #ffffff;
+    }
+
+    /* Main Container */
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      padding: 45px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.75), 0 0 35px rgba(124, 58, 237, 0.12);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .container:hover {
+      border-color: var(--card-hover-border);
+    }
+
+    .header-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(124, 58, 237, 0.15);
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      color: var(--accent-violet);
+      font-size: 0.82rem;
+      font-weight: 700;
+      padding: 6px 16px;
+      border-radius: 30px;
+      margin-bottom: 20px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 2.8rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #ffffff 0%, var(--accent-violet) 50%, var(--accent-pink) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 35px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 20px;
+    }
+
+    /* Grid Info Cards */
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 16px;
+      margin-bottom: 40px;
+    }
+
+    .info-box {
+      background: linear-gradient(135deg, rgba(124, 58, 237, 0.12) 0%, rgba(6, 182, 212, 0.06) 100%);
+      border: 1px solid rgba(167, 139, 250, 0.25);
+      border-radius: 16px;
+      padding: 20px 22px;
+      transition: all 0.3s ease;
+    }
+
+    .info-box:hover {
+      transform: translateY(-3px);
+      border-color: rgba(167, 139, 250, 0.5);
+      box-shadow: 0 8px 25px rgba(124, 58, 237, 0.15);
+    }
+
+    .info-box-title {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    .info-box-value {
+      font-weight: 700;
+      color: #ffffff;
+      font-size: 1.05rem;
+      word-break: break-all;
+    }
+
+    .info-box-value a {
+      color: var(--accent-cyan);
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .info-box-value a:hover {
+      color: var(--accent-violet);
+      text-decoration: underline;
+    }
+
+    h2 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #ffffff;
+      margin-top: 40px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    h2::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 24px;
+      background: linear-gradient(to bottom, var(--accent-purple), var(--accent-pink));
+      border-radius: 4px;
+    }
+
+    p {
+      margin-bottom: 16px;
+      color: #cbd5e1;
+      font-size: 1.02rem;
+    }
+
+    ul {
+      list-style: none;
+      margin-bottom: 24px;
+    }
+
+    li {
+      position: relative;
+      padding-left: 30px;
+      margin-bottom: 14px;
+      color: #cbd5e1;
+      font-size: 1rem;
+    }
+
+    li::before {
+      content: '✦';
+      position: absolute;
+      left: 6px;
+      top: 0;
+      color: var(--accent-violet);
+      font-size: 0.95rem;
+    }
+
+    code {
+      background: rgba(124, 58, 237, 0.2);
+      color: #f472b6;
+      border: 1px solid rgba(244, 114, 182, 0.35);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-family: 'Consolas', monospace;
+      font-size: 0.9em;
+    }
+
+    a {
+      color: var(--accent-violet);
+      text-decoration: none;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    a:hover {
+      color: var(--accent-pink);
+      text-decoration: underline;
+    }
+
+    .footer {
+      margin-top: 55px;
+      padding-top: 25px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .footer strong {
+      color: var(--accent-violet);
+    }
+
+    /* Mobile Responsive Optimizations */
+    @media (max-width: 640px) {
+      body {
+        padding: 16px 10px;
+      }
+      .navbar {
+        border-radius: 20px;
+        padding: 12px 16px;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .nav-links {
+        width: 100%;
+        justify-content: flex-start;
+      }
+      .container {
+        padding: 26px 20px;
+        border-radius: 18px;
+      }
+      h1 {
+        font-size: 2rem;
+      }
+      h2 {
+        font-size: 1.3rem;
+      }
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Glass Navigation Bar -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <span class="status-dot"></span>
+      <span>CYZA Assistant</span>
+    </div>
+    <div class="nav-links">
+      <a href="https://discord.gg/mystraldistrict" target="_blank" class="nav-btn">Mystral District ↗</a>
+    </div>
+  </nav>
+
+  <!-- Main Document Container -->
+  <div class="container">
+    <div class="header-tag">🔮 Legal Agreement</div>
+    <h1>Terms of Service</h1>
+    <div class="subtitle">Effective Date: August 7, 2026 • Application Version 2.5</div>
+
+    <!-- Info Cards -->
+    <div class="info-grid">
+      <div class="info-box">
+        <div class="info-box-title">Developer & Owner</div>
+        <div class="info-box-value"><code>@2cyi</code></div>
+      </div>
+      <div class="info-box">
+        <div class="info-box-title">Main Discord Server</div>
+        <div class="info-box-value"><a href="https://discord.gg/mystraldistrict" target="_blank">Mystral District ↗</a></div>
+      </div>
+      <div class="info-box">
+        <div class="info-box-title">Support Channel</div>
+        <div class="info-box-value"><a href="https://discord.com/channels/1251131422115106876/1459868353861517322" target="_blank">#ticket-support ↗</a></div>
+      </div>
+    </div>
+
+    <p>Welcome to <strong>CYZA - Mystral Assistant</strong> ("the Bot", "Service", "we", "us"). By inviting the Bot to your Discord server or using any of its interactive commands, slash commands, buttons, or services, you agree to be bound by these Terms of Service. If you do not agree, please remove the Bot from your server immediately.</p>
+
+    <h2>1. Acceptance of Terms & Discord Policies</h2>
+    <p>By interacting with CYZA - Mystral Assistant, you confirm that you comply with:</p>
+    <ul>
+      <li>These Terms of Service</li>
+      <li><a href="https://discord.com/terms" target="_blank">Discord Developer Terms of Service ↗</a></li>
+      <li><a href="https://discord.com/guidelines" target="_blank">Discord Community Guidelines ↗</a></li>
+    </ul>
+
+    <h2>2. Description of Features & Services</h2>
+    <p>CYZA - Mystral Assistant provides automated community management and social features, including:</p>
+    <ul>
+      <li><strong>Role Customization & Management:</strong> Dual-color gradient custom role creation (<code>crole</code>), role icons, and bulk role distribution/removal (<code>ccr</code>).</li>
+      <li><strong>Cyber Identity Cards:</strong> 2D Canvas profile card generation (<code>/idcard</code>) featuring customizable user preferences, domicile, status, and theme cards.</li>
+      <li><strong>Pair Interaction Streak System:</strong> Daily consecutive interaction tracking (<code>/streak</code>) with collectible milestone cards.</li>
+      <li><strong>Support Desk & Verification:</strong> Private support ticket channels (<code>/ticketpanel</code>), member verification workflows, and automated response engines (<code>car</code>).</li>
+      <li><strong>Social Games & Utilities:</strong> Interactive Truth or Dare (<code>/tod</code>), Tarot card readings (<code>/tarot</code>), and anonymous Menfess panels (<code>/menfesspanel</code>).</li>
+    </ul>
+
+    <h2>3. Acceptable Use & User Conduct</h2>
+    <p>When using the Bot, you agree NOT to:</p>
+    <ul>
+      <li>Attempt to exploit, reverse engineer, spam, or flood the Bot's command execution system.</li>
+      <li>Submit illegal, defamatory, hateful, or abusive content through custom profile fields (ID Cards, Menfess, or custom Truth/Dare entries).</li>
+      <li>Impersonate Discord staff, administrators, or other individuals.</li>
+      <li>Attempt to bypass rate limits or administrative security permissions.</li>
+    </ul>
+
+    <h2>4. Service Availability & Limitation of Liability</h2>
+    <p>The Bot is provided on an <strong>"AS IS"</strong> and <strong>"AS AVAILABLE"</strong> basis. We reserve the right to modify, suspend, or discontinue any feature at any time without prior notice. We shall not be held liable for any damages, data loss, or service disruptions.</p>
+
+    <h2>5. Termination</h2>
+    <p>We reserve the right to restrict or ban any user or Discord server that violates these Terms of Service or Discord Policy without prior warning.</p>
+
+    <h2>6. Contact & Support Information</h2>
+    <p>For inquiries, support, or data deletion requests, contact us via:</p>
+    <ul>
+      <li><strong>Developer DM:</strong> Direct Message to <code>@2cyi</code> on Discord.</li>
+      <li><strong>Support Channel:</strong> Join <a href="https://discord.gg/mystraldistrict" target="_blank">Mystral District</a> and open a ticket in <a href="https://discord.com/channels/1251131422115106876/1459868353861517322" target="_blank">#ticket-support ↗</a> or use <code>/ticketpanel</code>.</li>
+    </ul>
+
+    <div class="footer">
+      &copy; 2026 CYZA - Mystral Assistant • Developed by <strong>@2cyi</strong> • All rights reserved.
+    </div>
+  </div>
+</body>
+</html>
