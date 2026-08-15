@@ -10053,8 +10053,8 @@ async function checkInviteLinkAlert(message) {
   try {
     if (!message || !message.guild || message.author.bot) return false;
 
-    // Discord Invite Link regex
-    const inviteRegex = /(?:https?:\/\/)?(?:www\.)?(?:discord\.(?:gg|io|me|li|app)|discord\.com\/invite)\/([a-zA-Z0-9-]+)/gi;
+    // Discord Invite Link regex (supports all custom invite codes and hyphen/underscore)
+    const inviteRegex = /(?:https?:\/\/)?(?:www\.)?(?:discord\.(?:gg|io|me|li|app)|discord\.com\/invite)\/([a-zA-Z0-9_-]+)/gi;
     const matches = [...message.content.matchAll(inviteRegex)];
     if (!matches.length) return false;
 
@@ -10164,7 +10164,7 @@ async function checkInviteLinkAlert(message) {
     } else if (shouldAutoDelete) {
       statusMsgText = "🗑️ *Otomatis Dihapus (Auto-Deleted)*";
     } else {
-      statusMsgText = "<a:22593alert:1523238009393123409> *Pesan Dibiarkan (Warning Only)*";
+      statusMsgText = "🚨 *Pesan Dibiarkan (Warning Only)*";
     }
 
     // Send Alert Card to Invite Log Channel
@@ -10173,7 +10173,7 @@ async function checkInviteLinkAlert(message) {
 
     const alertContainer = new ContainerBuilder()
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(isWhitelisted ? "# <a:Fm_check:1523182720493289666> DETEKSI LINK INVITE (WHITELIST MEMBER)" : "# <a:22593alert:1523238009393123409> DETEKSI LINK INVITE SERVER LAIN"),
+        new TextDisplayBuilder().setContent(isWhitelisted ? "# ✅ DETEKSI LINK INVITE (WHITELIST MEMBER)" : "# 🚨 DETEKSI LINK INVITE SERVER LAIN"),
         new TextDisplayBuilder().setContent(
           [
             `▸ **Pengirim (User):** <@${message.author.id}> (\`@${message.author.username}\`)`,
@@ -10193,11 +10193,35 @@ async function checkInviteLinkAlert(message) {
         new TextDisplayBuilder().setContent(`Mystral • Invite Link Security Log • <t:${nowTs}:R>`)
       );
 
-    await alertChannel.send({
+    const sentV2 = await alertChannel.send({
       components: [alertContainer],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: { parse: [] },
     }).catch(() => null);
+
+    // Fallback if Components V2 payload fails
+    if (!sentV2) {
+      const fallbackEmbed = new EmbedBuilder()
+        .setColor(isWhitelisted ? 0x2ecc71 : 0xe74c3c)
+        .setTitle(isWhitelisted ? "✅ DETEKSI LINK INVITE (WHITELIST MEMBER)" : "🚨 DETEKSI LINK INVITE SERVER LAIN")
+        .setDescription(
+          [
+            `▸ **Pengirim (User):** <@${message.author.id}> (\`@${message.author.username}\`)`,
+            `▸ **Server Nickname:** \`${member.displayName}\``,
+            `▸ **User ID:** \`${message.author.id}\``,
+            `▸ **Channel:** <#${message.channel.id}> (\`#${message.channel.name}\`)`,
+            `▸ **Link Dideteksi:** \`${detectedInviteCode}\``,
+            `▸ **Status Pesan:** ${statusMsgText}`,
+            "",
+            "**Isi Pesan Snippet:**",
+            `\`\`\`text\n${snippet}\n\`\`\``,
+          ].join("\n")
+        )
+        .setFooter({ text: "Mystral • Invite Link Security Log" })
+        .setTimestamp();
+
+      await alertChannel.send({ embeds: [fallbackEmbed], allowedMentions: { parse: [] } }).catch(err => console.error("[INVITE LOG FALLBACK ERR]", err));
+    }
 
     return true;
   } catch (err) {
@@ -10263,10 +10287,23 @@ async function sendStaffLogEntry(guild, title, detailsArray) {
         new TextDisplayBuilder().setContent(`Mystral • Staff Action & Moderation Log • <t:${nowTs}:R>`)
       );
 
-    await logCh.send({
+    const sentV2 = await logCh.send({
       components: [container],
       flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { parse: [] },
     }).catch(() => null);
+
+    // Fallback if Components V2 payload fails
+    if (!sentV2) {
+      const fallbackEmbed = new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle(title)
+        .setDescription(detailsArray.join("\n"))
+        .setFooter({ text: "Mystral • Staff Action & Moderation Log" })
+        .setTimestamp();
+
+      await logCh.send({ embeds: [fallbackEmbed], allowedMentions: { parse: [] } }).catch(err => console.error("[STAFF LOG FALLBACK ERR]", err));
+    }
   } catch (err) {
     console.error("[STAFF LOG SEND FAIL]", err);
   }
@@ -10814,7 +10851,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         try {
           const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 1 }).catch(() => null);
           const entry = logs?.entries?.first();
-          if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
+          if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 30000)) {
             executor = entry.executor;
             reason = entry.reason;
           }
@@ -10852,7 +10889,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       try {
         const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberUpdate, limit: 1 }).catch(() => null);
         const entry = logs?.entries?.first();
-        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
+        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 30000)) {
           executor = entry.executor;
           reason = entry.reason;
         }
@@ -10874,7 +10911,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       try {
         const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberUpdate, limit: 1 }).catch(() => null);
         const entry = logs?.entries?.first();
-        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
+        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 30000)) {
           executor = entry.executor;
         }
       } catch { }
@@ -10900,7 +10937,7 @@ client.on(Events.GuildMemberRemove, async (member) => {
     const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberKick, limit: 1 }).catch(() => null);
     const entry = logs?.entries?.first();
 
-    if (entry && entry.target?.id === member.id && (Date.now() - entry.createdTimestamp < 10000)) {
+    if (entry && entry.target?.id === member.id && (Date.now() - entry.createdTimestamp < 30000)) {
       const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, entry.executor, [], member);
       if (isAllowed) {
         await sendStaffLogEntry(guild, "👢 Staff Action: Member Kicked", [
