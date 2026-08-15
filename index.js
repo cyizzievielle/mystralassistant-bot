@@ -10403,8 +10403,8 @@ async function buildStaffDirectoryContainer(guild) {
     members.forEach(m => {
       uniqueStaffSet.add(m.id);
       const pStatus = m.presence?.status || "offline";
-      let statusEmoji = "🔴";
-      if (pStatus === "online") statusEmoji = "🟢";
+      let statusEmoji = "<a:close:1523182754454306967>";
+      if (pStatus === "online") statusEmoji = "<a:open:1523182738054713424>";
 
       memberLines.push(`└───── ${statusEmoji} <@${m.id}> **@${m.user.username}**`);
     });
@@ -10541,7 +10541,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (customId === "staffpanel:refresh") {
       await interaction.deferUpdate().catch(() => null);
       const container = await buildStaffDirectoryContainer(interaction.guild);
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
     } else if (customId === "staffpanel:myprofile") {
       const container = await buildStaffProfileContainer(interaction.member);
       await interaction.reply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
@@ -14638,7 +14638,7 @@ client.on(Events.MessageCreate, async (message) => {
       const targetChannel = message.mentions.channels.first() || message.guild.channels.cache.get(args[0]) || message.channel;
       const container = await buildStaffDirectoryContainer(message.guild);
 
-      const panelMsg = await targetChannel.send({ components: [container], flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+      const panelMsg = await targetChannel.send({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
       if (panelMsg) {
         await MetaText.updateOne({ key: `staffpanel_channel_${message.guild.id}` }, { $set: { value: targetChannel.id } }, { upsert: true }).catch(() => null);
         await MetaText.updateOne({ key: `staffpanel_message_${message.guild.id}` }, { $set: { value: panelMsg.id } }, { upsert: true }).catch(() => null);
