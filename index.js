@@ -10049,6 +10049,8 @@ function parseDurationMs(str) {
 }
 
 // ===================== ANTI-INVITE DETECTOR SYSTEM =====================
+const inviteSpamTracker = new Map(); // Tracker Map for Spam Raid detection: key = `${guildId}_${userId}`, val = Array of timestamps
+
 async function checkInviteLinkAlert(message) {
   try {
     if (!message || !message.guild || message.author.bot) return false;
@@ -10160,18 +10162,39 @@ async function checkInviteLinkAlert(message) {
       await message.delete().catch(() => null);
     }
 
+    // Spam Raid Tracker Check (3x invite links in 60s -> 1 Hour Timeout)
+    let isSpamRaidTimeout = false;
+    if (!isWhitelisted) {
+      const trackerKey = `${guild.id}_${message.author.id}`;
+      const now = Date.now();
+      const userTimestamps = (inviteSpamTracker.get(trackerKey) || []).filter(ts => now - ts < 60000);
+      userTimestamps.push(now);
+      inviteSpamTracker.set(trackerKey, userTimestamps);
+
+      if (userTimestamps.length >= 3) {
+        isSpamRaidTimeout = true;
+        inviteSpamTracker.delete(trackerKey);
+        await member.timeout(3600000, "Anti-Invite Spam Raid Auto-Timeout (3x invites in 60s)").catch(() => null);
+      }
+    }
+
     // Status message label
     let statusMsgText = "";
     if (isWhitelisted) {
       statusMsgText = `🟢 *Pesan Dibiarkan (${whitelistReason})*`;
+    } else if (isSpamRaidTimeout) {
+      statusMsgText = "🚨 **Otomatis Dihapus & Member Di-Timeout 1 Jam (Spam Raid Detected)**";
     } else if (shouldAutoDelete) {
       statusMsgText = "🗑️ *Otomatis Dihapus (Auto-Deleted)*";
     } else {
       statusMsgText = "🚨 *Pesan Dibiarkan (Warning Only)*";
     }
 
-    // Fetch invite details to get target server name
+    // Fetch invite details to get target server name & member count risk assessment
     let targetServerName = "Tidak dapat memuat info (Invite kadaluarsa / invalid)";
+    let riskBadge = "🔴 **High Risk / Invalid Invite**";
+    let memberDetails = "Invite kadaluarsa atau server tidak ditemukan";
+
     try {
       const cleanCodeMatch = detectedInviteCode.match(/(?:discord\.(?:gg|io|me|li|app)|discord\.com\/invite)\/([a-zA-Z0-9_-]+)/i);
       const rawCode = cleanCodeMatch ? cleanCodeMatch[1] : detectedInviteCode;
@@ -10179,6 +10202,18 @@ async function checkInviteLinkAlert(message) {
         const inv = await message.client.fetchInvite(rawCode).catch(() => null);
         if (inv && inv.guild) {
           targetServerName = `${inv.guild.name} (ID: ${inv.guild.id})`;
+          const totalMembers = inv.memberCount || 0;
+          const onlineMembers = inv.presenceCount || 0;
+          const memStr = totalMembers > 0 ? `${totalMembers.toLocaleString()} Members (${onlineMembers.toLocaleString()} Online)` : "Tidak diketahui";
+
+          if (inv.guild.verified || inv.guild.partnered || totalMembers >= 100) {
+            riskBadge = "🟢 **Low Risk (Public Community)**";
+          } else if (totalMembers >= 10) {
+            riskBadge = "🟡 **Medium Risk (Small Community)**";
+          } else {
+            riskBadge = "🔴 **High Risk (Suspicious / Alt Server)**";
+          }
+          memberDetails = memStr;
         }
       }
     } catch { }
@@ -10189,13 +10224,14 @@ async function checkInviteLinkAlert(message) {
 
     const alertContainer = new ContainerBuilder()
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(isWhitelisted ? "# ✅ DETEKSI LINK INVITE (WHITELIST MEMBER)" : "# 🚨 DETEKSI LINK INVITE SERVER LAIN"),
+        new TextDisplayBuilder().setContent(isWhitelisted ? "# ✅ DETEKSI LINK INVITE (WHITELIST MEMBER)" : (isSpamRaidTimeout ? "# 🚨 SPAM RAID DETECTED — MEMBER DI-TIMEOUT 1 JAM" : "# 🚨 DETEKSI LINK INVITE SERVER LAIN")),
         new TextDisplayBuilder().setContent(
           [
             `▸ **Pengirim (User):** <@${message.author.id}> (\`@${message.author.username}\`)`,
             `▸ **User ID:** \`${message.author.id}\``,
             `▸ **Channel:** <#${message.channel.id}> (\`#${message.channel.name}\`)`,
             `▸ **Target Server:** \`${targetServerName}\``,
+            `▸ **Risk Level & Size:** ${riskBadge} — \`${memberDetails}\``,
             `▸ **Link Dideteksi:** \`${detectedInviteCode}\``,
             `▸ **Status Pesan:** ${statusMsgText}`,
             "",
@@ -10219,13 +10255,14 @@ async function checkInviteLinkAlert(message) {
     if (!sentV2) {
       const fallbackEmbed = new EmbedBuilder()
         .setColor(isWhitelisted ? 0x2ecc71 : 0xe74c3c)
-        .setTitle(isWhitelisted ? "✅ DETEKSI LINK INVITE (WHITELIST MEMBER)" : "🚨 DETEKSI LINK INVITE SERVER LAIN")
+        .setTitle(isWhitelisted ? "✅ DETEKSI LINK INVITE (WHITELIST MEMBER)" : (isSpamRaidTimeout ? "🚨 SPAM RAID DETECTED — MEMBER DI-TIMEOUT 1 JAM" : "🚨 DETEKSI LINK INVITE SERVER LAIN"))
         .setDescription(
           [
             `▸ **Pengirim (User):** <@${message.author.id}> (\`@${message.author.username}\`)`,
             `▸ **User ID:** \`${message.author.id}\``,
             `▸ **Channel:** <#${message.channel.id}> (\`#${message.channel.name}\`)`,
             `▸ **Target Server:** \`${targetServerName}\``,
+            `▸ **Risk Level & Size:** ${riskBadge} — \`${memberDetails}\``,
             `▸ **Link Dideteksi:** \`${detectedInviteCode}\``,
             `▸ **Status Pesan:** ${statusMsgText}`,
             "",
@@ -10324,7 +10361,7 @@ async function sendStaffLogEntry(guild, title, detailsArray) {
         .setColor(0x3498db)
         .setTitle(title)
         .setDescription(detailsArray.join("\n"))
-        .setFooter({ text: "Mystral • Staff Action & Moderation Log" })
+        .setFooter({ text: "Staff Action & Moderation Log" })
         .setTimestamp();
 
       await logCh.send({ embeds: [fallbackEmbed], allowedMentions: { parse: [] } }).catch(err => console.error("[STAFF LOG FALLBACK ERR]", err));
