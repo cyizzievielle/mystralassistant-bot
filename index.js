@@ -10577,12 +10577,18 @@ async function buildStaffProfileContainer(member) {
   else if (pStatus === "idle") statusText = "🌙 Idle (AFK)";
   else if (pStatus === "dnd") statusText = "🔴 Do Not Disturb";
 
-  const clientObj = member.presence?.clientStatus;
-  const clients = [];
-  if (clientObj?.desktop) clients.push("💻 Desktop");
-  if (clientObj?.mobile) clients.push("📱 Mobile");
-  if (clientObj?.web) clients.push("🌐 Web");
-  const clientText = clients.length ? clients.join(", ") : "Tidak Diketahui";
+  const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${guild.id}` }).lean().catch(() => null);
+  const configuredRoles = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
+
+  const memberDivisions = [];
+  for (const item of configuredRoles) {
+    const rId = typeof item === "string" ? item : item.role_id;
+    const rLabel = (typeof item === "object" && item.label) ? item.label : null;
+    if (member.roles.cache.has(rId)) {
+      memberDivisions.push(rLabel ? `<@&${rId}> - **${rLabel}**` : `<@&${rId}>`);
+    }
+  }
+  const divisionText = memberDivisions.length ? memberDivisions.join(" • ") : "*(Belum terdaftar di divisi)*";
 
   const staffRoles = member.roles.cache
     .filter(r => r.id !== guild.id && !r.managed)
@@ -10612,11 +10618,11 @@ async function buildStaffProfileContainer(member) {
           `▸ **Server Nickname:** \`${member.displayName}\``,
           `▸ **User ID:** \`${user.id}\``,
           `▸ **Status Kehadiran:** ${statusText}`,
-          `▸ **Perangkat (Device):** ${clientText}`,
+          `▸ **Divisi Staff:** ${divisionText}`,
           `▸ **Bergabung Server:** ${joinedTs ? `<t:${joinedTs}:F> (<t:${joinedTs}:R>)` : "*Tidak Diketahui*"}`,
           `▸ **Akun Dibuat:** <t:${createdTs}:F> (<t:${createdTs}:R>)`,
           "",
-          "**Divisi & Role Staff:**",
+          "**Role Server Staff:**",
           staffRoles.length ? staffRoles.slice(0, 8).join(" • ") : "*(tidak ada role)*",
           "",
           "**Statistik Activity & Duty:**",
