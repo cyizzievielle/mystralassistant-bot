@@ -10474,8 +10474,9 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
       const pStatus = getMemberPresenceStatus(m);
       const isOnline = pStatus !== "offline";
       const statusEmoji = isOnline ? "<a:open:1523182738054713424>" : "<a:close:1523182754454306967>";
-
-      memberLines.push(`└─ ${statusEmoji} <@${m.id}> **@${m.user.username}**`);
+      const rawUser = m.user?.username;
+      const usernameText = rawUser ? `@${rawUser}` : `@${m.displayName || "staff"}`;
+      memberLines.push(`└─ ${statusEmoji} <@${m.id}> (\`${usernameText}\`)`);
     });
 
     const headerTitle = roleLabel ? `✧ . <@&${role.id}> - ${roleLabel}` : `✧ . <@&${role.id}>`;
