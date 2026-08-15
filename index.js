@@ -10068,7 +10068,7 @@ async function checkInviteLinkAlert(message) {
     const logChDoc = await MetaText.findOne({ key: `invitelog_channel_${guild.id}` }).lean().catch(() => null);
     if (!logChDoc?.value) return false;
 
-    const alertChannel = guild.channels.cache.get(logChDoc.value);
+    const alertChannel = guild.channels.cache.get(logChDoc.value) || await guild.channels.fetch(logChDoc.value).catch(() => null);
     if (!alertChannel?.isTextBased()) return false;
 
     // Whitelist checks
@@ -10249,7 +10249,7 @@ async function sendStaffLogEntry(guild, title, detailsArray) {
     const chDoc = await MetaText.findOne({ key: `stafflog_channel_${guild.id}` }).lean().catch(() => null);
     if (!chDoc?.value) return;
 
-    const logCh = guild.channels.cache.get(chDoc.value);
+    const logCh = guild.channels.cache.get(chDoc.value) || await guild.channels.fetch(chDoc.value).catch(() => null);
     if (!logCh?.isTextBased()) return;
 
     const nowTs = Math.floor(Date.now() / 1000);
