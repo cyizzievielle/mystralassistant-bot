@@ -10032,6 +10032,22 @@ function generateGradientRoleIcon(col1, col2) {
   }
 }
 
+function parseDurationMs(str) {
+  if (!str) return 3600000;
+  const match = str.match(/^(\d+)([smhd])$/i);
+  if (!match) {
+    const num = parseInt(str);
+    return isNaN(num) ? 3600000 : num * 3600000;
+  }
+  const val = parseInt(match[1]);
+  const unit = match[2].toLowerCase();
+  if (unit === "s") return val * 1000;
+  if (unit === "m") return val * 60000;
+  if (unit === "h") return val * 3600000;
+  if (unit === "d") return val * 86400000;
+  return 3600000;
+}
+
 // ===================== ANTI-INVITE DETECTOR SYSTEM =====================
 async function checkInviteLinkAlert(message) {
   try {
@@ -10089,6 +10105,28 @@ async function checkInviteLinkAlert(message) {
     const wlChannels = Array.isArray(wlChannelsDoc?.value) ? wlChannelsDoc.value : [];
     if (wlChannels.includes(message.channel.id)) return false;
 
+    // 4.5. Temporary Whitelists (User, Role, Channel, Link)
+    const tempWlDoc = await MetaText.findOne({ key: `invitelog_wl_temp_${guild.id}` }).lean().catch(() => null);
+    const tempWlList = Array.isArray(tempWlDoc?.value) ? tempWlDoc.value : [];
+    const nowMs = Date.now();
+    const activeTempWl = tempWlList.filter(item => item.expire_at > nowMs);
+    if (activeTempWl.length !== tempWlList.length) {
+      await MetaText.updateOne({ key: `invitelog_wl_temp_${guild.id}` }, { $set: { value: activeTempWl } }).catch(() => null);
+    }
+
+    for (const item of activeTempWl) {
+      const remainingMin = Math.ceil((item.expire_at - nowMs) / 60000);
+      if (item.type === "user" && item.target === message.author.id) {
+        isWhitelisted = true;
+        whitelistReason = `Temp Whitelisted User (${remainingMin}m)`;
+      } else if (item.type === "role" && member.roles.cache.has(item.target)) {
+        isWhitelisted = true;
+        whitelistReason = `Temp Whitelisted Role (${remainingMin}m)`;
+      } else if (item.type === "channel" && item.target === message.channel.id) {
+        return false;
+      }
+    }
+
     // 5. Allowed Server Invites / Vanity URL
     const allowedLinksDoc = await MetaText.findOne({ key: `invitelog_allowed_links_${guild.id}` }).lean().catch(() => null);
     const allowedLinks = Array.isArray(allowedLinksDoc?.value) ? allowedLinksDoc.value.map(l => l.toLowerCase()) : [];
@@ -10102,6 +10140,7 @@ async function checkInviteLinkAlert(message) {
       if (!code) continue;
       if (vanityCode && code === vanityCode) continue;
       if (allowedLinks.includes(code)) continue;
+      if (activeTempWl.some(i => i.type === "link" && i.target.toLowerCase() === code)) continue;
 
       containsUnauthorizedInvite = true;
       detectedInviteCode = match[0];
@@ -10350,7 +10389,7 @@ async function handleBoosterLeave(member) {
 }
 
 // ===================== STAFF PANEL & STAFF PROFILE SYSTEM =====================
-async function buildStaffDirectoryContainer(guild) {
+async function buildStaffDirectoryContainer(guild, filterOption = "all") {
   const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${guild.id}` }).lean().catch(() => null);
   let configuredRoles = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
 
@@ -10386,15 +10425,37 @@ async function buildStaffDirectoryContainer(guild) {
   let activeDivisionsCount = 0;
   const roleSections = [];
 
+  const selectOptions = [
+    { label: "🌐 Tampilkan Semua Divisi", value: "all", default: filterOption === "all" },
+    { label: "🟢 Hanya Staff Online", value: "online_only", default: filterOption === "online_only" }
+  ];
+
   for (const item of configuredRoles) {
     const roleId = typeof item === "string" ? item : item.role_id;
     const roleLabel = (typeof item === "object" && item.label) ? item.label : null;
     const role = guild.roles.cache.get(roleId);
     if (!role) continue;
 
-    const members = role.members
+    if (selectOptions.length < 25) {
+      selectOptions.push({
+        label: `📌 ${role.name}`,
+        value: `role:${role.id}`,
+        description: (roleLabel || role.name).slice(0, 50),
+        default: filterOption === `role:${role.id}`
+      });
+    }
+
+    if (filterOption.startsWith("role:") && filterOption !== `role:${role.id}`) {
+      continue;
+    }
+
+    let members = role.members
       .filter(m => !m.user.bot && !excludedIds.includes(m.id))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+    if (filterOption === "online_only") {
+      members = members.filter(m => m.presence?.status === "online");
+    }
 
     if (!members.size) continue;
 
@@ -10403,8 +10464,8 @@ async function buildStaffDirectoryContainer(guild) {
     members.forEach(m => {
       uniqueStaffSet.add(m.id);
       const pStatus = m.presence?.status || "offline";
-      let statusEmoji = "<a:close:1523182754454306967>";
-      if (pStatus === "online") statusEmoji = "<a:open:1523182738054713424>";
+      const isOnline = pStatus !== "offline";
+      const statusEmoji = isOnline ? "<a:open:1523182738054713424>" : "<a:close:1523182754454306967>";
 
       memberLines.push(`└───── ${statusEmoji} <@${m.id}> **@${m.user.username}**`);
     });
@@ -10436,7 +10497,7 @@ async function buildStaffDirectoryContainer(guild) {
     }
   } else {
     container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("*Belum ada staff terdeteksi atau role staff belum dikonfigurasi (`cstaffpanel addrole @Role [Label]`).*")
+      new TextDisplayBuilder().setContent("*Tidak ada staff terdeteksi untuk kriteria filter ini (`cstaffpanel addrole @Role [Label]`).*")
     );
   }
 
@@ -10450,11 +10511,19 @@ async function buildStaffDirectoryContainer(guild) {
     .setLabel("👤 My Staff Profile")
     .setStyle(ButtonStyle.Primary);
 
-  const row = new ActionRowBuilder().addComponents(refreshBtn, profileBtn);
+  const btnRow = new ActionRowBuilder().addComponents(refreshBtn, profileBtn);
+
+  const filterSelect = new StringSelectMenuBuilder()
+    .setCustomId("staffpanel:filter_division")
+    .setPlaceholder("🔍 Filter Tampilan Divisi Staff...")
+    .addOptions(selectOptions);
+
+  const selectRow = new ActionRowBuilder().addComponents(filterSelect);
 
   container
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-    .addActionRowComponents(row)
+    .addActionRowComponents(selectRow)
+    .addActionRowComponents(btnRow)
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`Mystral Staff Directory • Last Updated <t:${nowTs}:R>`)
@@ -10561,14 +10630,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferUpdate().catch(() => null);
       const container = await buildStaffDirectoryContainer(interaction.guild);
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
+    } else if (customId === "staffpanel:filter_division") {
+      await interaction.deferUpdate().catch(() => null);
+      const selectedValue = interaction.values?.[0] || "all";
+      const container = await buildStaffDirectoryContainer(interaction.guild, selectedValue);
     } else if (customId === "staffpanel:myprofile") {
       const container = await buildStaffProfileContainer(interaction.member);
       await interaction.reply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
+    } else if (customId === "myrole:apply_palette") {
+      await interaction.deferReply({ ephemeral: true }).catch(() => null);
+      const selectedHex = interaction.values?.[0] || "3498DB";
+      const member = interaction.member;
+      const boostRoleDoc = await BoosterCustomRole.findOne({ guild_id: interaction.guild.id, user_id: member.id }).lean().catch(() => null);
+      if (!boostRoleDoc?.role_id) {
+        return interaction.editReply("❌ Kamu belum memiliki Custom Role Booster. Buat terlebih dahulu dengan `cmyrole create <NamaRole> #${selectedHex}`!").catch(() => null);
+      }
+      const role = interaction.guild.roles.cache.get(boostRoleDoc.role_id);
+      if (!role) {
+        return interaction.editReply("❌ Custom Role kamu tidak ditemukan di server.").catch(() => null);
+      }
+      await role.setColor(`#${selectedHex}`).catch(() => null);
+      await BoosterCustomRole.updateOne({ guild_id: interaction.guild.id, user_id: member.id }, { $set: { hex_color: `#${selectedHex}` } }).catch(() => null);
+      return interaction.editReply(`✅ Warna custom role **${role.name}** berhasil diubah ke \`#${selectedHex}\`! 🎨`).catch(() => null);
     }
   } catch (err) {
     console.error("[INTERACTION ERROR]", err);
   }
 });
+
+// Auto-Cron Presence Refresh (Every 5 minutes)
+setInterval(async () => {
+  try {
+    if (!client.isReady()) return;
+    for (const guild of client.guilds.cache.values()) {
+      await updateStaffPanelMessage(guild).catch(() => null);
+    }
+  } catch (err) {
+    console.error("[AUTO CRON STAFF PANEL ERROR]", err);
+  }
+}, 300000);
 
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   // Detect boost start/stop via premiumSince change
@@ -12343,6 +12443,50 @@ client.on(Events.MessageCreate, async (message) => {
     // ===================== MY ROLE (SELF-MANAGE CUSTOM ROLE — BOOSTER ONLY) =====================
     if (cmd === "myrole" || cmd === "cmyrole" || cmd === "myr" || cmd === "roleku" || cmd === "myrolehelp" || cmd === "cbooster" || cmd === "booster") {
       const sub = (args[0] || "").toLowerCase();
+
+      // ─── ACTION: palette / preset — Interactive HEX Color Palette Picker ───
+      if (sub === "palette" || sub === "preset" || sub === "palet" || sub === "colors") {
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## 🎨 AESTHETIC HEX COLOR PALETTES"),
+            new TextDisplayBuilder().setContent(
+              [
+                "Pilih salah satu palet warna estetik di bawah untuk mengubah warna **Custom Role Booster** kamu secara instan!",
+                "",
+                "🌸 **1. Cherry Blossom Pastel** — `#FFB7B2`",
+                "🌌 **2. Midnight Cyberpunk** — `#00F5FF`",
+                "🌙 **3. Dark Aesthetic** — `#2B2D42`",
+                "🌅 **4. Sunset Gold** — `#FFB703`",
+                "💜 **5. Royal Violet** — `#9D4EDD`",
+                "🌿 **6. Emerald Mint** — `#2EC4B6`",
+                "",
+                "💡 *Gunakan menu dropdown di bawah untuk menerapkan warna secara langsung.*"
+              ].join("\n")
+            )
+          );
+
+        const paletteSelect = new StringSelectMenuBuilder()
+          .setCustomId("myrole:apply_palette")
+          .setPlaceholder("🎨 Pilih Palet Warna Role...")
+          .addOptions([
+            { label: "🌸 Cherry Blossom Pastel", value: "FFB7B2", description: "Warna pastel merah muda lembut" },
+            { label: "🌌 Midnight Cyberpunk", value: "00F5FF", description: "Warna neon cyan terang" },
+            { label: "🌙 Dark Aesthetic", value: "2B2D42", description: "Warna abu-abu gelap elegan" },
+            { label: "🌅 Sunset Gold", value: "FFB703", description: "Warna emas keoranyean hangat" },
+            { label: "💜 Royal Violet", value: "9D4EDD", description: "Warna ungu mekar mewah" },
+            { label: "🌿 Emerald Mint", value: "2EC4B6", description: "Warna hijau mint segar" }
+          ]);
+
+        const row = new ActionRowBuilder().addComponents(paletteSelect);
+        container.addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addActionRowComponents(row)
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("Mystral Booster • Custom Role Preset Picker")
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      }
 
       // ─── ACTION: test / testboost — Preview Booster Rewards embed ───
       if (sub === "test" || sub === "testboost" || sub === "cardtest" || sub === "preview" || cmd === "cbooster" && (!sub || sub === "test")) {
@@ -14273,9 +14417,51 @@ client.on(Events.MessageCreate, async (message) => {
         });
       }
 
-      // cinvitelog whitelist user/role/channel
+      // cinvitelog whitelist user/role/channel/temp
       if (sub === "whitelist" || sub === "wl" || sub === "kecualikan") {
         const targetType = (args[1] || "").toLowerCase();
+
+        if (targetType === "temp" || targetType === "temporary" || targetType === "sementara") {
+          const type = (args[2] || "").toLowerCase();
+          const durationStr = args[4] || args[3] || "1h";
+          const durationMs = parseDurationMs(durationStr);
+          const expireAt = Date.now() + durationMs;
+
+          const tempWlDoc = await MetaText.findOne({ key: `invitelog_wl_temp_${message.guild.id}` }).lean().catch(() => null);
+          let tempWlList = Array.isArray(tempWlDoc?.value) ? tempWlDoc.value : [];
+
+          let targetId = "";
+          let labelStr = "";
+
+          if (type === "user" || type === "member") {
+            const user = message.mentions.users.first() || await message.client.users.fetch(args[3]).catch(() => null);
+            if (!user) return message.reply("❌ Mention user yang ingin di-whitelist sementara.\n**Contoh:** `cinvitelog whitelist temp user @User 24h`");
+            targetId = user.id;
+            labelStr = `<@${user.id}> (\`@${user.username}\`)`;
+          } else if (type === "role") {
+            const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[3]);
+            if (!role) return message.reply("❌ Mention role yang ingin di-whitelist sementara.\n**Contoh:** `cinvitelog whitelist temp role @Role 12h`");
+            targetId = role.id;
+            labelStr = `<@&${role.id}>`;
+          } else if (type === "channel") {
+            const ch = message.mentions.channels.first() || message.guild.channels.cache.get(args[3]);
+            if (!ch) return message.reply("❌ Mention channel yang ingin di-whitelist sementara.\n**Contoh:** `cinvitelog whitelist temp channel #channel 6h`");
+            targetId = ch.id;
+            labelStr = `<#${ch.id}>`;
+          } else if (type === "link" || type === "invite") {
+            const code = (args[3] || "").replace(/https?:\/\/(www\.)?discord\.(gg|com\/invite)\//gi, "").trim().toLowerCase();
+            if (!code) return message.reply("❌ Tuliskan invite link/code yang ingin di-whitelist sementara.\n**Contoh:** `cinvitelog whitelist temp link discord.gg/xxx 2h`");
+            targetId = code;
+            labelStr = `Link Invite \`${code}\``;
+          } else {
+            return message.reply("❌ Format: `cinvitelog whitelist temp <user|role|channel|link> <target> <durasi>` (contoh: `24h`, `12h`, `60m`).");
+          }
+
+          tempWlList.push({ type, target: targetId, expire_at: expireAt });
+          await MetaText.updateOne({ key: `invitelog_wl_temp_${message.guild.id}` }, { $set: { value: tempWlList } }, { upsert: true }).catch(() => null);
+
+          return message.reply(`⏳ **Temporary Whitelist Berhasil Di-set!**\nTarget ${labelStr} di-whitelist selama \`${durationStr}\` (Kadaluarsa: <t:${Math.floor(expireAt/1000)}:R>).`);
+        }
 
         if (targetType === "user" || targetType === "member") {
           const user = message.mentions.users.first() || await message.client.users.fetch(args[2]).catch(() => null);
@@ -14534,6 +14720,42 @@ client.on(Events.MessageCreate, async (message) => {
           );
 
         return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      }
+
+      // cstafflog stats [@Staff]
+      if (sub === "stats" || sub === "stat" || sub === "performa") {
+        const targetStaff = message.mentions.users.first() || (args[1] ? await message.client.users.fetch(args[1]).catch(() => null) : message.author);
+
+        const allNotesDocs = await MetaText.find({ key: { $regex: `^staff_notes_${message.guild.id}_` } }).lean().catch(() => []);
+        let totalNotesAuthored = 0;
+        allNotesDocs.forEach(doc => {
+          if (Array.isArray(doc.value)) {
+            totalNotesAuthored += doc.value.filter(n => n.staff_id === targetStaff.id).length;
+          }
+        });
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`## 📊 STAFF PERFORMANCE STATS — ${targetStaff.username}`),
+            new TextDisplayBuilder().setContent(
+              [
+                `▸ **Staff Member:** <@${targetStaff.id}> (\`${targetStaff.tag}\`)`,
+                `▸ **User ID:** \`${targetStaff.id}\``,
+                "",
+                "**Statistik Aktivitas & Tindakan:**",
+                `• **Catatan Staff Ditulis:** \`${totalNotesAuthored}\` Catatan`,
+                `• **Status Akses Log:** <a:971828statusonline:1521081779455397888> Active Moderator`,
+                "",
+                "💡 *Semua tindakan moderasi (role, kick, ban, timeout) tercatat secara otomatis di channel staff log.*"
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Staff Performance Dashboard • <t:${Math.floor(Date.now()/1000)}:R>`)
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
       }
 
       // Default Panel / Config / Status / Help
