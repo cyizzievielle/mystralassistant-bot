@@ -10454,7 +10454,7 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
     if (filterOption === "online_only") {
-      members = members.filter(m => m.presence?.status === "online");
+      members = members.filter(m => m.presence?.status && m.presence.status !== "offline");
     }
 
     if (!members.size) continue;
@@ -10467,7 +10467,7 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
       const isOnline = pStatus !== "offline";
       const statusEmoji = isOnline ? "<a:open:1523182738054713424>" : "<a:close:1523182754454306967>";
 
-      memberLines.push(`└───── ${statusEmoji} <@${m.id}> **@${m.user.username}**`);
+      memberLines.push(`└─ ${statusEmoji} <@${m.id}> **@${m.user.username}**`);
     });
 
     const headerTitle = roleLabel ? `✧ . <@&${role.id}> - ${roleLabel}` : `✧ . <@&${role.id}>`;
@@ -10483,7 +10483,7 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
       new TextDisplayBuilder().setContent(
         [
           `📊 . **METRICS**`,
-          `└───── Staff: \`${totalStaffCount}\` . Divisions: \`${activeDivisionsCount}/${configuredRoles.length}\``,
+          `└─ Staff: \`${totalStaffCount}\` . Divisions: \`${activeDivisionsCount}/${configuredRoles.length}\``,
           `------------------------------------`
         ].join("\n")
       )
@@ -10501,17 +10501,12 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
     );
   }
 
-  const refreshBtn = new ButtonBuilder()
-    .setCustomId("staffpanel:refresh")
-    .setLabel("🔄 Refresh Status")
-    .setStyle(ButtonStyle.Secondary);
-
   const profileBtn = new ButtonBuilder()
     .setCustomId("staffpanel:myprofile")
     .setLabel("👤 My Staff Profile")
     .setStyle(ButtonStyle.Primary);
 
-  const btnRow = new ActionRowBuilder().addComponents(refreshBtn, profileBtn);
+  const btnRow = new ActionRowBuilder().addComponents(profileBtn);
 
   const filterSelect = new StringSelectMenuBuilder()
     .setCustomId("staffpanel:filter_division")
@@ -10626,14 +10621,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
     const customId = interaction.customId || "";
 
-    if (customId === "staffpanel:refresh") {
-      await interaction.deferUpdate().catch(() => null);
-      const container = await buildStaffDirectoryContainer(interaction.guild);
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
-    } else if (customId === "staffpanel:filter_division") {
+    if (customId === "staffpanel:filter_division") {
       await interaction.deferUpdate().catch(() => null);
       const selectedValue = interaction.values?.[0] || "all";
       const container = await buildStaffDirectoryContainer(interaction.guild, selectedValue);
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
     } else if (customId === "staffpanel:myprofile") {
       const container = await buildStaffProfileContainer(interaction.member);
       await interaction.reply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
@@ -14460,7 +14452,7 @@ client.on(Events.MessageCreate, async (message) => {
           tempWlList.push({ type, target: targetId, expire_at: expireAt });
           await MetaText.updateOne({ key: `invitelog_wl_temp_${message.guild.id}` }, { $set: { value: tempWlList } }, { upsert: true }).catch(() => null);
 
-          return message.reply(`⏳ **Temporary Whitelist Berhasil Di-set!**\nTarget ${labelStr} di-whitelist selama \`${durationStr}\` (Kadaluarsa: <t:${Math.floor(expireAt/1000)}:R>).`);
+          return message.reply(`⏳ **Temporary Whitelist Berhasil Di-set!**\nTarget ${labelStr} di-whitelist selama \`${durationStr}\` (Kadaluarsa: <t:${Math.floor(expireAt / 1000)}:R>).`);
         }
 
         if (targetType === "user" || targetType === "member") {
@@ -14752,7 +14744,7 @@ client.on(Events.MessageCreate, async (message) => {
           )
           .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
           .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`Mystral • Staff Performance Dashboard • <t:${Math.floor(Date.now()/1000)}:R>`)
+            new TextDisplayBuilder().setContent(`Mystral • Staff Performance Dashboard • <t:${Math.floor(Date.now() / 1000)}:R>`)
           );
 
         return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
