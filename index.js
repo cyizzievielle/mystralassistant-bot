@@ -10419,7 +10419,12 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
   const excludedDoc = await MetaText.findOne({ key: `staffpanel_excluded_${guild.id}` }).lean().catch(() => null);
   const excludedIds = Array.isArray(excludedDoc?.value) ? excludedDoc.value : [];
 
-  await guild.members.fetch().catch(() => null);
+  await guild.members.fetch({ withPresences: true }).catch(() => guild.members.fetch().catch(() => null));
+
+  function getMemberPresenceStatus(m) {
+    const p = m.presence || guild.presences.cache.get(m.id);
+    return p?.status || "offline";
+  }
 
   const uniqueStaffSet = new Set();
   let activeDivisionsCount = 0;
@@ -10454,7 +10459,10 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
     if (filterOption === "online_only") {
-      members = members.filter(m => m.presence?.status && m.presence.status !== "offline");
+      members = members.filter(m => {
+        const st = getMemberPresenceStatus(m);
+        return st && st !== "offline";
+      });
     }
 
     if (!members.size) continue;
@@ -10463,7 +10471,7 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
     const memberLines = [];
     members.forEach(m => {
       uniqueStaffSet.add(m.id);
-      const pStatus = m.presence?.status || "offline";
+      const pStatus = getMemberPresenceStatus(m);
       const isOnline = pStatus !== "offline";
       const statusEmoji = isOnline ? "<a:open:1523182738054713424>" : "<a:close:1523182754454306967>";
 
