@@ -10170,6 +10170,19 @@ async function checkInviteLinkAlert(message) {
       statusMsgText = "🚨 *Pesan Dibiarkan (Warning Only)*";
     }
 
+    // Fetch invite details to get target server name
+    let targetServerName = "Tidak dapat memuat info (Invite kadaluarsa / invalid)";
+    try {
+      const cleanCodeMatch = detectedInviteCode.match(/(?:discord\.(?:gg|io|me|li|app)|discord\.com\/invite)\/([a-zA-Z0-9_-]+)/i);
+      const rawCode = cleanCodeMatch ? cleanCodeMatch[1] : detectedInviteCode;
+      if (rawCode) {
+        const inv = await message.client.fetchInvite(rawCode).catch(() => null);
+        if (inv && inv.guild) {
+          targetServerName = `${inv.guild.name} (ID: ${inv.guild.id})`;
+        }
+      }
+    } catch { }
+
     // Send Alert Card to Invite Log Channel
     const nowTs = Math.floor(Date.now() / 1000);
     const snippet = message.content.length > 800 ? message.content.slice(0, 800) + "..." : message.content;
@@ -10180,9 +10193,9 @@ async function checkInviteLinkAlert(message) {
         new TextDisplayBuilder().setContent(
           [
             `▸ **Pengirim (User):** <@${message.author.id}> (\`@${message.author.username}\`)`,
-            `▸ **Server Nickname:** \`${member.displayName}\``,
             `▸ **User ID:** \`${message.author.id}\``,
             `▸ **Channel:** <#${message.channel.id}> (\`#${message.channel.name}\`)`,
+            `▸ **Target Server:** \`${targetServerName}\``,
             `▸ **Link Dideteksi:** \`${detectedInviteCode}\``,
             `▸ **Status Pesan:** ${statusMsgText}`,
             "",
@@ -10210,9 +10223,9 @@ async function checkInviteLinkAlert(message) {
         .setDescription(
           [
             `▸ **Pengirim (User):** <@${message.author.id}> (\`@${message.author.username}\`)`,
-            `▸ **Server Nickname:** \`${member.displayName}\``,
             `▸ **User ID:** \`${message.author.id}\``,
             `▸ **Channel:** <#${message.channel.id}> (\`#${message.channel.name}\`)`,
+            `▸ **Target Server:** \`${targetServerName}\``,
             `▸ **Link Dideteksi:** \`${detectedInviteCode}\``,
             `▸ **Status Pesan:** ${statusMsgText}`,
             "",
@@ -10236,9 +10249,12 @@ async function checkInviteLinkAlert(message) {
 // Helper: Check if staff action matches configured role filter
 async function isActionAllowedByStaffLogRoleFilter(guild, executorUser = null, targetRoles = [], targetMember = null) {
   try {
+    // 0. Ignore automated bot actions (Arcane, Carl-bot, Dyno, etc.)
+    if (executorUser && executorUser.bot) return false;
+
     const filterDoc = await MetaText.findOne({ key: `stafflog_roles_${guild.id}` }).lean().catch(() => null);
     const filterRoleIds = Array.isArray(filterDoc?.value) ? filterDoc.value : [];
-    if (!filterRoleIds.length) return true; // Default: allow all if no filter configured
+    if (!filterRoleIds.length) return true; // Default: allow all human staff if no filter configured
 
     if (executorUser) {
       const execMember = guild.members.cache.get(executorUser.id) || await guild.members.fetch(executorUser.id).catch(() => null);
