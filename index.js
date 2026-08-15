@@ -10382,21 +10382,9 @@ async function buildStaffDirectoryContainer(guild) {
 
   await guild.members.fetch().catch(() => null);
 
-  const nowTs = Math.floor(Date.now() / 1000);
-  const container = new ContainerBuilder()
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`# 👥 ${guild.name} — Staff Directory`),
-      new TextDisplayBuilder().setContent(
-        [
-          "Selamat datang di **Directory & Status Kehadiran Staff Server**.",
-          "Berikut adalah daftar pengurus dan staff server yang dikelompokkan berdasarkan divisi/role.",
-          "",
-          "> **Keterangan Status:** 🟢 Online | 🌙 Idle | 🔴 DND | ⚪ Offline",
-        ].join("\n")
-      )
-    );
-
-  let totalStaffCount = 0;
+  const uniqueStaffSet = new Set();
+  let activeDivisionsCount = 0;
+  const roleSections = [];
 
   for (const item of configuredRoles) {
     const roleId = typeof item === "string" ? item : item.role_id;
@@ -10410,29 +10398,45 @@ async function buildStaffDirectoryContainer(guild) {
 
     if (!members.size) continue;
 
+    activeDivisionsCount++;
     const memberLines = [];
     members.forEach(m => {
-      totalStaffCount++;
+      uniqueStaffSet.add(m.id);
       const pStatus = m.presence?.status || "offline";
-      let statusEmoji = "⚪";
+      let statusEmoji = "🔴";
       if (pStatus === "online") statusEmoji = "🟢";
-      else if (pStatus === "idle") statusEmoji = "🌙";
-      else if (pStatus === "dnd") statusEmoji = "🔴";
 
-      memberLines.push(`${statusEmoji} **${m.displayName}** (\`@${m.user.username}\`) — <@${m.id}>`);
+      memberLines.push(`└───── ${statusEmoji} <@${m.id}> **@${m.user.username}**`);
     });
 
-    const headerTitle = roleLabel ? `### 📌 ${roleLabel} (${role.name})` : `### 📌 ${role.name}`;
-    const sectionText = `${headerTitle}\n${memberLines.join("\n")}`;
-
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(sectionText.slice(0, 3990))
-    );
+    const headerTitle = roleLabel ? `✧ . <@&${role.id}> - ${roleLabel}` : `✧ . <@&${role.id}>`;
+    roleSections.push(`${headerTitle}\n${memberLines.join("\n")}`);
   }
 
-  if (totalStaffCount === 0) {
+  const totalStaffCount = uniqueStaffSet.size;
+  const nowTs = Math.floor(Date.now() / 1000);
+
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent("✦ . **MYSTRAL DIRECTORY**\n*Real-time monitoring of staff availability and server presence.*"),
+      new TextDisplayBuilder().setContent(
+        [
+          `📊 . **METRICS**`,
+          `└───── Staff: \`${totalStaffCount}\` . Divisions: \`${activeDivisionsCount}/${configuredRoles.length}\``,
+          `------------------------------------`
+        ].join("\n")
+      )
+    );
+
+  if (roleSections.length > 0) {
+    for (const section of roleSections) {
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(section.slice(0, 3990))
+      );
+    }
+  } else {
     container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("*Belum ada staff terdeteksi atau role staff belum dikonfigurasi (`cstaffpanel addrole @Role`).*")
+      new TextDisplayBuilder().setContent("*Belum ada staff terdeteksi atau role staff belum dikonfigurasi (`cstaffpanel addrole @Role [Label]`).*")
     );
   }
 
@@ -10453,7 +10457,7 @@ async function buildStaffDirectoryContainer(guild) {
     .addActionRowComponents(row)
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`Mystral Staff Directory • Total ${totalStaffCount} Staff • <t:${nowTs}:R>`)
+      new TextDisplayBuilder().setContent(`Mystral Staff Directory • Last Updated <t:${nowTs}:R>`)
     );
 
   return container;
@@ -10493,8 +10497,8 @@ async function buildStaffProfileContainer(member) {
   let dutyText = "⚪ Tidak Ada Tugas Hari Ini";
   if (dutyDoc) {
     const statusLabel = dutyDoc.status === "completed" ? "🟢 Selesai (Completed)" :
-                        dutyDoc.status === "busy" ? "🔴 Berhalangan (Busy)" :
-                        dutyDoc.status === "taken_over" ? "🔄 Diambil Alih" : "⏳ Menunggu Tugas";
+      dutyDoc.status === "busy" ? "🔴 Berhalangan (Busy)" :
+        dutyDoc.status === "taken_over" ? "🔄 Diambil Alih" : "⏳ Menunggu Tugas";
     dutyText = `Slot ${dutyDoc.slot} — ${statusLabel}`;
   }
 
@@ -14647,8 +14651,8 @@ client.on(Events.MessageCreate, async (message) => {
     // ===================== STAFF PROFILE COMMAND ROUTER (CSTAFFPROFILE) =====================
     if (cmd === "staffprofile" || cmd === "cstaffprofile" || cmd === "profile" || cmd === "cprofile") {
       const targetMember = message.mentions.members.first() ||
-                           (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null) ||
-                           message.member;
+        (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null) ||
+        message.member;
 
       const container = await buildStaffProfileContainer(targetMember);
       return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
