@@ -10206,6 +10206,38 @@ async function checkInviteLinkAlert(message) {
   }
 }
 
+// Helper: Check if staff action matches configured role filter
+async function isActionAllowedByStaffLogRoleFilter(guild, executorUser = null, targetRoles = [], targetMember = null) {
+  try {
+    const filterDoc = await MetaText.findOne({ key: `stafflog_roles_${guild.id}` }).lean().catch(() => null);
+    const filterRoleIds = Array.isArray(filterDoc?.value) ? filterDoc.value : [];
+    if (!filterRoleIds.length) return true; // Default: allow all
+
+    if (executorUser) {
+      const execMember = guild.members.cache.get(executorUser.id) || await guild.members.fetch(executorUser.id).catch(() => null);
+      if (execMember && filterRoleIds.some(rId => execMember.roles.cache.has(rId))) {
+        return true;
+      }
+    }
+
+    if (targetRoles && targetRoles.length > 0) {
+      if (targetRoles.some(rId => filterRoleIds.includes(typeof rId === "string" ? rId : rId.id))) {
+        return true;
+      }
+    }
+
+    if (targetMember) {
+      if (filterRoleIds.some(rId => targetMember.roles.cache.has(rId))) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 // ===================== STAFF ACTION & MODERATION LOG SYSTEM =====================
 async function sendStaffLogEntry(guild, title, detailsArray) {
   try {
@@ -10776,24 +10808,29 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         }
       } catch { }
 
-      if (addedRoles.size > 0) {
-        await sendStaffLogEntry(guild, "➕ Staff Action: Role Added", [
-          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-          `▸ **Server Nickname:** \`${newMember.displayName}\``,
-          `▸ **Role Ditambahkan:** ${addedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
-          `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
-        ]);
-      }
+      const targetRoleIds = [...addedRoles.keys(), ...removedRoles.keys()];
+      const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, executor, targetRoleIds, newMember);
 
-      if (removedRoles.size > 0) {
-        await sendStaffLogEntry(guild, "➖ Staff Action: Role Removed", [
-          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-          `▸ **Server Nickname:** \`${newMember.displayName}\``,
-          `▸ **Role Ditarik:** ${removedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
-          `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
-        ]);
+      if (isAllowed) {
+        if (addedRoles.size > 0) {
+          await sendStaffLogEntry(guild, "➕ Staff Action: Role Added", [
+            `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+            `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+            `▸ **Server Nickname:** \`${newMember.displayName}\``,
+            `▸ **Role Ditambahkan:** ${addedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
+            `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
+          ]);
+        }
+
+        if (removedRoles.size > 0) {
+          await sendStaffLogEntry(guild, "➖ Staff Action: Role Removed", [
+            `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+            `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+            `▸ **Server Nickname:** \`${newMember.displayName}\``,
+            `▸ **Role Ditarik:** ${removedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
+            `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
+          ]);
+        }
       }
     }
 
@@ -10813,14 +10850,17 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         }
       } catch { }
 
-      const untilTs = Math.floor(newTimeout / 1000);
-      await sendStaffLogEntry(guild, "⏳ Staff Action: Member Timed Out", [
-        `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-        `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-        `▸ **Server Nickname:** \`${newMember.displayName}\``,
-        `▸ **Timeout Sampai:** <t:${untilTs}:F> (<t:${untilTs}:R>)`,
-        `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
-      ]);
+      const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, executor, [], newMember);
+      if (isAllowed) {
+        const untilTs = Math.floor(newTimeout / 1000);
+        await sendStaffLogEntry(guild, "⏳ Staff Action: Member Timed Out", [
+          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+          `▸ **Server Nickname:** \`${newMember.displayName}\``,
+          `▸ **Timeout Sampai:** <t:${untilTs}:F> (<t:${untilTs}:R>)`,
+          `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
+        ]);
+      }
     } else if (oldTimeout && !newTimeout) {
       let executor = null;
       try {
@@ -10831,12 +10871,15 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         }
       } catch { }
 
-      await sendStaffLogEntry(guild, "🔓 Staff Action: Timeout Removed", [
-        `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-        `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-        `▸ **Server Nickname:** \`${newMember.displayName}\``,
-        `▸ **Status:** *Timeout telah dicabut / berakhir*`,
-      ]);
+      const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, executor, [], newMember);
+      if (isAllowed) {
+        await sendStaffLogEntry(guild, "🔓 Staff Action: Timeout Removed", [
+          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+          `▸ **Server Nickname:** \`${newMember.displayName}\``,
+          `▸ **Status:** *Timeout telah dicabut / berakhir*`,
+        ]);
+      }
     }
   } catch (err) {
     console.error("[STAFF LOG MEMBER UPDATE FAIL]", err);
@@ -10850,13 +10893,16 @@ client.on(Events.GuildMemberRemove, async (member) => {
     const entry = logs?.entries?.first();
 
     if (entry && entry.target?.id === member.id && (Date.now() - entry.createdTimestamp < 10000)) {
-      await sendStaffLogEntry(guild, "👢 Staff Action: Member Kicked", [
-        `▸ **Staff (Executor):** <@${entry.executor.id}> (\`${entry.executor.tag}\`)`,
-        `▸ **Target User:** <@${member.id}> (\`${member.user.tag}\`)`,
-        `▸ **Server Nickname:** \`${member.displayName}\``,
-        `▸ **User ID:** \`${member.id}\``,
-        `▸ **Alasan Kick:** \`${entry.reason || "Tidak ada alasan"}\``,
-      ]);
+      const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, entry.executor, [], member);
+      if (isAllowed) {
+        await sendStaffLogEntry(guild, "👢 Staff Action: Member Kicked", [
+          `▸ **Staff (Executor):** <@${entry.executor.id}> (\`${entry.executor.tag}\`)`,
+          `▸ **Target User:** <@${member.id}> (\`${member.user.tag}\`)`,
+          `▸ **Server Nickname:** \`${member.displayName}\``,
+          `▸ **User ID:** \`${member.id}\``,
+          `▸ **Alasan Kick:** \`${entry.reason || "Tidak ada alasan"}\``,
+        ]);
+      }
     }
   } catch (err) {
     console.error("[STAFF LOG KICK FAIL]", err);
@@ -10872,12 +10918,15 @@ client.on(Events.GuildBanAdd, async (ban) => {
     const executor = entry?.target?.id === ban.user.id ? entry.executor : null;
     const reason = ban.reason || entry?.reason || "Tidak ada alasan";
 
-    await sendStaffLogEntry(guild, "🔨 Staff Action: Member Banned", [
-      `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Unknown Staff*"}`,
-      `▸ **Target User:** <@${ban.user.id}> (\`${ban.user.tag}\`)`,
-      `▸ **User ID:** \`${ban.user.id}\``,
-      `▸ **Alasan Ban:** \`${reason}\``,
-    ]);
+    const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, executor, []);
+    if (isAllowed) {
+      await sendStaffLogEntry(guild, "🔨 Staff Action: Member Banned", [
+        `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Unknown Staff*"}`,
+        `▸ **Target User:** <@${ban.user.id}> (\`${ban.user.tag}\`)`,
+        `▸ **User ID:** \`${ban.user.id}\``,
+        `▸ **Alasan Ban:** \`${reason}\``,
+      ]);
+    }
   } catch (err) {
     console.error("[STAFF LOG BAN FAIL]", err);
   }
@@ -14834,10 +14883,86 @@ client.on(Events.MessageCreate, async (message) => {
         return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
       }
 
+      // cstafflog addrole @role
+      if (sub === "addrole" || sub === "roleadd") {
+        const targetRole = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
+        if (!targetRole) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Role Tidak Valid").setDescription("Mention role yang ingin ditambahkan ke daftar filter staff log.\n\n**Contoh:** `cstafflog addrole @Moderator`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const filterDoc = await MetaText.findOne({ key: `stafflog_roles_${message.guild.id}` }).lean().catch(() => null);
+        const currentRoles = Array.isArray(filterDoc?.value) ? filterDoc.value : [];
+
+        if (currentRoles.includes(targetRole.id)) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("⚠️ Role Sudah Ada").setDescription(`Role <@&${targetRole.id}> sudah ada di daftar filter staff log.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        currentRoles.push(targetRole.id);
+        await MetaText.updateOne(
+          { key: `stafflog_roles_${message.guild.id}` },
+          { $set: { value: currentRoles } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Filter Role Ditambahkan").setDescription(`Aktivitas staff log sekarang juga mencakup/terbatas untuk role <@&${targetRole.id}>.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cstafflog removerole @role
+      if (sub === "removerole" || sub === "roleremove" || sub === "delrole") {
+        const targetRole = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
+        if (!targetRole) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Role Tidak Valid").setDescription("Mention role yang ingin dihapus dari filter staff log.\n\n**Contoh:** `cstafflog removerole @Moderator`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const filterDoc = await MetaText.findOne({ key: `stafflog_roles_${message.guild.id}` }).lean().catch(() => null);
+        let currentRoles = Array.isArray(filterDoc?.value) ? filterDoc.value : [];
+
+        currentRoles = currentRoles.filter(id => id !== targetRole.id);
+        await MetaText.updateOne(
+          { key: `stafflog_roles_${message.guild.id}` },
+          { $set: { value: currentRoles } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Filter Role Dihapus").setDescription(`Role <@&${targetRole.id}> telah dihapus dari filter staff log.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cstafflog clearroles
+      if (sub === "clearroles" || sub === "resetroles") {
+        await MetaText.updateOne(
+          { key: `stafflog_roles_${message.guild.id}` },
+          { $set: { value: [] } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Filter Role Direset").setDescription("Filter role staff log telah di-reset. Sekarang semua role akan dicatat kembali (Default).")],
+          allowedMentions: { parse: [] },
+        });
+      }
+
       // Default Panel / Config / Status / Help
       const toggleDoc = await MetaText.findOne({ key: `stafflog_enabled_${message.guild.id}` }).lean().catch(() => null);
       const isEnabled = toggleDoc?.value !== "off";
       const logChDoc = await MetaText.findOne({ key: `stafflog_channel_${message.guild.id}` }).lean().catch(() => null);
+      const filterDoc = await MetaText.findOne({ key: `stafflog_roles_${message.guild.id}` }).lean().catch(() => null);
+      const filterRoleIds = Array.isArray(filterDoc?.value) ? filterDoc.value : [];
+      const filterRolesText = filterRoleIds.length ? filterRoleIds.map(id => `<@&${id}>`).join(", ") : "*Semua Role (Default)*";
 
       const container = new ContainerBuilder()
         .addTextDisplayComponents(
@@ -14846,6 +14971,7 @@ client.on(Events.MessageCreate, async (message) => {
             [
               `▸ **Status Logger:** ${isEnabled ? "<a:971828statusonline:1521081779455397888> **[ ON / AKTIF ]**" : "<a:460240statusoffline:1521082558664806501> **[ OFF / NONAKTIF ]**"}`,
               `▸ **Staff Log Channel:** ${logChDoc?.value ? `<#${logChDoc.value}>` : "*Belum di-set (Ketik `cstafflog setchannel #channel`)*"}`,
+              `▸ **Filter Role Khusus:** ${filterRolesText}`,
               "",
               "**Aktivitas Yang Otomatis Dicatat:**",
               "• ➕ **Role Granted** (Penambahan role member oleh staff)",
@@ -14864,6 +14990,9 @@ client.on(Events.MessageCreate, async (message) => {
               "## 📌 Perintah Pengaturan:",
               "• `cstafflog setchannel #channel` — Set channel staff log",
               "• `cstafflog toggle on|off` — Aktifkan/matikan sistem log",
+              "• `cstafflog addrole @role` — Tambah filter role khusus yang dicatat",
+              "• `cstafflog removerole @role` — Hapus role dari filter log",
+              "• `cstafflog clearroles` — Reset filter role (catat semua role)",
               "• `cstafflog note @user <catatan>` — Tambah catatan staff untuk member",
               "• `cstafflog viewnotes @user` — Lihat riwayat catatan staff member",
             ].join("\n")
