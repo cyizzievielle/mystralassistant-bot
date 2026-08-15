@@ -10509,6 +10509,15 @@ async function buildStaffDirectoryContainer(guild, filterOption = "all") {
     );
   }
 
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      [
+        "------------------------------------",
+        "<a:open:1523182738054713424> **Online/Active** . <a:close:1523182754454306967> **Offline**"
+      ].join("\n")
+    )
+  );
+
   const profileBtn = new ButtonBuilder()
     .setCustomId("staffpanel:myprofile")
     .setLabel("👤 My Staff Profile")
