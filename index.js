@@ -42,6 +42,7 @@ const {
   FileUploadBuilder,
   LabelBuilder,
   ChannelType,
+  AuditLogEvent,
 } = require("discord.js");
 
 const { createCanvas, loadImage, GlobalFonts } = require("@napi-rs/canvas");
@@ -92,6 +93,61 @@ async function removeImageBackground(imageBuffer) {
 
   ctx.putImageData(imgData, 0, 0);
   return canvas.toBuffer("image/png");
+}
+
+// Apply linear gradient color to non-transparent pixels of a PNG buffer
+async function applyGradientToTransparentImage(pngBuffer, color1Hex, color2Hex) {
+  const { createCanvas, loadImage } = require("@napi-rs/canvas");
+  const img = await loadImage(pngBuffer);
+  const W = img.width;
+  const H = img.height;
+
+  // Parse hex colors to RGB
+  const parseHex = (h) => {
+    const hex = h.replace("#", "");
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+    ];
+  };
+
+  const [r1, g1, b1] = parseHex(color1Hex);
+  const [r2, g2, b2] = parseHex(color2Hex || color1Hex);
+
+  // Read alpha mask from original image
+  const maskCanvas = createCanvas(W, H);
+  const maskCtx = maskCanvas.getContext("2d");
+  maskCtx.drawImage(img, 0, 0);
+  const maskData = maskCtx.getImageData(0, 0, W, H);
+
+  // Draw gradient on a new canvas
+  const gradCanvas = createCanvas(W, H);
+  const gradCtx = gradCanvas.getContext("2d");
+  const grad = gradCtx.createLinearGradient(0, 0, W, H);
+  grad.addColorStop(0, color1Hex.startsWith("#") ? color1Hex : `#${color1Hex}`);
+  grad.addColorStop(1, (color2Hex || color1Hex).startsWith("#") ? (color2Hex || color1Hex) : `#${color2Hex || color1Hex}`);
+  gradCtx.fillStyle = grad;
+  gradCtx.fillRect(0, 0, W, H);
+  const gradData = gradCtx.getImageData(0, 0, W, H);
+
+  // Combine: use gradient color but original alpha mask
+  const outCanvas = createCanvas(W, H);
+  const outCtx = outCanvas.getContext("2d");
+  const outData = outCtx.getImageData(0, 0, W, H);
+  for (let i = 0; i < maskData.data.length; i += 4) {
+    const alpha = maskData.data[i + 3];
+    if (alpha > 0) {
+      outData.data[i] = gradData.data[i];     // R from gradient
+      outData.data[i + 1] = gradData.data[i + 1]; // G from gradient
+      outData.data[i + 2] = gradData.data[i + 2]; // B from gradient
+      outData.data[i + 3] = alpha;                // A from mask
+    } else {
+      outData.data[i + 3] = 0; // fully transparent
+    }
+  }
+  outCtx.putImageData(outData, 0, 0);
+  return outCanvas.toBuffer("image/png");
 }
 
 // ===================== CONFIG =====================
@@ -455,6 +511,11 @@ const {
   StreakAchievement,
   StreakFreezeInventory,
   TimedRole,
+  LeaderboardBlacklist,
+  BoosterCustomRole,
+  StaffTagConfig,
+  StaffTagExempt,
+  StaffTagSchedule,
 } = require("./db");
 
 let db = null;
@@ -835,6 +896,24 @@ async function mongoAll(sql, params = []) {
       return docs.map((d) => d.toObject());
     }
 
+    // NOTE: voice_activity_daily HARUS dicek SEBELUM activity_daily
+    // karena string "voice_activity_daily" mengandung "activity_daily"
+    // sehingga kalau urutannya terbalik, query voice akan salah masuk ke branch chat!
+    if (s.includes("voice_activity_daily") && s.includes("group by")) {
+      const datePattern = params[0] || "";
+      const regexStr = "^" + String(datePattern).replace(/%/g, ".*");
+      const model = getMongoModel("voice_activity_daily");
+      if (model) {
+        const docs = await model.aggregate([
+          { $match: { day: { $regex: new RegExp(regexStr) } } },
+          { $group: { _id: "$user_id", total: { $sum: "$duration" } } },
+          { $sort: { total: -1 } },
+          { $project: { _id: 0, user_id: "$_id", total: 1 } }
+        ]);
+        return docs;
+      }
+    }
+
     if (s.includes("activity_daily_channel") && s.includes("group by")) {
       const datePattern = params[0] || "";
       const regexStr = "^" + String(datePattern).replace(/%/g, ".*");
@@ -860,7 +939,8 @@ async function mongoAll(sql, params = []) {
       }
     }
 
-    if (s.includes("activity_daily") && s.includes("group by")) {
+    // PENTING: gunakan !s.includes("voice_activity_daily") untuk double-safety
+    if (s.includes("activity_daily") && !s.includes("voice_activity_daily") && s.includes("group by")) {
       const datePattern = params[0] || "";
       const regexStr = "^" + String(datePattern).replace(/%/g, ".*");
       const model = getMongoModel("activity_daily");
@@ -873,21 +953,6 @@ async function mongoAll(sql, params = []) {
           { $group: { _id: "$user_id", total: { $sum: "$msg_count" } } },
           { $sort: { total: -1 } },
           { $limit: limitVal },
-          { $project: { _id: 0, user_id: "$_id", total: 1 } }
-        ]);
-        return docs;
-      }
-    }
-
-    if (s.includes("voice_activity_daily") && s.includes("group by")) {
-      const datePattern = params[0] || "";
-      const regexStr = "^" + String(datePattern).replace(/%/g, ".*");
-      const model = getMongoModel("voice_activity_daily");
-      if (model) {
-        const docs = await model.aggregate([
-          { $match: { day: { $regex: new RegExp(regexStr) } } },
-          { $group: { _id: "$user_id", total: { $sum: "$duration" } } },
-          { $sort: { total: -1 } },
           { $project: { _id: 0, user_id: "$_id", total: 1 } }
         ]);
         return docs;
@@ -965,6 +1030,27 @@ async function syncToMongo(sql, params = []) {
 
   try {
     // 0. Activity & Voice Activity Daily
+    // NOTE: voice_activity_daily HARUS dicek SEBELUM activity_daily
+    // karena "voice_activity_daily" mengandung string "activity_daily"
+    if (s.includes("voice_activity_daily")) {
+      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
+        const dayVal = params[0];
+        const uId = params[1];
+        const durationVal = Number(params[2] || 0);
+        if (dayVal && uId) {
+          const model = getMongoModel("voice_activity_daily");
+          if (model) {
+            await model.updateOne(
+              { day: String(dayVal), user_id: String(uId) },
+              { $inc: { duration: durationVal } },
+              { upsert: true }
+            );
+          }
+        }
+      }
+      return;
+    }
+
     if (s.includes("activity_daily_channel")) {
       if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
         const dayVal = params[0];
@@ -985,7 +1071,8 @@ async function syncToMongo(sql, params = []) {
       return;
     }
 
-    if (s.includes("activity_daily")) {
+    // PENTING: tambah !s.includes("voice_activity_daily") untuk double-safety
+    if (s.includes("activity_daily") && !s.includes("voice_activity_daily")) {
       if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
         const dayVal = params[0];
         const uId = params[1];
@@ -995,25 +1082,6 @@ async function syncToMongo(sql, params = []) {
             await model.updateOne(
               { day: String(dayVal), user_id: String(uId) },
               { $inc: { msg_count: 1 } },
-              { upsert: true }
-            );
-          }
-        }
-      }
-      return;
-    }
-
-    if (s.includes("voice_activity_daily")) {
-      if (s.includes("insert") || s.includes("replace") || s.includes("update")) {
-        const dayVal = params[0];
-        const uId = params[1];
-        const durationVal = Number(params[2] || 0);
-        if (dayVal && uId) {
-          const model = getMongoModel("voice_activity_daily");
-          if (model) {
-            await model.updateOne(
-              { day: String(dayVal), user_id: String(uId) },
-              { $inc: { duration: durationVal } },
               { upsert: true }
             );
           }
@@ -3019,6 +3087,7 @@ async function initDb() {
       platforms TEXT DEFAULT '{}'
     );
   `);
+
 
   try {
     await dbExec(`ALTER TABLE menfess_posts ADD COLUMN thread_id TEXT`);
@@ -5697,97 +5766,138 @@ const HELP_CATEGORIES = {
       "`/faq_search <query>` - Search for relevant FAQ articles.",
       "`/faq_list` - Display the full list of registered FAQs."
     ]
+  },
+  myrole: {
+    emoji: "🎨",
+    label: "My Custom Role",
+    description: "Kelola tampilan custom role milikmu sendiri — warna, icon, dan nama.",
+    commands: [
+      "`cmyrole` / `myrole` / `myr` — Buka panduan lengkap My Custom Role.",
+      "`cmyrole color @RoleKamu #HEX` — Ganti warna role kamu.",
+      "`cmyrole color @RoleKamu #HEX1 #HEX2` — Set 2 warna / gradien.",
+      "`cmyrole icon @RoleKamu <url>` — Pasang icon gambar pada role (Boost Level 2).",
+      "`cmyrole removeicon @RoleKamu` — Hapus icon dari role.",
+      "`cmyrole rename @RoleKamu <nama baru>` — Ganti nama role.",
+      "`cmyrole info @RoleKamu` — Lihat detail info role kamu.",
+      "> ⚠️ Kamu hanya bisa mengelola role yang **kamu miliki sendiri**."
+    ]
+  },
+  custom_roles: {
+    emoji: "🎨",
+    label: "Booster Custom Roles",
+    description: "Fitur custom role eksklusif untuk Server Booster.",
+    commands: [
+      "`cmyrole claim <nama_role>` - Klaim/buat custom role khusus Server Booster.",
+      "`cmyrole color #HEX` - Ganti warna custom role-mu.",
+      "`cmyrole icon <url|gambar>` - Set gambar icon custom role (Server Boost Lv 2).",
+      "`cmyrole removeicon` - Hapus gambar icon dari custom role.",
+      "`cmyrole removebg [#HEX1] [#HEX2]` - Hapus background gambar icon & ubah warna/gradient.",
+      "`cmyrole rename <nama_baru>` - Ganti nama custom role-mu.",
+      "`cmyrole info` - Lihat statistik & detail custom role-mu."
+    ]
   }
 };
 
 const ADMIN_HELP_CATEGORIES = {
+  admin_staff_tagging: {
+    emoji: "📌",
+    label: "Staff Tagging & Duty System",
+    description: "Rotasi & giliran tag member 2x sehari, profil staff, & directory panel.",
+    commands: [
+      "`ctag setup` — Wizard & status setup 1-baris.",
+      "`ctag duty` / `status` — Lihat tugas tag hari ini.",
+      "`ctag roster` / `minggu` — Lihat rotasi mingguan (Senin - Minggu).",
+      "`ctag done` / `busy` / `takeover` — Selesai, berhalangan, atau ambil alih tugas.",
+      "`ctag assign <1/2> @user` — Set petugas Slot 1 / Slot 2 manual.",
+      "`ctag config role|channel|timeout|time` — Atur role, channel, reminder, & jam slot.",
+      "`ctag exempt add/remove/list` — Kelola daftar pengecualian staff.",
+      "`ctag random` — Acak ulang rotasi staff hari ini.",
+      "`cstaffprofile [@user]` — Lihat kartu profil identitas & statistik aktivitas staff.",
+      "`cstaffpanel setup` — Deploy panel daftar staff & status online/offline real-time.",
+      "`cstaffpanel addrole` / `exclude` — Kelola struktur divisi & pengecualian ID panel staff."
+    ]
+  },
+  admin_booster: {
+    emoji: "💖",
+    label: "Booster Rewards & Custom Roles",
+    description: "Pengumuman Server Boost & pengelolaan custom role booster.",
+    commands: [
+      "`cbooster setup` — Setup 1-baris (log channel, custom role channel, base role).",
+      "`cbooster toggle|setmsg|settitle|setlog|setrolechannel` — Kelola kartu pengumuman.",
+      "`cbooster config` / `test` — Cek status & pratinjau kartu booster.",
+      "`cmyrole claim <nama>` — Klaim/buat custom role booster.",
+      "`cmyrole color|icon|removebg|rename|info` — Edit warna, icon, bg, & detail role."
+    ]
+  },
   admin_roles: {
     emoji: "🎨",
-    label: "Role & Custom Role Management",
-    description: "Perintah kelola role masal, warna gradien, dan icon role.",
+    label: "Role Management System",
+    description: "Kelola role masal, warna gradien, dan icon role.",
     commands: [
-      "`ccr <nama_role> [#hex1] [#hex2] [icon]` - Buat role baru secara cepat.",
-      "`crole color @role #hex1 [#hex2]` - Ubah warna role (Mendukung 2 warna gradien).",
-      "`crole icon @role <url|lampiran>` - Pasang icon/gambar pada role (Boost Level 2).",
-      "`crole removeicon @role` - Hapus icon dari role.",
-      "`crole add @role <@user|all|human|bot>` - Tambahkan role ke user, semua member, human, atau bot.",
-      "`crole remove @role <@user|all|human|bot>` - Hapus role dari user, semua member, human, atau bot.",
-      "`crole addall @role` / `addhuman` / `addbot` - Perintah cepat tambah role masal.",
-      "`crole removeall @role` / `removehuman` / `removebot` - Perintah cepat hapus role masal.",
-      "`crole info @role` - Lihat informasi & statistik detail role.",
-      "`crole members @role` / `clist role @role` - Lihat daftar member pemilik role (mention / unmention).",
-      "`crole rename @role <nama_baru>` - Ubah nama role.",
-      "`crole delete @role` - Hapus role dari server."
+      "`ccr <nama> [#hex1] [#hex2] [icon]` — Buat role baru secara cepat.",
+      "`crole color @role #hex1 [#hex2]` — Set warna role (dukung 2 warna gradien).",
+      "`crole icon @role <url|lampiran>` / `removeicon` — Pasang/hapus icon role.",
+      "`crole add @role <@user|all|human|bot>` — Tambahkan role masal.",
+      "`crole remove @role <@user|all|human|bot>` — Hapus role masal.",
+      "`crole addall` / `removeall` — Perintah cepat role masal.",
+      "`crole info` / `members` / `rename` / `delete` — Informasi, daftar member, rename, & hapus role."
     ]
   },
   admin_moderation: {
     emoji: "🛡️",
     label: "Server Moderation Shield",
-    description: "Perintah moderasi member, warning, timeout, kick, dan ban.",
+    description: "Moderasi member, warning, timeout, kick, ban, & security log.",
     commands: [
-      "`cwarn <user> [alasan]` / `/warn` - Berikan warning ke member (tersimpan di DB).",
-      "`cwarnings <user>` / `/warnings` - Lihat riwayat warning member.",
-      "`cclearwarn <user>` / `/clearwarn` - Hapus semua warning dari member.",
-      "`cunwarn <user> <id>` / `/unwarn` - Hapus 1 warning spesifik berdasarkan ID.",
-      "`ctimeout <user> <durasi> [alasan]` / `to` - Timeout member.",
-      "`cuntimeout <user>` / `unto` - Cabut timeout member.",
-      "`cpurge <jumlah>` / `pg` / `cl` - Hapus pesan masal dalam channel.",
-      "`cmute <user>` / `cunmute` - Mute/unmute voice member.",
-      "`ckick <user> [alasan]` / `/kick` - Kick member dari server.",
-      "`cban <user> [alasan]` / `/ban` / `cunban` - Ban/unban member dari server."
+      "`cinvitelog` — Anti-invite link detector & whitelist log manager.",
+      "`cstafflog` — Audit log otomatis (role, kick, ban, timeout) & staff notes.",
+      "`cwarn` / `cwarnings` / `cclearwarn` / `cunwarn` — Sistem warning member.",
+      "`ctimeout <user> <durasi>` / `cuntimeout` — Timeout & cabut timeout.",
+      "`cpurge <jumlah>` / `cmute` / `ckick` / `cban` / `cunban` — Purge, mute, kick, & ban."
     ]
   },
   admin_automation: {
     emoji: "🤖",
     label: "Autoresponder & Sticky Messages",
-    description: "Pengaturan respon otomatis, pesan sticky, dan media embed.",
+    description: "Respon otomatis, pesan sticky, dan media embed.",
     commands: [
-      "`cadd autoresponse <trigger> | <response>` / `aar` - Tambah autoresponse baru.",
-      "`cedit autoresponse <id> <trigger> | <response>` / `ear` - Edit autoresponse.",
-      "`cdelete autoresponse <id>` / `dar` - Hapus autoresponse.",
-      "`clist autoresponse` / `clar` / `lar` - Lihat daftar semua autoresponse.",
-      "`cenable/disable autoresponse <id>` - Aktifkan atau nonaktifkan autoresponse.",
-      "`c sticky set <content>` / `c sticky remove` - Atur/hapus pesan sticky channel.",
-      "`c media enable/disable/status` - Atur Universal Media Embed."
+      "`cadd autoresponse <trigger> | <response>` — Tambah autoresponse.",
+      "`cedit/cdelete/clist/cenable/cdisable autoresponse` — Kelola autoresponse.",
+      "`c sticky set <content>` / `remove` — Atur/hapus pesan sticky channel.",
+      "`c media enable/disable/status` — Universal Media Embed setting."
     ]
   },
   admin_voice: {
     emoji: "🔊",
     label: "Voice Channel Control",
-    description: "Kelola member di voice channel (move, disconnect, mute, deafen).",
+    description: "Kontrol member di voice channel.",
     commands: [
-      "`c move voice <user> <channel>` / `mv vc` - Pindahkan member ke channel voice lain.",
-      "`c disconnect voice <user>` / `dc vc` - Putuskan member dari voice channel.",
-      "`c mute voice <user>` / `mu vc` - Server-mute member di voice.",
-      "`c deafen voice <user>` / `df vc` - Server-deafen member di voice."
+      "`c move voice <user> <channel>` — Pindahkan member ke VC lain.",
+      "`c disconnect voice <user>` — Putuskan member dari VC.",
+      "`c mute voice <user>` / `deafen` — Server mute / deafen member."
     ]
   },
   admin_panels: {
     emoji: "📋",
     label: "Panel Setup & Deploy",
-    description: "Pengiriman panel tiket, verifikasi, sorting, dan menfess.",
+    description: "Pengiriman panel tiket, verifikasi, staff directory, sorting, & menfess.",
     commands: [
-      "`c leaderboard send [#channel]` - Pasang panel Live Leaderboard (auto-update 3-5 menit).",
-      "`c leaderboard lobby add #channel` - Tambahkan channel ke hitungan Top Chat Lobby.",
-      "`c leaderboard lobby remove #channel` - Hapus channel dari hitungan Top Chat Lobby.",
-      "`c leaderboard lobby list` - Lihat daftar channel Chat Lobby.",
-      "`/ticketpanel` - Kirim panel tiket bantuan private.",
-      "`/setup-verif` / `c verif setup` - Kirim panel verifikasi role cewe/member.",
-      "`/sortingpanel` - Kirim panel ritual pembagian House Sorting.",
-      "`/menfesspanel` - Kirim panel pengirim pesan anonim Menfess.",
-      "`/selfrolespanel` - Kirim panel pilihan role mandiri (Self Roles).",
-      "`/faq_panel` - Kirim panel pencarian FAQ interaktif."
+      "`cstaffpanel setup` — Deploy panel daftar staff & status kehadiran real-time.",
+      "`c leaderboard send [#channel]` — Pasang panel Live Leaderboard.",
+      "`c leaderboard lobby add/remove/list` — Kelola lobby channel leaderboard.",
+      "`c leaderboard blacklist add/remove/list` — Kelola blacklist user leaderboard.",
+      "`/ticketpanel` / `/setup-verif` / `/sortingpanel` — Deploy panel tiket, verif, & sorting.",
+      "`/menfesspanel` / `/selfrolespanel` / `/faq_panel` — Deploy panel menfess, selfroles, & FAQ."
     ]
   },
   admin_tools: {
     emoji: "🔐",
     label: "Admin & Owner System Tools",
-    description: "Backup database, export data, dan pembuat embed custom.",
+    description: "Backup database, export data, dan embed custom.",
     commands: [
-      "`/backup_now` - Lakukan backup instant database MongoDB/SQLite.",
-      "`/idcard_export` - Export database ID Card ke format JSON.",
-      "`/tod_add` - Tambahkan pertanyaan/tantangan Truth or Dare custom.",
-      "`/sendembed` / `/sendembedv2` - Buat dan kirim pesan embed custom."
+      "`/backup_now` — Backup instant database MongoDB/SQLite.",
+      "`/idcard_export` — Export database ID Card ke format JSON.",
+      "`/tod_add` — Tambah pertanyaan Truth or Dare.",
+      "`/sendembed` / `/sendembedv2` — Buat & kirim embed custom."
     ]
   }
 };
@@ -5875,9 +5985,9 @@ function buildAdminHelpUI(selectedCategory = "home", userId = null) {
     .setPlaceholder("🛠️ Choose an Admin/Mod Category...")
     .addOptions(
       {
-        label: "Main Admin Menu",
+        label: "Semua Perintah Admin (Full List)",
         value: "home",
-        description: "Kembali ke halaman utama panduan admin & moderator.",
+        description: "Tampilkan seluruh panduan perintah admin & moderator.",
         emoji: "👑",
         default: selectedCategory === "home"
       },
@@ -5895,8 +6005,8 @@ function buildAdminHelpUI(selectedCategory = "home", userId = null) {
   const container = new ContainerBuilder();
   if (selectedCategory === "home" || !ADMIN_HELP_CATEGORIES[selectedCategory]) {
     const categoriesDesc = Object.entries(ADMIN_HELP_CATEGORIES)
-      .map(([key, cat]) => `${cat.emoji} **${cat.label}**`)
-      .join("\n");
+      .map(([key, cat]) => `${cat.emoji} **${cat.label}**\n▸ *${cat.description}*`)
+      .join("\n\n");
 
     container
       .addTextDisplayComponents(
@@ -5906,7 +6016,7 @@ function buildAdminHelpUI(selectedCategory = "home", userId = null) {
             "Selamat datang di pusat bantuan **Admin & Moderator Server**.",
             "Gunakan panduan perintah di bawah untuk kelola role masal, moderasi, autoresponse, dan panel setup.",
             "",
-            "> **Pilih kategori fitur pengelola di menu bawah untuk melihat rincian perintah.**",
+            "> **Pilih kategori fitur pengelola pada menu dropdown di bawah untuk melihat rincian perintah.**",
             "",
             categoriesDesc
           ].join("\n")
@@ -6647,6 +6757,572 @@ function startTimedRolesLoop(client) {
     }
   }, 60 * 1000);
 }
+
+// ===================== STAFF TAGGING SYSTEM HELPERS & LOOP =====================
+
+function getStaffTagDateKey() {
+  const d = new Date();
+  const wibOffset = 7 * 60 * 60 * 1000;
+  const wibDate = new Date(d.getTime() + (d.getTimezoneOffset() * 60000) + wibOffset);
+  const yyyy = wibDate.getFullYear();
+  const mm = String(wibDate.getMonth() + 1).padStart(2, "0");
+  const dd = String(wibDate.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getWibTimeHHMM() {
+  const d = new Date();
+  const wibOffset = 7 * 60 * 60 * 1000;
+  const wibDate = new Date(d.getTime() + (d.getTimezoneOffset() * 60000) + wibOffset);
+  const hh = String(wibDate.getHours()).padStart(2, "0");
+  const mm = String(wibDate.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+const DAY_NAMES_ID = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+
+async function getOrGenerateDailyStaffSchedule(guild, forceReshuffle = false, targetDateKey = null) {
+  const config = await StaffTagConfig.findOne({ guild_id: guild.id }).catch(() => null);
+  if (!config || !config.staff_role_id) return null;
+
+  const dateKey = targetDateKey || getStaffTagDateKey();
+
+  if (!forceReshuffle) {
+    const existing = await StaffTagSchedule.find({ guild_id: guild.id, date_key: dateKey }).lean().catch(() => []);
+    if (existing.length >= 2) {
+      return existing.sort((a, b) => a.slot - b.slot);
+    }
+  }
+
+  // Fetch staff role members
+  const staffRole = guild.roles.cache.get(config.staff_role_id);
+  if (!staffRole) return null;
+
+  await guild.members.fetch().catch(() => null);
+  const exemptDocs = await StaffTagExempt.find({ guild_id: guild.id }).lean().catch(() => []);
+  const exemptSet = new Set(exemptDocs.map((e) => e.user_id));
+
+  const eligibleMembers = Array.from(staffRole.members.values())
+    .filter((m) => !m.user.bot && !exemptSet.has(m.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  if (!eligibleMembers.length) return null;
+
+  const count = eligibleMembers.length;
+  let currIndex = config.roster_index || 0;
+
+  const slot1User = eligibleMembers[currIndex % count].id;
+  const slot2User = eligibleMembers[(currIndex + 1) % count].id;
+
+  // Advance roster index by 2 for next schedule creation
+  const nextIndex = (currIndex + 2) % count;
+  if (!targetDateKey || targetDateKey === getStaffTagDateKey()) {
+    config.roster_index = nextIndex;
+    await config.save().catch(() => null);
+  }
+
+  if (forceReshuffle) {
+    await StaffTagSchedule.deleteMany({ guild_id: guild.id, date_key: dateKey }).catch(() => null);
+  }
+
+  const curWibTime = getWibTimeHHMM();
+  const isToday = dateKey === getStaffTagDateKey();
+  const slot1Time = config.slot1_time || "09:00";
+  const slot2Time = config.slot2_time || "19:00";
+
+  const isSlot1Past = forceReshuffle && isToday && (curWibTime > slot1Time);
+  const isSlot2Past = forceReshuffle && isToday && (curWibTime > slot2Time);
+
+  const schedule1 = await StaffTagSchedule.findOneAndUpdate(
+    { guild_id: guild.id, date_key: dateKey, slot: 1 },
+    {
+      $set: {
+        assigned_user_id: slot1User,
+        original_user_id: slot1User,
+        status: "pending",
+        notified_at: isSlot1Past ? Date.now() : null,
+        completed_at: null,
+        reminder_sent: false,
+      },
+    },
+    { upsert: true, returnDocument: 'after' }
+  ).lean();
+
+  const schedule2 = await StaffTagSchedule.findOneAndUpdate(
+    { guild_id: guild.id, date_key: dateKey, slot: 2 },
+    {
+      $set: {
+        assigned_user_id: slot2User,
+        original_user_id: slot2User,
+        status: "pending",
+        notified_at: isSlot2Past ? Date.now() : null,
+        completed_at: null,
+        reminder_sent: false,
+      },
+    },
+    { upsert: true, returnDocument: 'after' }
+  ).lean();
+
+  return [schedule1, schedule2];
+}
+
+async function getWeeklyStaffScheduleOverview(guild) {
+  const config = await StaffTagConfig.findOne({ guild_id: guild.id }).catch(() => null);
+  if (!config || !config.staff_role_id) return null;
+
+  const staffRole = guild.roles.cache.get(config.staff_role_id);
+  if (!staffRole) return null;
+
+  await guild.members.fetch().catch(() => null);
+  const exemptDocs = await StaffTagExempt.find({ guild_id: guild.id }).lean().catch(() => []);
+  const exemptSet = new Set(exemptDocs.map((e) => e.user_id));
+
+  const eligibleMembers = Array.from(staffRole.members.values())
+    .filter((m) => !m.user.bot && !exemptSet.has(m.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  if (!eligibleMembers.length) return null;
+
+  const count = eligibleMembers.length;
+
+  const today = new Date();
+  const wibOffset = 7 * 60 * 60 * 1000;
+  const wibToday = new Date(today.getTime() + (today.getTimezoneOffset() * 60000) + wibOffset);
+
+  // Find Monday of current week
+  const dayOfWeek = wibToday.getDay(); // 0 is Sun, 1 is Mon...
+  const distanceToMonday = (dayOfWeek + 6) % 7;
+  const monday = new Date(wibToday.getTime() - distanceToMonday * 24 * 60 * 60 * 1000);
+
+  const weeklyList = [];
+  let runningIndex = config.roster_index || 0;
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday.getTime() + i * 24 * 60 * 60 * 1000);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const dateKey = `${yyyy}-${mm}-${dd}`;
+    const dayName = DAY_NAMES_ID[d.getDay()];
+
+    let scheds = await StaffTagSchedule.find({ guild_id: guild.id, date_key: dateKey }).lean().catch(() => []);
+    if (scheds.length < 2) {
+      const slot1User = eligibleMembers[runningIndex % count].id;
+      const slot2User = eligibleMembers[(runningIndex + 1) % count].id;
+      runningIndex = (runningIndex + 2) % count;
+
+      const schedule1 = await StaffTagSchedule.findOneAndUpdate(
+        { guild_id: guild.id, date_key: dateKey, slot: 1 },
+        {
+          $set: {
+            assigned_user_id: slot1User,
+            original_user_id: slot1User,
+            status: "pending",
+            notified_at: null,
+            completed_at: null,
+            reminder_sent: false,
+          },
+        },
+        { upsert: true, returnDocument: 'after' }
+      ).lean();
+
+      const schedule2 = await StaffTagSchedule.findOneAndUpdate(
+        { guild_id: guild.id, date_key: dateKey, slot: 2 },
+        {
+          $set: {
+            assigned_user_id: slot2User,
+            original_user_id: slot2User,
+            status: "pending",
+            notified_at: null,
+            completed_at: null,
+            reminder_sent: false,
+          },
+        },
+        { upsert: true, returnDocument: 'after' }
+      ).lean();
+
+      scheds = [schedule1, schedule2];
+    }
+
+    weeklyList.push({
+      dayName,
+      dateKey,
+      schedules: scheds.sort((a, b) => a.slot - b.slot),
+    });
+  }
+
+  // Update runningIndex back to config
+  config.roster_index = runningIndex;
+  await config.save().catch(() => null);
+
+  return weeklyList;
+}
+
+async function reshuffleAndGenerateFullWeeklySchedule(guild) {
+  const config = await StaffTagConfig.findOne({ guild_id: guild.id }).catch(() => null);
+  if (!config || !config.staff_role_id) return null;
+
+  const staffRole = guild.roles.cache.get(config.staff_role_id);
+  if (!staffRole) return null;
+
+  await guild.members.fetch().catch(() => null);
+  const exemptDocs = await StaffTagExempt.find({ guild_id: guild.id }).lean().catch(() => []);
+  const exemptSet = new Set(exemptDocs.map((e) => e.user_id));
+
+  const eligibleMembers = Array.from(staffRole.members.values())
+    .filter((m) => !m.user.bot && !exemptSet.has(m.id));
+
+  if (!eligibleMembers.length) return null;
+
+  // 1. Shuffle all eligible staff members randomly
+  const shuffledStaff = [...eligibleMembers].sort(() => Math.random() - 0.5);
+  const count = shuffledStaff.length;
+
+  const today = new Date();
+  const wibOffset = 7 * 60 * 60 * 1000;
+  const wibToday = new Date(today.getTime() + (today.getTimezoneOffset() * 60000) + wibOffset);
+
+  // Find Monday of current week
+  const dayOfWeek = wibToday.getDay();
+  const distanceToMonday = (dayOfWeek + 6) % 7;
+  const monday = new Date(wibToday.getTime() - distanceToMonday * 24 * 60 * 60 * 1000);
+
+  const weeklyList = [];
+  let runningIndex = 0;
+  const curWibTime = getWibTimeHHMM();
+  const todayKey = getStaffTagDateKey();
+  const slot1Time = config.slot1_time || "09:00";
+  const slot2Time = config.slot2_time || "19:00";
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday.getTime() + i * 24 * 60 * 60 * 1000);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const dateKey = `${yyyy}-${mm}-${dd}`;
+    const dayName = DAY_NAMES_ID[d.getDay()];
+
+    // Clear existing schedule to force complete re-assignment for all staff
+    await StaffTagSchedule.deleteMany({ guild_id: guild.id, date_key: dateKey }).catch(() => null);
+
+    const slot1User = shuffledStaff[runningIndex % count].id;
+    const slot2User = count > 1 ? shuffledStaff[(runningIndex + 1) % count].id : shuffledStaff[runningIndex % count].id;
+    runningIndex = (runningIndex + 2) % count;
+
+    // If slot time has already passed today or is past date, mark notified_at so it won't send retroactive notification
+    const isPastDate = dateKey < todayKey;
+    const isToday = dateKey === todayKey;
+    const isSlot1Past = isPastDate || (isToday && curWibTime > slot1Time);
+    const isSlot2Past = isPastDate || (isToday && curWibTime > slot2Time);
+
+    const schedule1 = await StaffTagSchedule.findOneAndUpdate(
+      { guild_id: guild.id, date_key: dateKey, slot: 1 },
+      {
+        $set: {
+          assigned_user_id: slot1User,
+          original_user_id: slot1User,
+          status: "pending",
+          notified_at: isSlot1Past ? Date.now() : null,
+          completed_at: null,
+          reminder_sent: false,
+        },
+      },
+      { upsert: true, returnDocument: 'after' }
+    ).lean();
+
+    const schedule2 = await StaffTagSchedule.findOneAndUpdate(
+      { guild_id: guild.id, date_key: dateKey, slot: 2 },
+      {
+        $set: {
+          assigned_user_id: slot2User,
+          original_user_id: slot2User,
+          status: "pending",
+          notified_at: isSlot2Past ? Date.now() : null,
+          completed_at: null,
+          reminder_sent: false,
+        },
+      },
+      { upsert: true, returnDocument: 'after' }
+    ).lean();
+
+    weeklyList.push({
+      dayName,
+      dateKey,
+      schedules: [schedule1, schedule2],
+    });
+  }
+
+  // Update roster_index in config
+  config.roster_index = runningIndex;
+  await config.save().catch(() => null);
+
+  return { weeklyList, totalStaff: count };
+}
+
+function buildStaffTagActionRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("ctag_btn_done")
+      .setLabel("Selesai")
+      .setEmoji("✅")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("ctag_btn_busy")
+      .setLabel("Berhalangan")
+      .setEmoji("⚠️")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("ctag_btn_takeover")
+      .setLabel("Takeover")
+      .setEmoji("⚡")
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
+function buildStaffTagTestActionRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("ctag_testbtn_done")
+      .setLabel("Selesai")
+      .setEmoji("✅")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("ctag_testbtn_busy")
+      .setLabel("Berhalangan")
+      .setEmoji("⚠️")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("ctag_testbtn_takeover")
+      .setLabel("Takeover")
+      .setEmoji("⚡")
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
+function getStaffSlotName(slot, config) {
+  const timeStr = slot === 1 ? (config?.slot1_time || "09:00") : (config?.slot2_time || "19:00");
+  return `Slot ${slot} (${timeStr} WIB)`;
+}
+
+
+function buildStaffTagCompletedContainer(assignedUserId, slotName, completedTime, isTakeover = false, originalUserId = null) {
+  const infoLines = [
+    `▸ **Petugas Active:** <@${assignedUserId}>`,
+  ];
+
+  if (isTakeover && originalUserId && originalUserId !== assignedUserId) {
+    infoLines.push(`▸ **Petugas Asli:** <@${originalUserId}> *(Berhalangan)*`);
+  }
+
+  infoLines.push(
+    `▸ **Jadwal Duty:** ${slotName}`,
+    `▸ **Status:** \`[ ✅ SELESAI / DONE ]\``,
+    `▸ **Waktu Konfirmasi:** <t:${Math.floor(completedTime / 1000)}:F>`
+  );
+
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent("## 📌 Laporan Penugasan Staff"),
+      new TextDisplayBuilder().setContent("Tugas tag member telah diverifikasi dan ditandai selesai. ✨")
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(infoLines.join("\n"))
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent("Mystral Assistant • System Logging • Status Completed")
+    );
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  };
+}
+
+
+function buildStaffTagBusyContainer(assignedUserId, slotName, isTest = false, staffRoleId = null) {
+  const staffMention = staffRoleId ? `<@&${staffRoleId}>` : "Halo Staff";
+
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(isTest ? "## ⚠️ [TEST] Status Kendala Staff" : "## ⚠️ Status Kendala Staff"),
+      new TextDisplayBuilder().setContent(`📢 ${staffMention}, petugas <@${assignedUserId}> sedang **berhalangan / sibuk**! 📌`)
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `▸ **Petugas Giliran:** <@${assignedUserId}>`,
+          `▸ **Jadwal Duty:** ${slotName}`,
+          `▸ **Status:** \`[ ⚠️ BERHALANGAN / BUSY ]\``,
+          "",
+          "⚡ **Permintaan Pengganti:** Mohon staff lain yang bersedia untuk menekan tombol **Takeover** di bawah untuk menggantikan giliran ini! 💪",
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(isTest ? buildStaffTagTestActionRow() : buildStaffTagActionRow())
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(isTest ? "Mystral Assistant • Staff Duty System Test • Open Takeover" : "Mystral Assistant • Staff Duty System • Open Takeover")
+    );
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: staffRoleId ? { roles: [staffRoleId] } : { parse: [] },
+  };
+}
+
+
+function buildStaffTagTakeoverContainer(newUserId, prevUserId, slotName, isTest = false) {
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(isTest ? "## ⚡ [TEST] Konfirmasi Takeover Tugas" : "## ⚡ Konfirmasi Takeover Tugas"),
+      new TextDisplayBuilder().setContent("Tugas tag member telah berhasil diambil alih oleh staff pengganti. 💪")
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `▸ **Petugas Baru:** <@${newUserId}>`,
+          `▸ **Petugas Semula:** <@${prevUserId}>`,
+          `▸ **Jadwal Duty:** ${slotName}`,
+          `▸ **Status:** \`[ ⏳ BERJALAN / PENDING ]\``,
+          "",
+          "📌 *Silakan selesaikan tag member dan tekan tombol **Selesai** jika sudah selesai.*",
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(isTest ? buildStaffTagTestActionRow() : buildStaffTagActionRow())
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(isTest ? "Mystral Assistant • Staff Duty System Test • Active Takeover" : "Mystral Assistant • Staff Duty System • Active Takeover")
+    );
+
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  };
+}
+
+
+
+
+function startStaffTagLoop(client) {
+  setInterval(async () => {
+    try {
+      const configs = await StaffTagConfig.find({}).lean().catch(() => []);
+      const currentTime = getWibTimeHHMM();
+      const dateKey = getStaffTagDateKey();
+
+      for (const cfg of configs) {
+        if (!cfg.tag_channel_id || !cfg.staff_role_id) continue;
+        const guild = client.guilds.cache.get(cfg.guild_id);
+        if (!guild) continue;
+
+        const channel = guild.channels.cache.get(cfg.tag_channel_id);
+        if (!channel) continue;
+
+        const schedules = await getOrGenerateDailyStaffSchedule(guild);
+        if (!schedules || schedules.length < 2) continue;
+
+        const timeoutMs = (cfg.timeout_minutes || 60) * 60 * 1000;
+        const slot1Time = cfg.slot1_time || "09:00";
+        const slot2Time = cfg.slot2_time || "19:00";
+
+        const now = Date.now();
+
+        for (const sched of schedules) {
+          const isSlot1 = sched.slot === 1;
+          const slotTime = isSlot1 ? slot1Time : slot2Time;
+          const slotName = getStaffSlotName(sched.slot, cfg);
+
+          // Trigger notification at or after slot time if not notified yet
+          if (!sched.notified_at && currentTime >= slotTime && sched.status === "pending") {
+            const container = new ContainerBuilder()
+              .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`## 📣 Duty Tag Member — ${slotName}`),
+                new TextDisplayBuilder().setContent(
+                  [
+                    `Halo <@${sched.assigned_user_id}>, sekarang giliranmu untuk melakukan **Tag Member**! 📌`,
+                    "",
+                    "**Opsi Cepat:** Tekan tombol di bawah, atau gunakan command `ctag done` / `ctag busy`.",
+                  ].join("\n")
+                )
+              )
+              .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+              .addActionRowComponents(buildStaffTagActionRow())
+              .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+              .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`Mystral • Staff Tagging System • <t:${Math.floor(now / 1000)}:R>`)
+              );
+
+            const sentMsg = await channel.send({
+              components: [container],
+              flags: MessageFlags.IsComponentsV2,
+              allowedMentions: { users: [sched.assigned_user_id] },
+            }).catch(() => null);
+
+            await StaffTagSchedule.updateOne(
+              { _id: sched._id },
+              { $set: { notified_at: now, message_id: sentMsg?.id || null } }
+            ).catch(() => null);
+
+          }
+
+          // Timeout Reminder check
+          if (
+            sched.notified_at &&
+            sched.status === "pending" &&
+            !sched.reminder_sent &&
+            now - sched.notified_at >= timeoutMs
+          ) {
+            const staffRoleId = cfg.staff_role_id;
+            const staffMention = staffRoleId ? `<@&${staffRoleId}>` : "Halo Staff";
+
+            const container = new ContainerBuilder()
+              .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`## ⚠️ Timeout Reminder — Tag Member ${slotName}`),
+                new TextDisplayBuilder().setContent(
+                  [
+                    `📢 ${staffMention}, petugas <@${sched.assigned_user_id}> belum menyelesaikan tugas tag member setelah **${cfg.timeout_minutes || 60} menit**! ⏰`,
+                    "",
+                    "> ⚡ **Staff lain yang bersedia mohon menekan tombol Takeover di bawah untuk mengambil alih tugas!**",
+                  ].join("\n")
+                )
+              )
+              .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+              .addActionRowComponents(buildStaffTagActionRow())
+              .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+              .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`Mystral • Staff Tagging System • <t:${Math.floor(now / 1000)}:R>`)
+              );
+
+            await channel.send({
+              components: [container],
+              flags: MessageFlags.IsComponentsV2,
+              allowedMentions: staffRoleId ? { roles: [staffRoleId] } : { parse: [] },
+            }).catch(() => null);
+
+
+            await StaffTagSchedule.updateOne(
+              { _id: sched._id },
+              { $set: { reminder_sent: true } }
+            ).catch(() => null);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[STAFF TAG LOOP FAIL]", err);
+    }
+  }, 2 * 60 * 1000);
+}
+
 
 async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
   // Prefix sticky commands
@@ -8189,13 +8865,34 @@ async function isLeaderboardStaff(guild, userId) {
     member.permissions.has(PermissionsBitField.Flags.ManageGuild);
 }
 
+// ===================== LEADERBOARD BLACKLIST HELPERS =====================
+async function getLbBlacklist() {
+  const docs = await LeaderboardBlacklist.find({}, { user_id: 1 }).lean().catch(() => []);
+  return new Set(docs.map(d => String(d.user_id)));
+}
+
+async function addLbBlacklist(userId, reason = "", addedBy = "") {
+  await LeaderboardBlacklist.updateOne(
+    { user_id: String(userId) },
+    { $set: { reason, added_by: String(addedBy), added_at: Date.now() } },
+    { upsert: true }
+  ).catch(() => null);
+}
+
+async function removeLbBlacklist(userId) {
+  await LeaderboardBlacklist.deleteOne({ user_id: String(userId) }).catch(() => null);
+}
+
 async function takeNonStaffRows(guild, rows, limit = 5) {
-  // User IDs to exclude from leaderboards (voice and chat)
-  const EXCLUDED_IDS = ['832152158841208844', '836645359467102218'];
+  // Hardcoded IDs to always exclude (bots, selfbots, system accounts)
+  const HARDCODED_EXCLUDED = new Set(['832152158841208844', '836645359467102218', '1101959062352044143']);
+  // Dynamic blacklist from DB
+  const dbBlacklist = await getLbBlacklist();
   const out = [];
   for (const row of rows) {
-    // Skip excluded users
-    if (EXCLUDED_IDS.includes(row.user_id)) continue;
+    const uid = String(row.user_id);
+    // Skip hardcoded & DB-blacklisted users
+    if (HARDCODED_EXCLUDED.has(uid) || dbBlacklist.has(uid)) continue;
     if (await isLeaderboardStaff(guild, row.user_id)) continue;
     out.push(row);
     if (out.length >= limit) break;
@@ -8678,6 +9375,7 @@ client.once(Events.ClientReady, async (c) => {
   startOwnerDmBackupSchedule(c);
 
   startReminderLoop(c); // ✅ reminder loop jalan
+  startStaffTagLoop(c); // ✅ staff tag loop jalan
 
   // ===================== MUSIC CONTROL CENTER (REAL-TIME) =====================
   if (MUSIC_BOT_ROLE_ID && MUSIC_CONTROL_CHANNEL_ID) {
@@ -8751,10 +9449,10 @@ client.once(Events.ClientReady, async (c) => {
     c.guilds.cache.forEach((g) => updateStatsChannels(g));
   }, (Number(process.env.STATS_UPDATE_MIN) || 5) * 60 * 1000);
 
-  // live leaderboard auto-update loop
+  // live leaderboard auto-update loop (setiap 1 menit)
   setInterval(() => {
     updateLiveLeaderboards(c);
-  }, 5 * 60 * 1000);
+  }, 1 * 60 * 1000);
 });
 
 // ===================== REMINDER LOOP =====================
@@ -9243,6 +9941,8 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
 client.on(Events.GuildMemberRemove, async (member) => {
   updateStatsChannels(member.guild);
+  handleBoosterLeave(member).catch(() => null);
+
 
   try {
     const channel = await getTextChannelOrNull(member.guild, requireEnv("LEAVE_CHANNEL_ID") || requireEnv("GENERAL_CHANNEL_ID"));
@@ -9280,6 +9980,512 @@ client.on(Events.GuildMemberRemove, async (member) => {
     });
   } catch (err) {
     console.error("[Leave] Error handling GuildMemberRemove:", err);
+  }
+});
+
+// ===================== BOOSTER CUSTOM ROLE =====================
+// Helper: get booster gift quota (1 boost = 3 gift slots, 2+ boosts = 5 gift slots)
+async function getBoosterGiftQuota(member, guildId) {
+  try {
+    const doc = await BoosterCustomRole.findOne({ user_id: member.id, guild_id: guildId }).lean().catch(() => null);
+    if (doc?.boost_count && typeof doc.boost_count === "number") {
+      return doc.boost_count >= 2 ? 5 : 3;
+    }
+
+    const hasMultiBoostRole = member.roles.cache.some(r => {
+      const name = r.name.toLowerCase();
+      return name.includes("2x boost") || name.includes("multi boost") || name.includes("double boost") || name.includes("boost x2") || name.includes("2 boost");
+    });
+
+    if (hasMultiBoostRole) return 5;
+    return 3; // Default 1 boost = 3 gifts
+  } catch {
+    return 3;
+  }
+}
+
+// Helper: generate 2-color gradient PNG icon for role
+function generateGradientRoleIcon(col1, col2) {
+  try {
+    let createCanvasFn;
+    try { createCanvasFn = require("@napi-rs/canvas").createCanvas; } catch {
+      try { createCanvasFn = require("canvas").createCanvas; } catch { }
+    }
+    if (!createCanvasFn) return null;
+
+    const canvas = createCanvasFn(64, 64);
+    const ctx = canvas.getContext("2d");
+
+    const grad = ctx.createLinearGradient(0, 0, 64, 64);
+    grad.addColorStop(0, col1);
+    grad.addColorStop(1, col2);
+
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(32, 32, 28, 0, Math.PI * 2);
+    ctx.fill();
+
+    return canvas.toBuffer("image/png");
+  } catch (e) {
+    console.error("[GRADIENT ICON GEN FAIL]", e);
+    return null;
+  }
+}
+
+// ===================== ANTI-INVITE DETECTOR SYSTEM =====================
+async function checkInviteLinkAlert(message) {
+  try {
+    if (!message || !message.guild || message.author.bot) return false;
+
+    // Discord Invite Link regex
+    const inviteRegex = /(?:https?:\/\/)?(?:www\.)?(?:discord\.(?:gg|io|me|li|app)|discord\.com\/invite)\/([a-zA-Z0-9-]+)/gi;
+    const matches = [...message.content.matchAll(inviteRegex)];
+    if (!matches.length) return false;
+
+    const guild = message.guild;
+
+    // Check if Anti-Invite Detector is enabled (default: on)
+    const toggleDoc = await MetaText.findOne({ key: `invitelog_enabled_${guild.id}` }).lean().catch(() => null);
+    if (toggleDoc?.value === "off") return false;
+
+    // Check log channel
+    const logChDoc = await MetaText.findOne({ key: `invitelog_channel_${guild.id}` }).lean().catch(() => null);
+    if (!logChDoc?.value) return false;
+
+    const alertChannel = guild.channels.cache.get(logChDoc.value);
+    if (!alertChannel?.isTextBased()) return false;
+
+    // Whitelist checks
+    const member = message.member || await guild.members.fetch(message.author.id).catch(() => null);
+    if (!member) return false;
+
+    let isWhitelisted = false;
+    let whitelistReason = "";
+
+    // 1. Staff / Admin bypass (ManageMessages or Administrator or Bot Owner)
+    if (isBotOwner(message.author.id) || hasPerm(member, PermissionsBitField.Flags.ManageMessages) || hasPerm(member, PermissionsBitField.Flags.Administrator)) {
+      isWhitelisted = true;
+      whitelistReason = "Staff / Admin";
+    }
+
+    // 2. Whitelisted Users
+    const wlUsersDoc = await MetaText.findOne({ key: `invitelog_wl_users_${guild.id}` }).lean().catch(() => null);
+    const wlUsers = Array.isArray(wlUsersDoc?.value) ? wlUsersDoc.value : [];
+    if (wlUsers.includes(message.author.id)) {
+      isWhitelisted = true;
+      whitelistReason = "Whitelisted User";
+    }
+
+    // 3. Whitelisted Roles
+    const wlRolesDoc = await MetaText.findOne({ key: `invitelog_wl_roles_${guild.id}` }).lean().catch(() => null);
+    const wlRoles = Array.isArray(wlRolesDoc?.value) ? wlRolesDoc.value : [];
+    if (member.roles.cache.some(r => wlRoles.includes(r.id))) {
+      isWhitelisted = true;
+      whitelistReason = "Whitelisted Role";
+    }
+
+    // 4. Whitelisted Channels
+    const wlChannelsDoc = await MetaText.findOne({ key: `invitelog_wl_channels_${guild.id}` }).lean().catch(() => null);
+    const wlChannels = Array.isArray(wlChannelsDoc?.value) ? wlChannelsDoc.value : [];
+    if (wlChannels.includes(message.channel.id)) return false;
+
+    // 5. Allowed Server Invites / Vanity URL
+    const allowedLinksDoc = await MetaText.findOne({ key: `invitelog_allowed_links_${guild.id}` }).lean().catch(() => null);
+    const allowedLinks = Array.isArray(allowedLinksDoc?.value) ? allowedLinksDoc.value.map(l => l.toLowerCase()) : [];
+    const vanityCode = guild.vanityURLCode?.toLowerCase();
+
+    let containsUnauthorizedInvite = false;
+    let detectedInviteCode = "";
+
+    for (const match of matches) {
+      const code = (match[1] || "").toLowerCase();
+      if (!code) continue;
+      if (vanityCode && code === vanityCode) continue;
+      if (allowedLinks.includes(code)) continue;
+
+      containsUnauthorizedInvite = true;
+      detectedInviteCode = match[0];
+      break;
+    }
+
+    if (!containsUnauthorizedInvite) return false;
+
+    // Check auto delete setting (default: on)
+    const autoDeleteDoc = await MetaText.findOne({ key: `invitelog_autodelete_${guild.id}` }).lean().catch(() => null);
+    const shouldAutoDelete = !isWhitelisted && (autoDeleteDoc?.value !== "off");
+
+    if (shouldAutoDelete) {
+      await message.delete().catch(() => null);
+    }
+
+    // Status message label
+    let statusMsgText = "";
+    if (isWhitelisted) {
+      statusMsgText = `🟢 *Pesan Dibiarkan (${whitelistReason})*`;
+    } else if (shouldAutoDelete) {
+      statusMsgText = "🗑️ *Otomatis Dihapus (Auto-Deleted)*";
+    } else {
+      statusMsgText = "<a:22593alert:1523238009393123409> *Pesan Dibiarkan (Warning Only)*";
+    }
+
+    // Send Alert Card to Invite Log Channel
+    const nowTs = Math.floor(Date.now() / 1000);
+    const snippet = message.content.length > 800 ? message.content.slice(0, 800) + "..." : message.content;
+
+    const alertContainer = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(isWhitelisted ? "# <a:Fm_check:1523182720493289666> DETEKSI LINK INVITE (WHITELIST MEMBER)" : "# <a:22593alert:1523238009393123409> DETEKSI LINK INVITE SERVER LAIN"),
+        new TextDisplayBuilder().setContent(
+          [
+            `▸ **Pengirim (User):** <@${message.author.id}> (\`@${message.author.username}\`)`,
+            `▸ **Server Nickname:** \`${member.displayName}\``,
+            `▸ **User ID:** \`${message.author.id}\``,
+            `▸ **Channel:** <#${message.channel.id}> (\`#${message.channel.name}\`)`,
+            `▸ **Link Dideteksi:** \`${detectedInviteCode}\``,
+            `▸ **Status Pesan:** ${statusMsgText}`,
+            "",
+            "**Isi Pesan Snippet:**",
+            `\`\`\`text\n${snippet}\n\`\`\``,
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • Invite Link Security Log • <t:${nowTs}:R>`)
+      );
+
+    await alertChannel.send({
+      components: [alertContainer],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { parse: [] },
+    }).catch(() => null);
+
+    return true;
+  } catch (err) {
+    console.error("[INVITE LINK DETECT FAIL]", err);
+    return false;
+  }
+}
+
+// ===================== STAFF ACTION & MODERATION LOG SYSTEM =====================
+async function sendStaffLogEntry(guild, title, detailsArray) {
+  try {
+    if (!guild) return;
+
+    const toggleDoc = await MetaText.findOne({ key: `stafflog_enabled_${guild.id}` }).lean().catch(() => null);
+    if (toggleDoc?.value === "off") return;
+
+    const chDoc = await MetaText.findOne({ key: `stafflog_channel_${guild.id}` }).lean().catch(() => null);
+    if (!chDoc?.value) return;
+
+    const logCh = guild.channels.cache.get(chDoc.value);
+    if (!logCh?.isTextBased()) return;
+
+    const nowTs = Math.floor(Date.now() / 1000);
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`## ${title}`),
+        new TextDisplayBuilder().setContent(detailsArray.join("\n"))
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • Staff Action & Moderation Log • <t:${nowTs}:R>`)
+      );
+
+    await logCh.send({
+      components: [container],
+      flags: MessageFlags.IsComponentsV2,
+    }).catch(() => null);
+  } catch (err) {
+    console.error("[STAFF LOG SEND FAIL]", err);
+  }
+}
+
+// Helper: blend two HEX colors (50% mix) for Discord role color
+function blendColors(hex1, hex2) {
+  try {
+    const c1 = parseInt(hex1.replace("#", ""), 16);
+    const c2 = parseInt(hex2.replace("#", ""), 16);
+
+    const r1 = (c1 >> 16) & 0xff, g1 = (c1 >> 8) & 0xff, b1 = c1 & 0xff;
+    const r2 = (c2 >> 16) & 0xff, g2 = (c2 >> 8) & 0xff, b2 = c2 & 0xff;
+
+    const r = Math.round((r1 + r2) / 2);
+    const g = Math.round((g1 + g2) / 2);
+    const b = Math.round((b1 + b2) / 2);
+
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+  } catch {
+    return hex1;
+  }
+}
+
+// Helper: get/set booster custom role position config
+async function getBoosterRolePosition(guild) {
+  const doc = await MetaText.findOne({ key: `booster_role_below_${guild.id}` }).lean().catch(() => null);
+  return doc?.value || null; // role ID that booster roles go below
+}
+
+async function buildBoosterRewardEmbed(member) {
+  const guild = member.guild;
+  const boostCount = guild.premiumSubscriptionCount || 0;
+
+  // Custom role channel if configured
+  const customRoleChDoc = await MetaText.findOne({ key: `booster_custom_role_channel_${guild.id}` }).lean().catch(() => null);
+  const customRoleChText = customRoleChDoc?.value ? `<#${customRoleChDoc.value}>` : "<#1459524453816860816>";
+
+  // Custom Title
+  const titleDoc = await MetaText.findOne({ key: `booster_announcement_title_${guild.id}` }).lean().catch(() => null);
+  const titleText = titleDoc?.value || "✨ Booster Rewards";
+
+  // Custom Message
+  const msgDoc = await MetaText.findOne({ key: `booster_announcement_msg_${guild.id}` }).lean().catch(() => null);
+  let defaultMsg = [
+    `**${guild.name}** currently has **${boostCount}** boosts!`,
+    "",
+    `Terima kasih telah mendukung **${guild.name}** melalui Server Boost! <a:Nitro:1446372229683216576>`,
+    `Kamu sekarang mendapatkan **Custom Role**, akses ke ${customRoleChText}, dan berbagai **Booster Perks**. Enjoy! <:a1_heart:1510056894889463969>`,
+    "",
+    `> 💡 Gunakan command \`cmyrole\` untuk mengubah warna, icon, dan nama role custom milikmu!`,
+  ].join("\n");
+
+
+
+  let descText = msgDoc?.value || defaultMsg;
+
+  // Replace placeholders
+  descText = descText
+    .replace(/{user}/gi, `<@${member.id}>`)
+    .replace(/{username}/gi, member.user.username)
+    .replace(/{displayName}/gi, member.displayName)
+    .replace(/{guild}/gi, guild.name)
+    .replace(/{server}/gi, guild.name)
+    .replace(/{boosts}/gi, String(boostCount))
+    .replace(/{count}/gi, String(boostCount))
+    .replace(/{rolechannel}/gi, customRoleChText);
+
+  const avatarUrl = member.displayAvatarURL({ extension: "png", size: 512 });
+
+  const embed = new EmbedBuilder()
+    .setAuthor({
+      name: member.user.username,
+      iconURL: member.displayAvatarURL({ extension: "png", size: 128 }),
+    })
+    .setTitle(titleText)
+    .setColor(0xF0B3FF)
+    .setThumbnail(avatarUrl)
+    .setDescription(descText)
+    .setFooter({
+      text: `${member.user.username} just dropped a Server Boost! 🚀`,
+      iconURL: "https://cdn.discordapp.com/emojis/922572992372944946.gif",
+    })
+    .setTimestamp();
+
+  return embed;
+}
+
+async function handleBoosterJoin(member) {
+  try {
+    const guild = member.guild;
+    // Role is NOT created automatically here anymore.
+    // Booster can manually claim their role using `cmyrole claim <nama_role>`.
+
+    // Check if booster announcement is enabled
+    const toggleDoc = await MetaText.findOne({ key: `booster_announcement_enabled_${guild.id}` }).lean().catch(() => null);
+    const isEnabled = toggleDoc?.value !== "off";
+
+    if (isEnabled) {
+      // Log to booster log channel if configured (or system channel fallback)
+      const logChId = await MetaText.findOne({ key: `booster_log_channel_${guild.id}` }).lean().catch(() => null);
+      const logCh = (logChId?.value ? guild.channels.cache.get(logChId.value) : null) || guild.systemChannel;
+      if (logCh?.isTextBased()) {
+        const embed = await buildBoosterRewardEmbed(member);
+        await logCh.send({
+          content: `🎉 Terima kasih atas boost-nya, <@${member.id}>!`,
+          embeds: [embed],
+          allowedMentions: { users: [member.id] },
+        }).catch(() => null);
+      }
+    }
+
+    console.log(`[BOOSTER ROLE] Created role '${roleName}' for ${member.user.tag}`);
+  } catch (err) {
+    console.error("[BOOSTER ROLE JOIN ERROR]", err);
+  }
+}
+
+
+
+async function handleBoosterLeave(member) {
+  try {
+    const guild = member.guild;
+    const doc = await BoosterCustomRole.findOne({ user_id: member.id, guild_id: guild.id }).lean().catch(() => null);
+    if (!doc) return;
+
+    // Delete the role from Discord
+    const role = guild.roles.cache.get(doc.role_id);
+    if (role) {
+      await role.delete(`Booster stopped: ${member.user.tag}`).catch(() => null);
+    }
+
+    // Remove from DB
+    await BoosterCustomRole.deleteOne({ user_id: member.id, guild_id: guild.id }).catch(() => null);
+
+    // Log
+    const logChId = await MetaText.findOne({ key: `booster_log_channel_${guild.id}` }).lean().catch(() => null);
+    if (logChId?.value) {
+      const logCh = guild.channels.cache.get(logChId.value);
+      if (logCh?.isTextBased()) {
+        logCh.send({
+          content: `🗑️ Custom role <@${member.id}> telah dihapus karena tidak lagi boost server.`,
+          allowedMentions: { parse: [] },
+        }).catch(() => null);
+      }
+    }
+
+    console.log(`[BOOSTER ROLE] Deleted role for ${member.user.tag} (stopped boosting)`);
+  } catch (err) {
+    console.error("[BOOSTER ROLE LEAVE ERROR]", err);
+  }
+}
+
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  // Detect boost start/stop via premiumSince change
+  const wasBooster = !!oldMember.premiumSince;
+  const isBooster = !!newMember.premiumSince;
+
+  if (!wasBooster && isBooster) {
+    // Started boosting
+    await handleBoosterJoin(newMember);
+  } else if (wasBooster && !isBooster) {
+    // Stopped boosting
+    await handleBoosterLeave(newMember);
+  }
+
+  // ─── STAFF ACTION LOG (Role changes & Timeout) ───
+  try {
+    const guild = newMember.guild;
+
+    // 1. Role Add / Remove
+    const addedRoles = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
+    const removedRoles = oldMember.roles.cache.filter(r => !newMember.roles.cache.has(r.id));
+
+    if (addedRoles.size > 0 || removedRoles.size > 0) {
+      let executor = null;
+      let reason = null;
+      try {
+        const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 1 }).catch(() => null);
+        const entry = logs?.entries?.first();
+        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
+          executor = entry.executor;
+          reason = entry.reason;
+        }
+      } catch { }
+
+      if (addedRoles.size > 0) {
+        await sendStaffLogEntry(guild, "➕ Staff Action: Role Added", [
+          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+          `▸ **Server Nickname:** \`${newMember.displayName}\``,
+          `▸ **Role Ditambahkan:** ${addedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
+          `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
+        ]);
+      }
+
+      if (removedRoles.size > 0) {
+        await sendStaffLogEntry(guild, "➖ Staff Action: Role Removed", [
+          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+          `▸ **Server Nickname:** \`${newMember.displayName}\``,
+          `▸ **Role Ditarik:** ${removedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
+          `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
+        ]);
+      }
+    }
+
+    // 2. Timeout (Communication Disabled)
+    const oldTimeout = oldMember.communicationDisabledUntilTimestamp;
+    const newTimeout = newMember.communicationDisabledUntilTimestamp;
+
+    if (!oldTimeout && newTimeout && newTimeout > Date.now()) {
+      let executor = null;
+      let reason = null;
+      try {
+        const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberUpdate, limit: 1 }).catch(() => null);
+        const entry = logs?.entries?.first();
+        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
+          executor = entry.executor;
+          reason = entry.reason;
+        }
+      } catch { }
+
+      const untilTs = Math.floor(newTimeout / 1000);
+      await sendStaffLogEntry(guild, "⏳ Staff Action: Member Timed Out", [
+        `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+        `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+        `▸ **Server Nickname:** \`${newMember.displayName}\``,
+        `▸ **Timeout Sampai:** <t:${untilTs}:F> (<t:${untilTs}:R>)`,
+        `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
+      ]);
+    } else if (oldTimeout && !newTimeout) {
+      let executor = null;
+      try {
+        const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberUpdate, limit: 1 }).catch(() => null);
+        const entry = logs?.entries?.first();
+        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
+          executor = entry.executor;
+        }
+      } catch { }
+
+      await sendStaffLogEntry(guild, "🔓 Staff Action: Timeout Removed", [
+        `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
+        `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
+        `▸ **Server Nickname:** \`${newMember.displayName}\``,
+        `▸ **Status:** *Timeout telah dicabut / berakhir*`,
+      ]);
+    }
+  } catch (err) {
+    console.error("[STAFF LOG MEMBER UPDATE FAIL]", err);
+  }
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    const guild = member.guild;
+    const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberKick, limit: 1 }).catch(() => null);
+    const entry = logs?.entries?.first();
+
+    if (entry && entry.target?.id === member.id && (Date.now() - entry.createdTimestamp < 10000)) {
+      await sendStaffLogEntry(guild, "👢 Staff Action: Member Kicked", [
+        `▸ **Staff (Executor):** <@${entry.executor.id}> (\`${entry.executor.tag}\`)`,
+        `▸ **Target User:** <@${member.id}> (\`${member.user.tag}\`)`,
+        `▸ **Server Nickname:** \`${member.displayName}\``,
+        `▸ **User ID:** \`${member.id}\``,
+        `▸ **Alasan Kick:** \`${entry.reason || "Tidak ada alasan"}\``,
+      ]);
+    }
+  } catch (err) {
+    console.error("[STAFF LOG KICK FAIL]", err);
+  }
+});
+
+client.on(Events.GuildBanAdd, async (ban) => {
+  try {
+    const guild = ban.guild;
+    const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberBanAdd, limit: 1 }).catch(() => null);
+    const entry = logs?.entries?.first();
+
+    const executor = entry?.target?.id === ban.user.id ? entry.executor : null;
+    const reason = ban.reason || entry?.reason || "Tidak ada alasan";
+
+    await sendStaffLogEntry(guild, "🔨 Staff Action: Member Banned", [
+      `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Unknown Staff*"}`,
+      `▸ **Target User:** <@${ban.user.id}> (\`${ban.user.tag}\`)`,
+      `▸ **User ID:** \`${ban.user.id}\``,
+      `▸ **Alasan Ban:** \`${reason}\``,
+    ]);
+  } catch (err) {
+    console.error("[STAFF LOG BAN FAIL]", err);
   }
 });
 
@@ -9359,7 +10565,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 client.on(Events.MessageCreate, async (message) => {
   try {
-    if (!message.guild) return;
+    if (!message || !message.guild || !message.channel || !message.author) return;
 
     // Sticky Message Trigger (placed BEFORE bot filter so sticky message re-posts after bot responses like Tarot reading embeds)
     const channelId = message.channel.id;
@@ -9699,6 +10905,9 @@ client.on(Events.MessageCreate, async (message) => {
         }
       }
     }
+    // Anti-Invite Link Alert Detector Check
+    const isInviteHandled = await checkInviteLinkAlert(message);
+    if (isInviteHandled) return;
 
     // ✅ ACTIVITY LOGGER (taruh di sini)
     const now = Date.now();
@@ -9852,7 +11061,7 @@ client.on(Events.MessageCreate, async (message) => {
        VALUES (?, ?, ?, ?, 1)
        ON CONFLICT(day, guild_id, channel_id, user_id) DO UPDATE SET
          msg_count=activity_daily_channel.msg_count+1`,
-      [day, message.guild ? message.guild.id : "global", message.channel.id, message.author.id]
+      [day, message.guild?.id || "global", message.channel?.id || "global", message.author?.id || "unknown"]
     );
 
     if (await handleGuessNumberAttempt(message)) return;
@@ -10126,6 +11335,40 @@ client.on(Events.MessageCreate, async (message) => {
         }
       }
 
+      // ── leaderboard blacklist ──
+      if (sub === "blacklist" || sub === "bl") {
+        const isStaff = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild);
+        if (!isStaff) return message.reply("❌ Perintah ini khusus untuk Admin / Staff server.");
+
+        const action = (args[1] || "").toLowerCase();
+        const target = message.mentions.users.first() || (args[2] && /^\d{15,20}$/.test(args[2]) ? { id: args[2], username: args[2] } : null);
+
+        if (action === "add") {
+          if (!target) return message.reply("Format: `c leaderboard blacklist add @user [alasan]`");
+          const reason = args.slice(3).join(" ") || "Tidak ada alasan";
+          await addLbBlacklist(target.id, reason, message.author.id);
+          return message.reply(`🚫 **${target.username || target.id}** \`(${target.id})\` berhasil diblacklist dari leaderboard.\n> Alasan: ${reason}`);
+        }
+
+        if (action === "remove" || action === "del" || action === "delete") {
+          if (!target) return message.reply("Format: `c leaderboard blacklist remove @user`");
+          await removeLbBlacklist(target.id);
+          return message.reply(`✅ **${target.username || target.id}** \`(${target.id})\` dihapus dari blacklist leaderboard.`);
+        }
+
+        if (action === "list" || !action) {
+          const docs = await LeaderboardBlacklist.find({}).sort({ added_at: -1 }).lean().catch(() => []);
+          if (!docs.length) return message.reply("📭 Belum ada user yang diblacklist dari leaderboard.");
+          const lines = docs.map((d, i) => {
+            const ts = d.added_at ? `<t:${Math.floor(d.added_at / 1000)}:d>` : "-";
+            return `${i + 1}. \`${d.user_id}\` — ${d.reason || "-"} (oleh <@${d.added_by}> ${ts})`;
+          });
+          return message.reply(`🚫 **Leaderboard Blacklist** (${docs.length} user):\n${lines.join("\n")}`);
+        }
+
+        return message.reply("Sub-command tidak dikenal. Gunakan: `c leaderboard blacklist add/remove/list`");
+      }
+
       if (sub === "send" || sub === "deploy") {
         const isStaff = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild);
         if (!isStaff) return message.reply("❌ Perintah ini khusus untuk Admin / Owner server.");
@@ -10288,8 +11531,8 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // ===================== IMAGE REMOVE BACKGROUND (CREMOVEBG) =====================
-    if (cmd === "removebg" || cmd === "rembg" || cmd === "nobg" || cmd === "cremovebg" || cmd === "crembg" || cmd === "cnobg") {
+    // ===================== IMAGE REMOVE BACKGROUND (CREMOVEBG / CRBG) =====================
+    if (cmd === "removebg" || cmd === "rembg" || cmd === "nobg" || cmd === "cremovebg" || cmd === "crembg" || cmd === "cnobg" || cmd === "crbg" || cmd === "rbg") {
       let imageUrl = null;
 
       if (message.attachments.size > 0) {
@@ -10319,13 +11562,13 @@ client.on(Events.MessageCreate, async (message) => {
 
       if (!imageUrl) {
         const embedHelp = new EmbedBuilder()
-          .setTitle("🖼️ Hapus Background Gambar (`cremovebg`)")
+          .setTitle("🖼️ Hapus Background Gambar (`crbg` / `crembg`)")
           .setColor(0x3498db)
           .setDescription(
             `**Cara Penggunaan:**\n` +
-            `1. Upload/Lampirkan gambar dengan ketik \`${PREFIX} cremovebg\`\n` +
-            `2. Atau reply ke pesan yang berisi gambar lalu ketik \`${PREFIX} cremovebg\`\n` +
-            `3. Atau masukkan URL gambar: \`${PREFIX} cremovebg https://.../gambar.png\``
+            `1. Upload/Lampirkan gambar dengan ketik \`${PREFIX} crbg\`\n` +
+            `2. Atau reply ke pesan yang berisi gambar lalu ketik \`${PREFIX} crbg\`\n` +
+            `3. Atau masukkan URL gambar: \`${PREFIX} crbg https://.../gambar.png\``
           )
           .setTimestamp();
         return message.reply({ embeds: [embedHelp] });
@@ -10876,7 +12119,2245 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // OWNER ONLY prefix commands (panel/idcard)
+    // ===================== MY ROLE (SELF-MANAGE CUSTOM ROLE — BOOSTER ONLY) =====================
+    if (cmd === "myrole" || cmd === "cmyrole" || cmd === "myr" || cmd === "roleku" || cmd === "myrolehelp" || cmd === "cbooster" || cmd === "booster") {
+      const sub = (args[0] || "").toLowerCase();
+
+      // ─── ACTION: test / testboost — Preview Booster Rewards embed ───
+      if (sub === "test" || sub === "testboost" || sub === "cardtest" || sub === "preview" || cmd === "cbooster" && (!sub || sub === "test")) {
+        const targetMember = message.mentions.members.first() || message.member;
+        const embed = await buildBoosterRewardEmbed(targetMember);
+        return message.reply({
+          content: `🎉 **[TEST PREVIEW] Booster Rewards Card:**`,
+          embeds: [embed],
+          allowedMentions: { repliedUser: false },
+        });
+      }
+
+      // ─── ACTION: setlog — Set Booster Log Channel ───
+      if (sub === "setlog" || sub === "setlogchannel" || sub === "setchannel") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) {
+          return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles untuk mengatur channel log booster.");
+        }
+        const targetCh = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
+        if (!targetCh) {
+          return message.reply("❌ Tag channel yang ingin dijadikan channel pengumuman booster (contoh: `cmyrole setlog #booster-announcement`).");
+        }
+        await MetaText.updateOne(
+          { key: `booster_log_channel_${message.guild.id}` },
+          { $set: { value: targetCh.id } },
+          { upsert: true }
+        ).catch(() => null);
+        return message.reply(`✅ Channel pengumuman booster berhasil di-set ke <#${targetCh.id}>.`);
+      }
+
+      // ─── ACTION: setrolechannel — Set Custom Role Info Channel ───
+      if (sub === "setrolechannel" || sub === "setcustomrolechannel") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) {
+          return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles.");
+        }
+        const targetCh = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
+        if (!targetCh) {
+          return message.reply("❌ Tag channel custom role (contoh: `cmyrole setrolechannel #custom-role`).");
+        }
+        await MetaText.updateOne(
+          { key: `booster_custom_role_channel_${message.guild.id}` },
+          { $set: { value: targetCh.id } },
+          { upsert: true }
+        ).catch(() => null);
+        return message.reply(`✅ Channel info custom role di-set ke <#${targetCh.id}>.`);
+      }
+
+      // ─── ACTION: toggle / on / off ───
+      if (sub === "toggle" || sub === "on" || sub === "off") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) {
+          return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles untuk mengatur fitur pengumuman booster.");
+        }
+        let newState = "on";
+        if (sub === "off" || (sub === "toggle" && args[1]?.toLowerCase() === "off")) {
+          newState = "off";
+        } else if (sub === "on" || (sub === "toggle" && args[1]?.toLowerCase() === "on")) {
+          newState = "on";
+        } else if (sub === "toggle") {
+          const cur = await MetaText.findOne({ key: `booster_announcement_enabled_${message.guild.id}` }).lean().catch(() => null);
+          newState = (cur?.value === "off") ? "on" : "off";
+        }
+        await MetaText.updateOne(
+          { key: `booster_announcement_enabled_${message.guild.id}` },
+          { $set: { value: newState } },
+          { upsert: true }
+        ).catch(() => null);
+        return message.reply(`✅ Fitur pengumuman Booster Rewards berhasil **${newState.toUpperCase() === "ON" ? "DIAKTIFKAN (ON) 🔔" : "DIMATIKAN (OFF) 🔕"}**.`);
+      }
+
+      // ─── ACTION: setmsg — Custom Announcement Text ───
+      if (sub === "setmsg" || sub === "setmessage" || sub === "msg") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) {
+          return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles.");
+        }
+        const newMsg = args.slice(1).join(" ");
+        if (!newMsg) {
+          return message.reply(
+            "❌ Masukkan teks pesan yang baru!\n\n" +
+            "**Placeholder yang bisa digunakan:**\n" +
+            "• `{user}` : Tag user booster (<@id>)\n" +
+            "• `{username}` : Nama user\n" +
+            "• `{guild}` : Nama server\n" +
+            "• `{boosts}` : Total boost server\n" +
+            "• `{rolechannel}` : Channel info custom role\n\n" +
+            "**Contoh:** `cbooster setmsg Terima kasih {user} telah boost {guild}! Total boost: {boosts}. Atur role-mu di {rolechannel}!`"
+          );
+        }
+        await MetaText.updateOne(
+          { key: `booster_announcement_msg_${message.guild.id}` },
+          { $set: { value: newMsg } },
+          { upsert: true }
+        ).catch(() => null);
+        return message.reply("✅ Teks pesan pengumuman booster berhasil diperbarui! Ketik `cbooster test` untuk melihat hasilnya.");
+      }
+
+      // ─── ACTION: settitle — Custom Embed Title ───
+      if (sub === "settitle" || sub === "title") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) return message.reply("❌ Akses ditolak.");
+        const newTitle = args.slice(1).join(" ");
+        if (!newTitle) return message.reply("❌ Masukkan judul baru! (Contoh: `cbooster settitle 🎉 Server Booster Celebration`)");
+        await MetaText.updateOne(
+          { key: `booster_announcement_title_${message.guild.id}` },
+          { $set: { value: newTitle } },
+          { upsert: true }
+        ).catch(() => null);
+        return message.reply(`✅ Judul pengumuman booster di-set ke: **${newTitle}**`);
+      }
+
+      // ─── ACTION: setbaserole — Set Base Role Position Anchor ───
+      if (sub === "setbaserole" || sub === "setbase" || sub === "baserole" || sub === "setroleposition") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) return message.reply("❌ Akses ditolak.");
+        const targetRole = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
+        if (!targetRole) {
+          return message.reply(
+            "❌ Tag role yang ingin dijadikan **Base Role** (anchor posisi custom role).\n\n" +
+            "**Contoh:** `cbooster setbaserole @BaseRole`\n" +
+            "*Bot akan otomatis menempatkan custom role booster tepat di atas (above) role ini agar warna nama booster berubah!*"
+          );
+        }
+        await MetaText.updateOne(
+          { key: `booster_role_below_${message.guild.id}` },
+          { $set: { value: targetRole.id } },
+          { upsert: true }
+        ).catch(() => null);
+        return message.reply(
+          `✅ **Base Role** berhasil di-set ke <@&${targetRole.id}>!\n` +
+          `> Custom role yang diklaim booster akan otomatis dibuat tepat **di atas (above)** role ini, sehingga nama booster akan berwarna sesuai custom role-nya.`
+        );
+      }
+
+      // ─── ACTION: setup — Quick Guided Setup for Booster System ───
+      if (sub === "setup" || sub === "wizard") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild);
+        if (!isAdminUser) {
+          return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles untuk melakukan setup booster.");
+        }
+
+        const mentionedChannels = Array.from(message.mentions.channels.values());
+        const mentionedRole = message.mentions.roles.first();
+
+        let updatedMsg = [];
+        if (mentionedChannels.length > 0) {
+          const logCh = mentionedChannels[0];
+          await MetaText.updateOne({ key: `booster_log_channel_${message.guild.id}` }, { $set: { value: logCh.id } }, { upsert: true }).catch(() => null);
+          updatedMsg.push(`• Channel Pengumuman Log: <#${logCh.id}>`);
+
+          if (mentionedChannels.length > 1) {
+            const roleCh = mentionedChannels[1];
+            await MetaText.updateOne({ key: `booster_custom_role_channel_${message.guild.id}` }, { $set: { value: roleCh.id } }, { upsert: true }).catch(() => null);
+            updatedMsg.push(`• Channel Info Custom Role: <#${roleCh.id}>`);
+          }
+        }
+
+        if (mentionedRole) {
+          await MetaText.updateOne({ key: `booster_role_below_${message.guild.id}` }, { $set: { value: mentionedRole.id } }, { upsert: true }).catch(() => null);
+          updatedMsg.push(`• Base Anchor Role: <@&${mentionedRole.id}>`);
+        }
+
+        const toggleDoc = await MetaText.findOne({ key: `booster_announcement_enabled_${message.guild.id}` }).lean().catch(() => null);
+        const isEnabled = toggleDoc?.value !== "off";
+        const logChId = await MetaText.findOne({ key: `booster_log_channel_${message.guild.id}` }).lean().catch(() => null);
+        const roleChId = await MetaText.findOne({ key: `booster_custom_role_channel_${message.guild.id}` }).lean().catch(() => null);
+        const baseRoleId = await getBoosterRolePosition(message.guild);
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## ⚡ Setup & Konfigurasi System Booster"),
+            new TextDisplayBuilder().setContent(
+              [
+                ...(updatedMsg.length ? ["**<a:Fm_check:1523182720493289666> Berhasil Diperbarui:**", updatedMsg.join("\n"), ""] : []),
+                "**📌 Status Konfigurasi Saat Ini:**",
+                `▸ **Status Fitur:** ${isEnabled ? "<a:971828statusonline:1521081779455397888> **[ ON / AKTIF ]**" : "<a:460240statusoffline:1521082558664806501> **[ OFF / NONAKTIF ]**"}`,
+                `▸ **Channel Pengumuman:** ${logChId?.value ? `<#${logChId.value}>` : "*Belum di-set*"}`,
+                `▸ **Channel Custom Role:** ${roleChId?.value ? `<#${roleChId.value}>` : "*Belum di-set*"}`,
+                `▸ **Base Anchor Role:** ${baseRoleId ? `<@&${baseRoleId}>` : "*Belum di-set*"}`,
+                "",
+                "**💡 Cara Setup 1-Baris Cepat:**",
+                "`cbooster setup #channel-log #channel-custom-role @BaseRole`",
+                "",
+                "**Perintah Pengaturan Individual:**",
+                "• `cbooster setlog #channel` — Set channel pengumuman boost",
+                "• `cbooster setrolechannel #channel` — Set tag channel custom role",
+                "• `cbooster setbaserole @Role` — Set role batas posisi custom role",
+                "• `cbooster toggle on|off` — Aktifkan/Matikan pengumuman booster",
+                "• `cbooster test` — Test tampilan kartu pengumuman",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Booster System Setup Wizard`)
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      }
+
+      // ─── ACTION: config / status — View Booster System Configuration ───
+      if (sub === "config" || sub === "status" || sub === "setting" || sub === "settings") {
+        const toggleDoc = await MetaText.findOne({ key: `booster_announcement_enabled_${message.guild.id}` }).lean().catch(() => null);
+        const isEnabled = toggleDoc?.value !== "off";
+        const logChId = await MetaText.findOne({ key: `booster_log_channel_${message.guild.id}` }).lean().catch(() => null);
+        const roleChId = await MetaText.findOne({ key: `booster_custom_role_channel_${message.guild.id}` }).lean().catch(() => null);
+        const baseRoleId = await getBoosterRolePosition(message.guild);
+        const titleDoc = await MetaText.findOne({ key: `booster_announcement_title_${message.guild.id}` }).lean().catch(() => null);
+        const msgDoc = await MetaText.findOne({ key: `booster_announcement_msg_${message.guild.id}` }).lean().catch(() => null);
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## ⚙️ Pengaturan Booster System & Rewards"),
+            new TextDisplayBuilder().setContent(
+              [
+                `▸ **Status Pengumuman:** ${isEnabled ? "\`[ 🟢 ON / AKTIF ]\`" : "\`[ 🔴 OFF / NONAKTIF ]\`"}`,
+                `▸ **Channel Pengumuman:** ${logChId?.value ? `<#${logChId.value}>` : "*Default (System Channel)*"}`,
+                `▸ **Channel Custom Role:** ${roleChId?.value ? `<#${roleChId.value}>` : "<#1459524453816860816>"}`,
+                `▸ **Base Role (Anchor):** ${baseRoleId ? `<@&${baseRoleId}>` : "*Belum di-set (default bottom)*"}`,
+                `▸ **Judul Embed:** \`${titleDoc?.value || "✨ Booster Rewards"}\``,
+                "",
+                "**Teks Pesan Saat Ini:**",
+                `\`\`\`text\n${msgDoc?.value || "(Menggunakan Teks Default)"}\n\`\`\``,
+                "",
+                "**Perintah Pengaturan Admin:**",
+                "• `cbooster toggle on|off` - Aktifkan/Matikan pengumuman",
+                "• `cbooster setbaserole @Role` - Set Base Role posisi custom role (Above Base Role)",
+                "• `cbooster setmsg <teks>` - Kustomisasi kata-kata pesan",
+                "• `cbooster resetmsg` - Reset ke pesan default",
+                "• `cbooster settitle <judul>` - Ubah judul embed",
+                "• `cbooster setlog #channel` - Ubah channel pengumuman",
+                "• `cbooster setrolechannel #channel` - Ubah tag channel custom role",
+                "• `cbooster test` - Pratinjau tampilan kartu di Discord",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Booster System Configuration`)
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      }
+
+      // ─── Helper: build beautiful Container V2 help panel ───
+
+      function buildMyRoleHelpPanel() {
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("# 🎨 My Custom Role — Panduan Lengkap"),
+            new TextDisplayBuilder().setContent(
+              [
+                "Custom role eksklusif untuk **Server Booster** 💖",
+                "Boost server → klaim role → atur & bagikan ke teman!",
+                "",
+                "> ⚠️ Kamu dapat mengelola custom role-mu sendiri dan membagikannya ke teman.",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              [
+                "## 📦 Klaim Custom Role",
+                "`cmyrole claim <nama role>`",
+                "**Contoh:** `cmyrole claim Role VIP Keren`",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              [
+                "## 🎨 Ganti Warna Role",
+                "`cmyrole color #HEX` — Ganti warna role-mu",
+                "**Contoh:** `cmyrole color #ff5733`",
+                "",
+                "> 💡 *Ingin buat 2 warna gradien / request khusus? Tag **Admin / Staff** server untuk dibuatkan!*",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              [
+                "## 🎁 Gift Role ke Teman",
+                "`cmyrole gift @User` — Berikan role-mu ke teman",
+                "`cmyrole ungift @User` — Tarik role-mu dari teman",
+                "",
+                "> 📌 **Kuota Slot Gift:**",
+                "> • **1 Boost** = Gift max **3 orang**",
+                "> • **2 Boosts** = Gift max **5 orang**",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              [
+                "## 🖼️ Set & Hapus Background Icon",
+                "`cmyrole icon` — Pasang icon *(Bisa reply gambar / attach / URL)*",
+                "`cmyrole removeicon` — Hapus icon",
+                "",
+                "## ✏️ Rename & 🗑️ Delete",
+                "`cmyrole rename <nama baru>` — Ganti nama role",
+                "`cmyrole delete` — Hapus custom role-mu",
+                "`cmyrole info` — Lihat detail & statistik custom role-mu",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              `Mystral • My Custom Role • Ketik \`cmyrole\` tanpa argumen untuk melihat panduan ini`
+            )
+          );
+
+        return {
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        };
+      }
+
+      // ─── No subcommand / help → show panel ───
+      if (!sub || sub === "help" || cmd === "myrolehelp") {
+        return message.reply(buildMyRoleHelpPanel());
+      }
+
+      // ─── ACTION: claim — booster manually creates their custom role ───
+      if (sub === "claim" || sub === "klaim" || sub === "create" || sub === "buat") {
+        // Check if user is a booster
+        const claimMember = message.guild.members.cache.get(message.author.id) ||
+          await message.guild.members.fetch(message.author.id).catch(() => null);
+
+        const isBooster = !!claimMember?.premiumSince;
+        const isAdmin = isBotOwner(message.author.id) || hasPerm(claimMember, PermissionsBitField.Flags.ManageRoles);
+
+        if (!isBooster && !isAdmin) {
+          const c = new ContainerBuilder()
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent("## ❌ Fitur Khusus Server Booster"),
+              new TextDisplayBuilder().setContent(
+                [
+                  "Custom role hanya tersedia untuk **Server Booster** 💖",
+                  "",
+                  "> Boost server Mystral untuk mendapatkan custom role-mu sendiri!",
+                  "> Setelah boost, ketik `cmyrole claim <nama role>` untuk membuat role-mu.",
+                ].join("\n")
+              )
+            )
+            .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent(`Mystral • My Custom Role • <t:${Math.floor(Date.now() / 1000)}:R>`)
+            );
+          return message.reply({
+            components: [c],
+            flags: MessageFlags.IsComponentsV2,
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // Check if already has a custom role
+        const existingDoc = await BoosterCustomRole.findOne({
+          user_id: message.author.id,
+          guild_id: message.guild.id,
+        }).lean().catch(() => null);
+
+        if (existingDoc?.role_id) {
+          const existingRole = message.guild.roles.cache.get(existingDoc.role_id);
+          if (existingRole) {
+            return message.reply({
+              embeds: [new EmbedBuilder()
+                .setColor(0xe67e22)
+                .setTitle("⚠️ Custom Role Sudah Ada")
+                .setDescription(`Kamu sudah punya custom role: <@&${existingRole.id}> (\`${existingRole.name}\`).`)
+                .addFields({ name: "Apa yang bisa dilakukan?", value: "`cmyrole color` — ganti warna\n`cmyrole rename` — ganti nama\n`cmyrole gift @user` — gift ke teman\n`cmyrole info` — lihat detail" })
+              ],
+              allowedMentions: { parse: [] },
+            });
+          }
+          // Role was deleted from Discord, allow re-claim
+          await BoosterCustomRole.deleteOne({ user_id: message.author.id, guild_id: message.guild.id }).catch(() => null);
+        }
+
+        // Parse the role name from args
+        const roleName = args.slice(1).join(" ").trim();
+        if (!roleName || roleName.length < 1) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ Nama Role Diperlukan")
+              .setDescription("Sebutkan nama untuk custom role-mu.")
+              .addFields({ name: "Contoh", value: "`cmyrole claim cyizzielovecas`\n`cmyrole claim rolevipku`" })
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+        if (roleName.length > 100) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Nama Terlalu Panjang").setDescription("Nama role maksimal **100 karakter**.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        // Get position config
+        const belowRoleId = await getBoosterRolePosition(message.guild);
+        let position = 1;
+        if (belowRoleId) {
+          const belowRole = message.guild.roles.cache.get(belowRoleId);
+          if (belowRole) position = Math.max(1, belowRole.position + 1);
+        }
+
+        try {
+          const newRole = await message.guild.roles.create({
+            name: roleName,
+            color: 0xf47fff,
+            reason: `Custom role claimed by ${message.author.tag} via cmyrole claim`,
+            position,
+          });
+
+          // Give role to the member
+          await claimMember.roles.add(newRole.id, "Booster custom role claim").catch(() => null);
+
+          // Save to DB
+          await BoosterCustomRole.updateOne(
+            { user_id: message.author.id, guild_id: message.guild.id },
+            { $set: { role_id: newRole.id, created_at: Date.now() } },
+            { upsert: true }
+          ).catch(() => null);
+
+          const c = new ContainerBuilder()
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent("## 🎉 Custom Role Berhasil Diklaim!"),
+              new TextDisplayBuilder().setContent(
+                [
+                  `**Role:** <@&${newRole.id}>`,
+                  `**Nama:** \`${roleName}\``,
+                  "",
+                  "Sekarang kamu bisa mengatur role-mu:",
+                  "• `cmyrole color #HEX1 [#HEX2]` — ganti warna & gradien",
+                  "• `cmyrole gift @User` — gift ke teman (1 Boost = 2 org, 2 Boosts = 5 org)",
+                  "• `cmyrole rename <nama>` — ganti nama",
+                  "• `cmyrole icon <url>` — pasang icon (Boost Lvl 2)",
+                  "• `cmyrole info` — lihat detail role-mu",
+                ].join("\n")
+              )
+            )
+            .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent(`Mystral • My Custom Role • <t:${Math.floor(Date.now() / 1000)}:R>`)
+            );
+          return message.reply({
+            components: [c],
+            flags: MessageFlags.IsComponentsV2,
+            allowedMentions: { parse: [] },
+          });
+        } catch (err) {
+          console.error("[MYROLE CLAIM FAIL]", err);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Membuat Custom Role").setDescription(`\`${err.message}\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      // ─── Target role resolution ───
+      const isBotOwnerUser = isBotOwner(message.author.id);
+      const hasManage = message.member ? hasPerm(message.member, PermissionsBitField.Flags.ManageRoles) : false;
+
+      let targetRole = null;
+      let targetUser = message.author;
+
+      if (isBotOwnerUser || hasManage) {
+        const mentionedRole = message.mentions.roles.first();
+        const mentionedMember = message.mentions.members.first();
+
+        if (mentionedRole) {
+          targetRole = mentionedRole;
+        } else if (mentionedMember) {
+          targetUser = mentionedMember.user;
+          const targetDoc = await BoosterCustomRole.findOne({ user_id: mentionedMember.id, guild_id: message.guild.id }).lean().catch(() => null);
+          if (targetDoc?.role_id) {
+            targetRole = message.guild.roles.cache.get(targetDoc.role_id);
+          }
+        }
+      }
+
+      const boosterDoc = await BoosterCustomRole.findOne({
+        user_id: targetUser.id,
+        guild_id: message.guild.id,
+      }).lean().catch(() => null);
+
+      if (!targetRole && boosterDoc?.role_id) {
+        targetRole = message.guild.roles.cache.get(boosterDoc.role_id);
+      }
+
+      if (!targetRole) {
+        if (!boosterDoc) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0x5865f2)
+              .setTitle("💖 Belum Punya Custom Role")
+              .setDescription("Custom role dibuat otomatis saat kamu **boost server** ini.")
+              .addFields({ name: "Cara mendapatkannya", value: "1. Boost server ini\n2. Ketik `cmyrole claim <nama role>`\n3. Atur sesukamu dengan `cmyrole`!" })
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Custom Role Tidak Ditemukan").setDescription("Custom role kamu sepertinya sudah dihapus dari server. Hubungi admin atau claim ulang.")],
+          allowedMentions: { repliedUser: false },
+        });
+      }
+
+      // ─── Check bot hierarchy ───
+      const botMember = message.guild.members.me;
+      if (botMember.roles.highest.position <= targetRole.position) {
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Hierarki Bot Tidak Cukup").setDescription(`Bot tidak bisa mengedit role **${targetRole.name}** karena posisinya lebih tinggi dari role bot.`)],
+          allowedMentions: { repliedUser: false },
+        });
+      }
+
+      // ─── Helper: success container ───
+      function successContainer(title, bodyLines) {
+        const c = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`## ✅ ${title}`),
+            new TextDisplayBuilder().setContent(bodyLines.join("\n"))
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • My Custom Role • <t:${Math.floor(Date.now() / 1000)}:R>`)
+          );
+        return {
+          components: [c],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        };
+      }
+
+      // ─── ACTION: color ───
+      if (sub === "color" || sub === "warna" || sub === "setcolor") {
+        const hexRegex = /^#?([0-9A-Fa-f]{6})$/;
+        const colorArgs = args.slice(1).filter(a => hexRegex.test(a));
+
+        if (!colorArgs.length) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ Warna Tidak Valid")
+              .setDescription("Sebutkan kode warna HEX yang valid.")
+              .addFields({ name: "Contoh", value: "`cmyrole color #ff5733` atau `cmyrole color #ff5733 #8e44ad` (2-Color Gradient)" })
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const col1 = colorArgs[0].startsWith("#") ? colorArgs[0] : `#${colorArgs[0]}`;
+        const col2 = colorArgs[1] ? (colorArgs[1].startsWith("#") ? colorArgs[1] : `#${colorArgs[1]}`) : null;
+
+        const roleHexToApply = col2 ? blendColors(col1, col2) : col1;
+
+        try {
+          await targetRole.setColor(roleHexToApply);
+
+          // If 2-color gradient is specified, attempt to auto-set a gradient role icon
+          let iconNote = "";
+          if (col2) {
+            const iconBuffer = generateGradientRoleIcon(col1, col2);
+            if (iconBuffer) {
+              const iconSet = await targetRole.setIcon(iconBuffer).then(() => true).catch(() => false);
+              if (iconSet) {
+                iconNote = "\n🌈 *Icon role bergradien 2 warna juga telah dipasang secara otomatis!*";
+              }
+            }
+          }
+
+          // Save color metadata to BoosterCustomRole & custom_roles DB
+          await BoosterCustomRole.updateOne(
+            { role_id: targetRole.id, guild_id: message.guild.id },
+            { $set: { color_hex1: col1, color_hex2: col2 } }
+          ).catch(() => null);
+
+          const CustomRoles = getMongoModel("custom_roles");
+          if (CustomRoles) {
+            await CustomRoles.updateOne(
+              { guild_id: message.guild.id, role_id: targetRole.id },
+              { $set: { primary_color: col1, secondary_color: col2, updated_at: Date.now() } },
+              { upsert: true }
+            ).catch(() => null);
+          }
+
+          const colorDesc = col2
+            ? `\`${col1}\` ➔ \`${col2}\` *(Hasil Perpaduan Warna Role Discord: \`${roleHexToApply}\` 🌈)*`
+            : `\`${col1}\` *(Solid)*`;
+
+          return message.reply(successContainer("Warna Role Diperbarui", [
+            `**Role:** <@&${targetRole.id}>`,
+            `**Warna:** ${colorDesc}${iconNote}`,
+            "",
+            `> Warna role **${targetRole.name}** berhasil diubah!`,
+          ]));
+        } catch (err) {
+          console.error("[MYROLE COLOR FAIL]", err);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Mengubah Warna").setDescription(`\`${err.message}\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      // ─── ACTION: gift / ungift ───
+      if (sub === "gift" || sub === "beri" || sub === "give") {
+        const targetMember = message.mentions.members.first() || message.guild.members.cache.get(args[1]);
+        if (!targetMember) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Member Diperlukan").setDescription("Tag member yang ingin kamu beri custom role-mu!\n\n**Contoh:** `cmyrole gift @TemanKamu`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const giftedUsers = boosterDoc?.gifted_users || [];
+        const quota = await getBoosterGiftQuota(message.member, message.guild.id);
+
+        if (giftedUsers.includes(targetMember.id)) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe67e22).setTitle("⚠️ Sudah Menerima Role").setDescription(`<@${targetMember.id}> sudah memiliki custom role-mu!`)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        if (giftedUsers.length >= quota) {
+          const boostInfo = quota === 5 ? "2 Boosts" : "1 Boost";
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ Kuota Gift Role Penuh")
+              .setDescription(
+                `Dengan **${boostInfo}**, kamu memiliki **${quota} slot gift** (\`${giftedUsers.length}/${quota}\` terpakai).\n` +
+                (quota === 3 ? "\n💡 *Boost server sekali lagi (total 2 boosts) untuk membuka **5 slot gift**!*" : "")
+              )
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        try {
+          await targetMember.roles.add(targetRole.id, `Gifted by ${message.author.tag} via cmyrole gift`);
+          await BoosterCustomRole.updateOne(
+            { user_id: message.author.id, guild_id: message.guild.id },
+            { $addToSet: { gifted_users: targetMember.id } }
+          ).catch(() => null);
+
+          return message.reply(successContainer("Role Berhasil Digift!", [
+            `**Penerima:** <@${targetMember.id}>`,
+            `**Custom Role:** <@&${targetRole.id}>`,
+            `**Kuota Slot:** \`${giftedUsers.length + 1}/${quota}\` terpakai`,
+            "",
+            `> <@${targetMember.id}> sekarang memiliki custom role **${targetRole.name}**!`,
+          ]));
+        } catch (err) {
+          console.error("[MYROLE GIFT FAIL]", err);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Memberikan Role").setDescription(`\`${err.message}\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      if (sub === "ungift" || sub === "removegift" || sub === "tarik" || sub === "revokegift") {
+        const targetMember = message.mentions.members.first() || message.guild.members.cache.get(args[1]);
+        if (!targetMember) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Member Diperlukan").setDescription("Tag member yang ingin ditarik role-nya!\n\n**Contoh:** `cmyrole ungift @TemanKamu`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        try {
+          await targetMember.roles.remove(targetRole.id, `Ungifted by ${message.author.tag} via cmyrole ungift`).catch(() => null);
+          await BoosterCustomRole.updateOne(
+            { user_id: message.author.id, guild_id: message.guild.id },
+            { $pull: { gifted_users: targetMember.id } }
+          ).catch(() => null);
+
+          return message.reply(successContainer("Role Berhasil Ditarik", [
+            `**Penerima:** <@${targetMember.id}>`,
+            `**Custom Role:** <@&${targetRole.id}>`,
+            "",
+            `> Custom role **${targetRole.name}** telah ditarik dari <@${targetMember.id}>.`,
+          ]));
+        } catch (err) {
+          console.error("[MYROLE UNGIFT FAIL]", err);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Menarik Role").setDescription(`\`${err.message}\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      // ─── ACTION: delete / del / hapus ───
+      if (sub === "delete" || sub === "del" || sub === "hapus" || sub === "removerole") {
+        try {
+          const roleName = targetRole.name;
+          await targetRole.delete(`Deleted by ${message.author.tag} via cmyrole delete`);
+          await BoosterCustomRole.deleteOne({ user_id: message.author.id, guild_id: message.guild.id }).catch(() => null);
+
+          const c = new ContainerBuilder()
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent("## 🗑️ Custom Role Berhasil Dihapus"),
+              new TextDisplayBuilder().setContent(
+                [
+                  `Role **${roleName}** telah dihapus dari server dan database.`,
+                  "",
+                  "> Apabila kamu masih status booster, kamu bisa membuat role baru lagi kapan saja dengan `cmyrole claim <nama_role>`.",
+                ].join("\n")
+              )
+            )
+            .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent(`Mystral • My Custom Role • <t:${Math.floor(Date.now() / 1000)}:R>`)
+            );
+
+          return message.reply({
+            components: [c],
+            flags: MessageFlags.IsComponentsV2,
+            allowedMentions: { parse: [] },
+          });
+        } catch (err) {
+          console.error("[MYROLE DELETE FAIL]", err);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Menghapus Role").setDescription(`\`${err.message}\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      // ─── ACTION: icon ───
+      if (sub === "icon" || sub === "seticon" || sub === "gambar") {
+        let iconUrl = args[1];
+        if (iconUrl && (iconUrl.startsWith("<@&") || iconUrl.startsWith("<@"))) iconUrl = args[2];
+        if (message.attachments.size > 0) {
+          iconUrl = message.attachments.first().url;
+        } else if (message.reference) {
+          try {
+            const repliedMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+            if (repliedMsg) {
+              if (repliedMsg.attachments.size > 0) {
+                iconUrl = repliedMsg.attachments.first().url;
+              } else if (repliedMsg.embeds.length > 0) {
+                const emb = repliedMsg.embeds[0];
+                iconUrl = emb.image?.url || emb.thumbnail?.url || null;
+              } else if (repliedMsg.content) {
+                const urlMatch = repliedMsg.content.match(/https?:\/\/\S+/i);
+                if (urlMatch) iconUrl = urlMatch[0];
+              }
+            }
+          } catch (e) {
+            console.error("[MYROLE REPLY FETCH FAIL]", e);
+          }
+        }
+
+        if (!iconUrl) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ URL / Gambar Diperlukan")
+              .setDescription("Sertakan URL gambar, lampirkan gambar, atau **reply pesan** yang berisi gambar.")
+              .addFields({ name: "Cara Penggunaan", value: "• `cmyrole icon https://i.imgur.com/abc.png`\n• Lampirkan gambar langsung di chat\n• Reply pesan yang berisi gambar dengan `cmyrole icon`" })
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        try {
+          await targetRole.setIcon(iconUrl);
+          return message.reply(successContainer("Icon Role Dipasang", [
+            `**Role:** <@&${targetRole.id}>`,
+            `**Icon:** [Lihat gambar](${iconUrl})`,
+            "",
+            `> Icon untuk role **${targetRole.name}** berhasil dipasang!`,
+          ]));
+        } catch (err) {
+          console.error("[MYROLE ICON FAIL]", err);
+          let errMsg = err.message;
+          if (err.code === 50013 || errMsg.includes("boost") || errMsg.includes("feature")) {
+            errMsg = "Server ini belum mencapai **Boost Level 2**. Fitur icon role membutuhkan minimal Boost Level 2.";
+          }
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Memasang Icon").setDescription(errMsg)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      // ─── ACTION: removeicon ───
+      if (sub === "removeicon" || sub === "delicon" || sub === "clearicon" || sub === "hapusicon" || sub === "noicon") {
+        try {
+          await targetRole.setIcon(null);
+          return message.reply(successContainer("Icon Role Dihapus", [
+            `**Role:** <@&${targetRole.id}>`,
+            "",
+            `> Icon pada role **${targetRole.name}** berhasil dihapus.`,
+          ]));
+        } catch (err) {
+          console.error("[MYROLE REMOVEICON FAIL]", err);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Menghapus Icon").setDescription(`\`${err.message}\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      // ─── ACTION: rename ───
+      if (sub === "rename" || sub === "namai" || sub === "setname") {
+        let nameParts = args.slice(1);
+        if (nameParts[0]?.startsWith("<@&")) nameParts = nameParts.slice(1);
+        const newName = nameParts.join(" ").trim();
+
+        if (!newName) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ Nama Baru Diperlukan")
+              .setDescription("Sebutkan nama baru untuk role-mu.")
+              .addFields({ name: "Contoh", value: "`cmyrole rename Nama Baru Keren`" })
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+        if (newName.length > 100) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Nama Terlalu Panjang").setDescription("Nama role maksimal **100 karakter**.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        try {
+          const oldName = targetRole.name;
+          await targetRole.setName(newName, `Renamed by ${message.author.tag} via cmyrole`);
+          return message.reply(successContainer("Nama Role Diubah", [
+            `**Role:** <@&${targetRole.id}>`,
+            `**Sebelumnya:** \`${oldName}\``,
+            `**Nama Baru:** \`${newName}\``,
+          ]));
+        } catch (err) {
+          console.error("[MYROLE RENAME FAIL]", err);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Mengubah Nama").setDescription(`\`${err.message}\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+      }
+
+      // ─── ACTION: info ───
+      if (sub === "info" || sub === "cek" || sub === "lihat" || sub === "detail") {
+        const hexCol1 = boosterDoc?.color_hex1 || targetRole.hexColor?.toUpperCase() || "#000000";
+        const hexCol2 = boosterDoc?.color_hex2 || null;
+        const colorText = hexCol2 ? `\`${hexCol1}\` → \`${hexCol2}\` *(Gradient 🌈)*` : `\`${hexCol1}\``;
+
+        const giftedUsers = boosterDoc?.gifted_users || [];
+        const quota = await getBoosterGiftQuota(message.member, message.guild.id);
+        const giftedText = giftedUsers.length ? giftedUsers.map(id => `<@${id}>`).join(", ") : "*(belum ada)*";
+
+        const createdTs = Math.floor(targetRole.createdTimestamp / 1000);
+        const iconUrl = targetRole.iconURL({ size: 128 });
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`## 🎨 Custom Role Detail & Info`),
+            new TextDisplayBuilder().setContent(
+              [
+                `▸ **Role:** <@&${targetRole.id}>`,
+                `▸ **Nama:** \`${targetRole.name}\``,
+                `▸ **ID:** \`${targetRole.id}\``,
+                `▸ **Warna:** ${colorText}`,
+                `▸ **Posisi:** \`#${targetRole.position}\``,
+                `▸ **Pemilik:** <@${message.author.id}>`,
+                `▸ **Dibuat:** <t:${createdTs}:D> (<t:${createdTs}:R>)`,
+                ...(iconUrl ? [`▸ **Icon:** [Lihat gambar](${iconUrl})`] : ["▸ **Icon:** *(tidak ada)*"]),
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              [
+                "### 🎁 Gift Role Status",
+                `▸ **Kuota Slot:** \`${giftedUsers.length} / ${quota}\` Terpakai *(1 Boost = 2 Slots, 2+ Boosts = 5 Slots)*`,
+                `▸ **Penerima Gift:** ${giftedText}`,
+                "",
+                "> Ketik `cmyrole gift @User` untuk membagikan role-mu ke teman!",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • My Custom Role • <t:${Math.floor(Date.now() / 1000)}:R>`)
+          );
+
+        return message.reply({
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // ─── Unknown subcommand → show help ───
+      return message.reply(buildMyRoleHelpPanel());
+    }
+
+    // ===================== STAFF TAGGING SYSTEM (CTAG) =====================
+    if (cmd === "tag" || cmd === "ctag" || cmd === "ctagging" || cmd === "stafftag" || cmd === "ctaghelp" || cmd === "taghelp") {
+      const sub = (args[0] || "").toLowerCase();
+
+      // ─── Helper: build beautiful Container V2 help panel ───
+      function buildStaffTagHelpPanel() {
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("# 📌 Staff Tagging System — Panduan"),
+            new TextDisplayBuilder().setContent(
+              [
+                "Sistem otomatisasi **Tag Member 2x Sehari** untuk Staff 📋",
+                "Jadwal diacak harian (Slot 1 Pagi/Siang & Slot 2 Sore/Malam).",
+                "",
+                "> ⏳ Timeout reminder akan aktif jika tugas belum di-`done` dalam batas waktu.",
+                "> ⚡ Staff lain dapat melakukan `takeover` jika petugas berhalangan.",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              [
+                "## 📋 Perintah Staff",
+                "`ctag duty` / `ctag status` — lihat jadwal & status tugas hari ini",
+                "`ctag roster` / `ctag minggu` — lihat jadwal rotasi mingguan (Senin - Minggu)",
+                "`ctag done` — tandai tugas tag member selesai",
+                "`ctag busy` — tandai berhalangan (buka giliran untuk takeover)",
+                "`ctag takeover` — ambil alih tugas tag member yang belum selesai",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              [
+                "## ⚙️ Perintah Admin",
+                "`ctag setup` — wizard & status konfigurasi lengkap 1-baris",
+                "`ctag test` / `ctag test 2` — uji pengumuman tag Slot 1 / Slot 2 di channel",
+                "`ctag test timeout` — uji pengumuman reminder timeout di channel",
+                "`ctag assign <1/2> @user` — atur petugas Slot 1 atau Slot 2 secara manual",
+                "`ctag config role @RoleStaff` — set role staff",
+                "`ctag config channel #channel` — set channel notifikasi tag",
+                "`ctag config timeout <menit>` — set batas reminder (default 60)",
+                "`ctag config time <HH:MM> <HH:MM>` — set jam Slot 1 & Slot 2",
+                "`ctag exempt add/remove/list` — kelola pengecualian staff",
+                "`ctag random` / `randomall` — acak ulang rotasi seluruh staff",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Staff Tagging • <t:${Math.floor(Date.now() / 1000)}:R>`)
+          );
+
+        return {
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        };
+      }
+
+      // Help / No Subcommand
+      if (!sub || sub === "help") {
+        return message.reply(buildStaffTagHelpPanel());
+      }
+
+      // ─── ACTION: duty / status — View Today's Schedule ───
+      if (sub === "duty" || sub === "status" || sub === "jadwal" || sub === "cek") {
+        const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+        const schedules = await getOrGenerateDailyStaffSchedule(message.guild);
+
+        if (!config || !config.staff_role_id) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe67e22)
+              .setTitle("⚠️ Role Staff Belum Dikonfigurasi")
+              .setDescription("Admin perlu mengatur role staff terlebih dahulu.")
+              .addFields({ name: "Pengaturan Admin", value: "`ctag config role @RoleStaff`" })
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        if (!schedules || schedules.length < 2) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ Tidak Ada Staff Yang Tersedia")
+              .setDescription("Tidak ditemukan member staff yang eligible untuk diacak jadwalnya (semua staff terdaftar di daftar pengecualian atau bot).")
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const dateKey = getStaffTagDateKey();
+        const formatStatus = (st) => {
+          if (st === "completed") return "✅ **Selesai**";
+          if (st === "busy") return "⚠️ **Berhalangan (Bisa Takeover)**";
+          if (st === "taken_over") return "⚡ **Di-Takeover & Selesai**";
+          return "⏳ **Pending**";
+        };
+
+        const s1 = schedules[0];
+        const s2 = schedules[1];
+        const chMention = config.tag_channel_id ? `<#${config.tag_channel_id}>` : "*(Belum di-set)*";
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`## 📅 Jadwal Tag Member Staff — \`${dateKey}\``),
+            new TextDisplayBuilder().setContent(
+              [
+                `**Slot 1 (Pagi/Siang — Jam ${config.slot1_time || "09:00"} WIB):**`,
+                `• Staff: <@${s1.assigned_user_id}>` + (s1.assigned_user_id !== s1.original_user_id ? ` *(di-takeover dari <@${s1.original_user_id}>)*` : ""),
+                `• Status: ${formatStatus(s1.status)}`,
+                "",
+                `**Slot 2 (Sore/Malam — Jam ${config.slot2_time || "19:00"} WIB):**`,
+                `• Staff: <@${s2.assigned_user_id}>` + (s2.assigned_user_id !== s2.original_user_id ? ` *(di-takeover dari <@${s2.original_user_id}>)*` : ""),
+                `• Status: ${formatStatus(s2.status)}`,
+                "",
+                `**Channel Notifikasi:** ${chMention}`,
+                `**Timeout Reminder:** \`${config.timeout_minutes || 60} menit\``,
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Staff Tagging • <t:${Math.floor(Date.now() / 1000)}:R>`)
+          );
+
+        return message.reply({
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // ─── ACTION: roster / weekly / minggu — View 7-Day Weekly Roster ───
+      if (sub === "roster" || sub === "weekly" || sub === "minggu" || sub === "jadwalminggu") {
+        const weekly = await getWeeklyStaffScheduleOverview(message.guild);
+        if (!weekly || !weekly.length) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Belum Ada Roster Mingguan").setDescription("Pastikan role staff sudah di-set di `ctag config role @RoleStaff`.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const lines = weekly.map((item) => {
+          const s1 = item.schedules?.[0];
+          const s2 = item.schedules?.[1];
+          const u1 = s1 ? `<@${s1.assigned_user_id}>` : "*(kosong)*";
+          const u2 = s2 ? `<@${s2.assigned_user_id}>` : "*(kosong)*";
+          return `**${item.dayName}** (\`${item.dateKey}\`):\n• Slot 1: ${u1}\n• Slot 2: ${u2}`;
+        });
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## 🗓️ Roster Tag Member Staff (Senin - Minggu)"),
+            new TextDisplayBuilder().setContent(lines.join("\n\n"))
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Staff Tagging System • Rotasi Berulang Berkesinambungan`)
+          );
+
+        return message.reply({
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // ─── ACTION: done / selesai — Mark duty as completed ───
+      if (sub === "done" || sub === "selesai" || sub === "acc") {
+        const schedules = await getOrGenerateDailyStaffSchedule(message.guild);
+        if (!schedules) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Belum Ada Jadwal").setDescription("Sistem tag belum memiliki jadwal untuk hari ini.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const targetSched = schedules.find((s) => s.assigned_user_id === message.author.id && s.status !== "completed");
+        if (!targetSched) {
+          const activeSched = schedules.find((s) => s.status !== "completed");
+          if (!activeSched) {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Semua Tugas Sudah Selesai").setDescription("Tidak ada tugas tag member yang pending untuk diselesaikan hari ini!")],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Akses Ditolak").setDescription(`Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai tugas ini selesai.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        const now = Date.now();
+        const isTakeover = targetSched.assigned_user_id !== targetSched.original_user_id;
+
+        await StaffTagSchedule.updateOne(
+          { _id: targetSched._id },
+          { $set: { status: "completed", completed_at: now } }
+        ).catch(() => null);
+
+        const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+        const slotName = getStaffSlotName(targetSched.slot, config);
+        const payload = buildStaffTagCompletedContainer(message.author.id, slotName, now, isTakeover, targetSched.original_user_id);
+
+        const tagChannelId = config?.tag_channel_id || message.channel.id;
+        const ch = message.guild.channels.cache.get(tagChannelId);
+        if (ch && targetSched.message_id) {
+          const annMsg = await ch.messages.fetch(targetSched.message_id).catch(() => null);
+          if (annMsg) {
+            await annMsg.edit(payload).catch(() => null);
+            if (message.channel.id !== ch.id) {
+              return message.reply({
+                embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Status Diperbarui").setDescription(`Kartu duty di <#${ch.id}> telah diperbarui ke status **Selesai**.`)],
+                allowedMentions: { parse: [] },
+              });
+            }
+            return;
+          }
+        }
+
+        return message.reply(payload);
+      }
+
+      // ─── ACTION: busy / skip / berhalangan — Mark duty as busy ───
+      if (sub === "busy" || sub === "skip" || sub === "berhalangan" || sub === "gabisa") {
+        const schedules = await getOrGenerateDailyStaffSchedule(message.guild);
+        if (!schedules) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Belum Ada Jadwal").setDescription("Sistem tag belum memiliki jadwal untuk hari ini.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const targetSched = schedules.find((s) => s.assigned_user_id === message.author.id && s.status === "pending");
+        if (!targetSched) {
+          const activeSched = schedules.find((s) => s.status === "pending");
+          if (!activeSched) {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Tidak Ada Giliran Aktif").setDescription("Tidak ada giliran tag member yang sedang pending hari ini.")],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Akses Ditolak").setDescription(`Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai berhalangan.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        await StaffTagSchedule.updateOne(
+          { _id: targetSched._id },
+          { $set: { status: "busy" } }
+        ).catch(() => null);
+
+        const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+        const slotName = getStaffSlotName(targetSched.slot, config);
+        const payload = buildStaffTagBusyContainer(message.author.id, slotName, false, config?.staff_role_id);
+
+
+        const tagChannelId = config?.tag_channel_id || message.channel.id;
+        const ch = message.guild.channels.cache.get(tagChannelId);
+        if (ch && targetSched.message_id) {
+          const annMsg = await ch.messages.fetch(targetSched.message_id).catch(() => null);
+          if (annMsg) {
+            await annMsg.edit(payload).catch(() => null);
+            if (message.channel.id !== ch.id) {
+              return message.reply({
+                embeds: [new EmbedBuilder().setColor(0xe67e22).setTitle("⚠️ Status Diperbarui").setDescription(`Kartu duty di <#${ch.id}> telah diperbarui ke status **Berhalangan**.`)],
+                allowedMentions: { parse: [] },
+              });
+            }
+            return;
+          }
+        }
+
+        return message.reply(payload);
+      }
+
+      // ─── ACTION: takeover / ambil — Take over pending/busy slot ───
+      if (sub === "takeover" || sub === "ambil" || sub === "gantikan") {
+        const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+        const isStaff = config?.staff_role_id && message.member.roles.cache.has(config.staff_role_id);
+        const isAdmin = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+
+        if (!isStaff && !isAdmin) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Fitur Khusus Staff").setDescription("Hanya anggota staff yang dapat mengambil alih tugas tag member.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const schedules = await getOrGenerateDailyStaffSchedule(message.guild);
+        if (!schedules) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Belum Ada Jadwal").setDescription("Sistem tag belum memiliki jadwal untuk hari ini.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        // Find available slot (busy first, then pending)
+        let targetSched = schedules.find((s) => s.status === "busy");
+        if (!targetSched) {
+          targetSched = schedules.find((s) => s.status === "pending" && s.assigned_user_id !== message.author.id);
+        }
+
+        if (!targetSched) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Tidak Ada Tugas Untuk Di-Takeover").setDescription("Semua tugas tag member hari ini sudah selesai atau sedang kamu pegang.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const prevUser = targetSched.assigned_user_id;
+
+        await StaffTagSchedule.updateOne(
+          { _id: targetSched._id },
+          {
+            $set: {
+              assigned_user_id: message.author.id,
+              status: "pending",
+              notified_at: Date.now(),
+              reminder_sent: false,
+            },
+          }
+        ).catch(() => null);
+
+        const slotName = getStaffSlotName(targetSched.slot, config);
+        const payload = buildStaffTagTakeoverContainer(message.author.id, prevUser, slotName);
+
+        const tagChannelId = config?.tag_channel_id || message.channel.id;
+        const ch = message.guild.channels.cache.get(tagChannelId);
+        if (ch && targetSched.message_id) {
+          const annMsg = await ch.messages.fetch(targetSched.message_id).catch(() => null);
+          if (annMsg) {
+            await annMsg.edit(payload).catch(() => null);
+            if (message.channel.id !== ch.id) {
+              return message.reply({
+                embeds: [new EmbedBuilder().setColor(0x3498db).setTitle("⚡ Takeover Berhasil").setDescription(`Kartu duty di <#${ch.id}> telah diperbarui untuk petugas baru <@${message.author.id}>.`)],
+                allowedMentions: { parse: [] },
+              });
+            }
+            return;
+          }
+        }
+
+        return message.reply(payload);
+      }
+
+
+      // ─── ADMIN ACTIONS ───
+      const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+
+      // ─── ACTION: assign / setduty / manual — Assign staff manually to slot 1 or 2 ───
+      if (sub === "assign" || sub === "setduty" || sub === "setjadwal" || sub === "manual") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin admin untuk mengatur jadwal manual.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const slotNum = parseInt(args[1]);
+        const targetUser = message.mentions.users.first() || (args[2] ? await message.client.users.fetch(args[2]).catch(() => null) : null);
+
+        if (isNaN(slotNum) || (slotNum !== 1 && slotNum !== 2) || !targetUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ Format Command Tidak Valid")
+              .setDescription("Sebutkan nomor slot (1 atau 2) dan mention user staff.\n\n**Contoh:**\n`ctag assign 1 @StaffA` (Set Slot 1)\n`ctag assign 2 @StaffB` (Set Slot 2)")
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const dateKey = getStaffTagDateKey();
+
+        await StaffTagSchedule.findOneAndUpdate(
+          { guild_id: message.guild.id, date_key: dateKey, slot: slotNum },
+          {
+            $set: {
+              assigned_user_id: targetUser.id,
+              original_user_id: targetUser.id,
+              status: "pending",
+              notified_at: null,
+              completed_at: null,
+              reminder_sent: false,
+            },
+          },
+          { upsert: true, returnDocument: 'after' }
+        ).catch(() => null);
+
+        const slotName = slotNum === 1 ? "Slot 1 (Pagi/Siang)" : "Slot 2 (Sore/Malam)";
+
+        return message.reply({
+          embeds: [new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle("✅ Jadwal Manual Berhasil Di-Set")
+            .setDescription(`Staff <@${targetUser.id}> telah ditugaskan secara manual untuk **${slotName}** hari ini.`)
+          ],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // ─── ACTION: setup — Quick Guided Setup for Staff Tagging ───
+      if (sub === "setup" || sub === "wizard") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin admin untuk mengkonfigurasi Staff Tagging.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const role = message.mentions.roles.first();
+        const channel = message.mentions.channels.first();
+        const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+        const timeArgs = args.filter(a => timeRegex.test(a));
+        const numberArgs = args.filter(a => /^\d{1,4}$/.test(a));
+
+        let updatedLines = [];
+        const updateData = { updated_at: Date.now() };
+
+        if (role) {
+          updateData.staff_role_id = role.id;
+          updatedLines.push(`• Role Staff: <@&${role.id}>`);
+        }
+        if (channel) {
+          updateData.tag_channel_id = channel.id;
+          updatedLines.push(`• Channel Tag: <#${channel.id}>`);
+        }
+        if (timeArgs.length >= 2) {
+          updateData.slot1_time = timeArgs[0];
+          updateData.slot2_time = timeArgs[1];
+          updatedLines.push(`• Jam Slot 1 & 2: \`${timeArgs[0]}\` & \`${timeArgs[1]}\` WIB`);
+        } else if (timeArgs.length === 1) {
+          updateData.slot1_time = timeArgs[0];
+          updatedLines.push(`• Jam Slot 1: \`${timeArgs[0]}\` WIB`);
+        }
+
+        if (numberArgs.length > 0) {
+          const timeoutMins = parseInt(numberArgs[0], 10);
+          if (timeoutMins >= 5 && timeoutMins <= 1440) {
+            updateData.timeout_minutes = timeoutMins;
+            updatedLines.push(`• Timeout Reminder: \`${timeoutMins} menit\``);
+          }
+        }
+
+        if (Object.keys(updateData).length > 1) {
+          await StaffTagConfig.updateOne({ guild_id: message.guild.id }, { $set: updateData }, { upsert: true }).catch(() => null);
+          if (role) {
+            await getOrGenerateDailyStaffSchedule(message.guild, true);
+          }
+        }
+
+        const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+        const isReady = !!(config?.staff_role_id && config?.tag_channel_id);
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## 📌 Setup & Konfigurasi Staff Tagging System"),
+            new TextDisplayBuilder().setContent(
+              [
+                ...(updatedLines.length ? ["**<a:Fm_check:1523182720493289666> Berhasil Diperbarui:**", updatedLines.join("\n"), ""] : []),
+                "**📌 Status Konfigurasi Saat Ini:**",
+                `▸ **Status Sistem:** ${isReady ? "<a:971828statusonline:1521081779455397888> **[ READY / SIAP ]**" : "<a:460240statusoffline:1521082558664806501> **[ UNCONFIGURED / BELUM LENGKAP ]**"}`,
+                `▸ **Role Staff:** ${config?.staff_role_id ? `<@&${config.staff_role_id}>` : "*Belum di-set (Wajib)*"}`,
+                `▸ **Channel Tag:** ${config?.tag_channel_id ? `<#${config.tag_channel_id}>` : "*Belum di-set (Wajib)*"}`,
+                `▸ **Jam Slot 1 (Pagi/Siang):** \`${config?.slot1_time || "09:00"}\` WIB`,
+                `▸ **Jam Slot 2 (Sore/Malam):** \`${config?.slot2_time || "19:00"}\` WIB`,
+                `▸ **Batas Waktu Timeout:** \`${config?.timeout_minutes || 60} menit\``,
+                "",
+                "**💡 Cara Setup 1-Baris Cepat:**",
+                "`ctag setup @RoleStaff #channel-tag 09:00 19:00 60`",
+                "",
+                "**Perintah Pengaturan Individual:**",
+                "• `ctag config role @RoleStaff` — Set role staff",
+                "• `ctag config channel #channel` — Set channel pengumuman",
+                "• `ctag config time 09:00 19:00` — Set jam slot 1 & 2",
+                "• `ctag config timeout 60` — Set reminder timeout (menit)",
+                "• `ctag exempt add/remove/list` — Set pengecualian staff",
+                "• `ctag test` / `ctag test 2` / `ctag test timeout` — Uji coba pengumuman",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Staff Tagging Setup Wizard`)
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      }
+
+      // ─── ACTION: config ───
+      if (sub === "config" || sub === "set" || sub === "setting") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin `Manage Guild` / `Manage Roles` untuk mengubah konfigurasi.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const cfgType = (args[1] || "").toLowerCase();
+
+        // ctag config role @RoleStaff
+        if (cfgType === "role") {
+          const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[2]);
+          if (!role) {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Mention Role Staff").setDescription("Sebutkan/mention role staff.\n**Contoh:** `ctag config role @Staff`")],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+
+          await StaffTagConfig.updateOne(
+            { guild_id: message.guild.id },
+            { $set: { staff_role_id: role.id, updated_at: Date.now() } },
+            { upsert: true }
+          ).catch(() => null);
+
+          // Auto generate today's schedule from the staff role
+          const newSched = await getOrGenerateDailyStaffSchedule(message.guild, true);
+          const schedInfo = (newSched && newSched.length >= 2)
+            ? `\n\n🎲 **Jadwal Hari Ini Langsung Terisi:**\n• **Slot 1 (Pagi/Siang):** <@${newSched[0].assigned_user_id}>\n• **Slot 2 (Sore/Malam):** <@${newSched[1].assigned_user_id}>`
+            : "";
+
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0x2ecc71)
+              .setTitle("✅ Role Staff Berhasil Di-Set")
+              .setDescription(`Role Staff untuk sistem tag di-set ke <@&${role.id}>.${schedInfo}`)
+            ],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // ctag config channel #Channel
+        if (cfgType === "channel") {
+          const ch = message.mentions.channels.first() || message.guild.channels.cache.get(args[2]);
+          if (!ch) {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Mention Channel Notifikasi").setDescription("Sebutkan/mention channel notifikasi tag.\n**Contoh:** `ctag config channel #staff-chat`")],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+
+          await StaffTagConfig.updateOne(
+            { guild_id: message.guild.id },
+            { $set: { tag_channel_id: ch.id, updated_at: Date.now() } },
+            { upsert: true }
+          ).catch(() => null);
+
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Channel Notifikasi Berhasil Di-Set").setDescription(`Channel notifikasi tag di-set ke <#${ch.id}>.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // ctag config timeout <menit>
+        if (cfgType === "timeout") {
+          const mins = parseInt(args[2]);
+          if (isNaN(mins) || mins < 5 || mins > 1440) {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Durasi Timeout Tidak Valid").setDescription("Masukkan durasi dalam menit (antara 5 sampai 1440 menit).\n**Contoh:** `ctag config timeout 60`")],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+
+          await StaffTagConfig.updateOne(
+            { guild_id: message.guild.id },
+            { $set: { timeout_minutes: mins, updated_at: Date.now() } },
+            { upsert: true }
+          ).catch(() => null);
+
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Timeout Reminder Berhasil Di-Set").setDescription(`Timeout reminder di-set ke **${mins} menit**.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // ctag config time <09:00> <19:00>
+        if (cfgType === "time" || cfgType === "jam") {
+          const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+          const t1 = args[2];
+          const t2 = args[3];
+
+          if (!t1 || !t2 || !timeRegex.test(t1) || !timeRegex.test(t2)) {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Format Jam Tidak Valid").setDescription("Gunakan format HH:MM 24 jam.\n**Contoh:** `ctag config time 09:00 19:00`")],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+
+          await StaffTagConfig.updateOne(
+            { guild_id: message.guild.id },
+            { $set: { slot1_time: t1, slot2_time: t2, updated_at: Date.now() } },
+            { upsert: true }
+          ).catch(() => null);
+
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Jam Slot Tag Berhasil Di-Set").setDescription(`Slot 1 di-set ke **${t1} WIB**, Slot 2 di-set ke **${t2} WIB**.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // Fallback config usage
+        return message.reply({
+          embeds: [new EmbedBuilder()
+            .setColor(0x3498db)
+            .setTitle("⚙️ Pengaturan Staff Tagging")
+            .setDescription(
+              [
+                "**Opsi Pengaturan:**",
+                "• `ctag config role @RoleStaff` — set role staff",
+                "• `ctag config channel #channel` — set channel notifikasi",
+                "• `ctag config timeout <menit>` — set reminder timeout",
+                "• `ctag config time 09:00 19:00` — set jam slot 1 & 2",
+              ].join("\n")
+            )
+          ],
+          allowedMentions: { repliedUser: false },
+        });
+      }
+
+      // ─── ACTION: exempt — Manage Staff Exemptions ───
+      if (sub === "exempt" || sub === "kecualikan" || sub === "pengecualian" || sub === "skipstaff" || sub === "exemption") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin admin untuk mengelola pengecualian staff.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const actionArg = (args[1] || "").toLowerCase();
+        let action = actionArg;
+        let targetUser = message.mentions.users.first();
+
+        // If args[1] is a user mention directly (e.g. ctag exempt @user)
+        if (actionArg.startsWith("<@") || (!["add", "tambah", "remove", "del", "hapus", "list", "daftar"].includes(actionArg) && actionArg.length > 0)) {
+          action = "add";
+          if (!targetUser && args[1]) {
+            targetUser = await message.client.users.fetch(args[1]).catch(() => null);
+          }
+        } else if (action === "add" || action === "tambah" || action === "remove" || action === "del" || action === "hapus") {
+          if (!targetUser && args[2]) {
+            targetUser = await message.client.users.fetch(args[2]).catch(() => null);
+          }
+        }
+
+        // ctag exempt add @user / ctag exempt @user
+        if (action === "add" || action === "tambah") {
+          if (!targetUser) {
+            return message.reply({
+              embeds: [new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle("❌ Mention User Staff")
+                .setDescription("Sebutkan user staff yang ingin dikecualikan.\n\n**Contoh:**\n`ctag exempt add @user`\n`ctag kecualikan @user`\n`ctag exempt list` (Lihat daftar)")
+              ],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+
+          await StaffTagExempt.updateOne(
+            { guild_id: message.guild.id, user_id: targetUser.id },
+            { $set: { added_by: message.author.id, created_at: Date.now() } },
+            { upsert: true }
+          ).catch(() => null);
+
+          // Reshuffle schedule to remove exempt staff
+          await getOrGenerateDailyStaffSchedule(message.guild, true);
+
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0x2ecc71)
+              .setTitle("✅ Staff Dikecualikan")
+              .setDescription(`User <@${targetUser.id}> (\`${targetUser.id}\`) berhasil ditambahkan ke daftar pengecualian tag member.\n\n🎲 *Jadwal hari ini otomatis diacak ulang tanpa menyertakan user ini.*`)
+            ],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // ctag exempt remove @user
+        if (action === "remove" || action === "del" || action === "hapus") {
+          if (!targetUser) {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Mention User").setDescription("Sebutkan user staff yang ingin dihapus dari pengecualian.\n**Contoh:** `ctag exempt remove @user`")],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+
+          await StaffTagExempt.deleteOne({ guild_id: message.guild.id, user_id: targetUser.id }).catch(() => null);
+
+          // Reshuffle schedule
+          await getOrGenerateDailyStaffSchedule(message.guild, true);
+
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Pengecualian Dihapus").setDescription(`User <@${targetUser.id}> dihapus dari daftar pengecualian dan dapat bertugas kembali.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // ctag exempt list / ctag exempt (tanpa argumen)
+        const exemptDocs = await StaffTagExempt.find({ guild_id: message.guild.id }).lean().catch(() => []);
+        if (!exemptDocs.length) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0x3498db)
+              .setTitle("📋 Daftar Pengecualian Staff")
+              .setDescription("Belum ada staff yang dikecualikan dari tugas tag member.\n\n**Cara Menambah:** `ctag exempt add @user` atau `ctag kecualikan @user`")
+            ],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        const listLines = exemptDocs.map((e, idx) => `${idx + 1}. <@${e.user_id}> (\`${e.user_id}\`)`);
+        return message.reply({
+          embeds: [new EmbedBuilder()
+            .setColor(0x3498db)
+            .setTitle(`📋 Daftar Pengecualian Staff (${exemptDocs.length})`)
+            .setDescription(listLines.join("\n") + "\n\n**Tambah:** `ctag exempt add @user`\n**Hapus:** `ctag exempt remove @user`")
+          ],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // ─── ACTION: random / reshuffle / randomall — Re-randomize & distribute ALL staff ───
+      if (sub === "random" || sub === "reshuffle" || sub === "acak" || sub === "randomall" || sub === "acaksemua" || sub === "shuffleall") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin admin untuk mengacak ulang jadwal.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const res = await reshuffleAndGenerateFullWeeklySchedule(message.guild);
+        if (!res || !res.weeklyList) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Mengacak Jadwal").setDescription("Pastikan role staff sudah di-set dan ada cukup member staff yang eligible.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const lines = res.weeklyList.map((item) => {
+          const s1 = item.schedules?.[0];
+          const s2 = item.schedules?.[1];
+          const u1 = s1 ? `<@${s1.assigned_user_id}>` : "*(kosong)*";
+          const u2 = s2 ? `<@${s2.assigned_user_id}>` : "*(kosong)*";
+          return `**${item.dayName}** (\`${item.dateKey}\`):\n• Slot 1: ${u1}\n• Slot 2: ${u2}`;
+        });
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`## 🎲 Jadwal Rotasi ${res.totalStaff} Staff Berhasil Diacak Ulang!`),
+            new TextDisplayBuilder().setContent(
+              [
+                `Seluruh **${res.totalStaff} member staff** ber-role staff telah diacak secara acak dan dibagikan gilirannya secara merata ke seluruh hari minggu ini (Senin - Minggu):`,
+                "",
+                lines.join("\n\n")
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("Mystral • Staff Tagging System • Pengacakan Rotasi Merata")
+          );
+
+        return message.reply({
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // ─── ACTION: test / testannounce / testnotif — Test tagging notification announcement ───
+      if (sub === "test" || sub === "testannounce" || sub === "testnotif" || sub === "tes") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin admin untuk menguji pengumuman tag.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+        const targetChannel = message.channel;
+
+
+        const testType = (args[1] || "").toLowerCase();
+        const schedules = await getOrGenerateDailyStaffSchedule(message.guild);
+
+        const slotNum = (testType === "2" || testType === "slot2") ? 2 : 1;
+        const assignedUserId = message.author.id;
+        const slotName = getStaffSlotName(slotNum, config);
+
+        const now = Date.now();
+
+        if (testType === "timeout" || testType === "reminder") {
+          const staffRoleId = config?.staff_role_id;
+          const staffMention = staffRoleId ? `<@&${staffRoleId}>` : "Halo Staff";
+
+          // Test Timeout Reminder card
+          const container = new ContainerBuilder()
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent(`## ⚠️ [TEST] Timeout Reminder — Tag Member ${slotName}`),
+              new TextDisplayBuilder().setContent(
+                [
+                  `📢 ${staffMention}, *ini adalah pengujian pengumuman reminder timeout (Uji Coba System)*.`,
+                  "",
+                  `Staff bertugas <@${assignedUserId}> belum menyelesaikan tugas tag member setelah **${config?.timeout_minutes || 60} menit**! ⏰`,
+                  "",
+                  "> ⚡ **Staff lain yang bersedia mohon menekan tombol Takeover di bawah untuk mengambil alih tugas!**",
+                ].join("\n")
+              )
+            )
+            .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+            .addActionRowComponents(buildStaffTagTestActionRow())
+            .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent(`Mystral • Staff Tagging System Test • <t:${Math.floor(now / 1000)}:R>`)
+            );
+
+          let sendErr = null;
+          await targetChannel.send({
+
+            components: [container],
+            flags: MessageFlags.IsComponentsV2,
+            allowedMentions: staffRoleId ? { roles: [staffRoleId] } : { parse: [] },
+          }).catch((err) => { sendErr = err; });
+
+          if (sendErr) {
+            console.error("[CTAG TEST REMINDER FAIL]", sendErr);
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Mengirim Pengumuman").setDescription(`Terjadi kesalahan saat menguji pesan ke channel <#${targetChannel.id}>:\n\`\`\`${sendErr.message || sendErr}\`\`\``)],
+              allowedMentions: { repliedUser: false },
+            });
+          }
+
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0x2ecc71)
+              .setTitle("✅ Simulasi Reminder Timeout Terkirim!")
+              .setDescription(`Pengumuman uji coba **Timeout Reminder** berhasil dikirim ke channel <#${targetChannel.id}>.`)
+            ],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        // Standard Announcement Card Test
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`## 📣 [TEST] Duty Tag Member — ${slotName}`),
+            new TextDisplayBuilder().setContent(
+              [
+                `*Ini adalah pengujian pengumuman otomatis tag member (Uji Coba System)*.`,
+                "",
+                `Halo <@${assignedUserId}>, sekarang giliranmu untuk melakukan **Tag Member**! 📌`,
+                "",
+                "**Opsi Cepat:** Tekan tombol di bawah, atau gunakan command `ctag done` / `ctag busy`.",
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addActionRowComponents(buildStaffTagTestActionRow())
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Staff Tagging System Test • <t:${Math.floor(now / 1000)}:R>`)
+          );
+
+
+        let sendErr = null;
+        await targetChannel.send({
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { users: [assignedUserId] },
+        }).catch((err) => { sendErr = err; });
+
+        if (sendErr) {
+          console.error("[CTAG TEST ANNOUNCE FAIL]", sendErr);
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Mengirim Pengumuman").setDescription(`Terjadi kesalahan saat menguji pesan ke channel <#${targetChannel.id}>:\n\`\`\`${sendErr.message || sendErr}\`\`\``)],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        return message.reply({
+          embeds: [new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle("✅ Simulasi Pengumuman Tag Terkirim!")
+            .setDescription(`Pengumuman uji coba **${slotName}** untuk <@${assignedUserId}> berhasil dikirim ke channel <#${targetChannel.id}>.`)
+          ],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // ─── Unknown subcommand → show help ───
+      return message.reply(buildStaffTagHelpPanel());
+    }
+
+
+    // ===================== ANTI-INVITE LINK SECURITY LOG COMMAND (CINVITELOG) =====================
+    if (cmd === "invitelog" || cmd === "cinvitelog" || cmd === "cinvite" || cmd === "antiinvite") {
+      const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+      if (!isAdminUser) {
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin `Manage Guild` / `Administrator` untuk mengkonfigurasi Anti-Invite Alert.")],
+          allowedMentions: { repliedUser: false },
+        });
+      }
+
+      const sub = (args[0] || "").toLowerCase();
+
+      // cinvitelog setchannel #channel
+      if (sub === "setchannel" || sub === "channel" || sub === "setlog") {
+        const targetChannel = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
+        if (!targetChannel || !targetChannel.isTextBased()) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Channel Tidak Valid").setDescription("Mention channel teks tempat peringatan invite link akan dikirim.\n\n**Contoh:** `cinvitelog setchannel #invite-logs`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        await MetaText.updateOne(
+          { key: `invitelog_channel_${message.guild.id}` },
+          { $set: { value: targetChannel.id } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Channel Alert Set").setDescription(`Channel alert invite link berhasil di-set ke <#${targetChannel.id}>.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cinvitelog toggle on|off
+      if (sub === "toggle" || sub === "statusset" || sub === "mode") {
+        const mode = (args[1] || "").toLowerCase();
+        const newState = mode === "off" || mode === "nonaktif" ? "off" : "on";
+
+        await MetaText.updateOne(
+          { key: `invitelog_enabled_${message.guild.id}` },
+          { $set: { value: newState } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(newState === "on" ? 0x2ecc71 : 0xe74c3c).setTitle(`Status Anti-Invite Alert: ${newState === "on" ? "🟢 AKTIF" : "🔴 NONAKTIF"}`).setDescription(`Sistem deteksi invite link pihak ketiga sekarang **${newState === "on" ? "AKTIF" : "NONAKTIF"}**.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cinvitelog autodelete on|off
+      if (sub === "autodelete" || sub === "autodel" || sub === "hapus") {
+        const mode = (args[1] || "").toLowerCase();
+        const newState = mode === "off" ? "off" : "on";
+
+        await MetaText.updateOne(
+          { key: `invitelog_autodelete_${message.guild.id}` },
+          { $set: { value: newState } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle(`Auto-Delete Invite Message: ${newState === "on" ? "🟢 ON" : "🔴 OFF"}`).setDescription(`Pesan yang berisi invite link pihak ketiga akan **${newState === "on" ? "otomatis dihapus" : "dibiarkan (hanya kirim alert log)"}**.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cinvitelog allowlink <code_or_link>
+      if (sub === "allowlink" || sub === "addlink" || sub === "linkkecuali") {
+        const input = args[1] || "";
+        const code = input.replace(/https?:\/\/(www\.)?discord\.(gg|com\/invite)\//gi, "").trim().toLowerCase();
+        if (!code) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Invite Code Diperlukan").setDescription("Masukkan kode atau link invite server sendiri yang diperbolehkan.\n\n**Contoh:** `cinvitelog allowlink mystralserver`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const allowedDoc = await MetaText.findOne({ key: `invitelog_allowed_links_${message.guild.id}` }).lean().catch(() => null);
+        const currentList = Array.isArray(allowedDoc?.value) ? allowedDoc.value : [];
+        if (!currentList.includes(code)) currentList.push(code);
+
+        await MetaText.updateOne(
+          { key: `invitelog_allowed_links_${message.guild.id}` },
+          { $set: { value: currentList } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Link Diperbolehkan").setDescription(`Invite code \`${code}\` berhasil ditambahkan ke daftar allowed server links.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cinvitelog removelink <code_or_link>
+      if (sub === "removelink" || sub === "dellink" || sub === "hapuslink") {
+        const input = args[1] || "";
+        const code = input.replace(/https?:\/\/(www\.)?discord\.(gg|com\/invite)\//gi, "").trim().toLowerCase();
+        const allowedDoc = await MetaText.findOne({ key: `invitelog_allowed_links_${message.guild.id}` }).lean().catch(() => null);
+        let currentList = Array.isArray(allowedDoc?.value) ? allowedDoc.value : [];
+        currentList = currentList.filter(c => c !== code);
+
+        await MetaText.updateOne(
+          { key: `invitelog_allowed_links_${message.guild.id}` },
+          { $set: { value: currentList } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("🗑️ Link Dihapus").setDescription(`Invite code \`${code}\` telah dihapus dari allowed links.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cinvitelog whitelist user/role/channel
+      if (sub === "whitelist" || sub === "wl" || sub === "kecualikan") {
+        const targetType = (args[1] || "").toLowerCase();
+
+        if (targetType === "user" || targetType === "member") {
+          const user = message.mentions.users.first() || await message.client.users.fetch(args[2]).catch(() => null);
+          if (!user) return message.reply("❌ Mention user yang ingin di-whitelist.");
+
+          const wlDoc = await MetaText.findOne({ key: `invitelog_wl_users_${message.guild.id}` }).lean().catch(() => null);
+          const list = Array.isArray(wlDoc?.value) ? wlDoc.value : [];
+          if (!list.includes(user.id)) list.push(user.id);
+
+          await MetaText.updateOne({ key: `invitelog_wl_users_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`✅ User <@${user.id}> (\`${user.tag}\`) berhasil di-whitelist dari anti-invite!`);
+        }
+
+        if (targetType === "role") {
+          const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[2]);
+          if (!role) return message.reply("❌ Mention role yang ingin di-whitelist.");
+
+          const wlDoc = await MetaText.findOne({ key: `invitelog_wl_roles_${message.guild.id}` }).lean().catch(() => null);
+          const list = Array.isArray(wlDoc?.value) ? wlDoc.value : [];
+          if (!list.includes(role.id)) list.push(role.id);
+
+          await MetaText.updateOne({ key: `invitelog_wl_roles_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`✅ Role <@&${role.id}> berhasil di-whitelist dari anti-invite!`);
+        }
+
+        if (targetType === "channel") {
+          const channel = message.mentions.channels.first() || message.guild.channels.cache.get(args[2]);
+          if (!channel) return message.reply("❌ Mention channel yang ingin di-whitelist.");
+
+          const wlDoc = await MetaText.findOne({ key: `invitelog_wl_channels_${message.guild.id}` }).lean().catch(() => null);
+          const list = Array.isArray(wlDoc?.value) ? wlDoc.value : [];
+          if (!list.includes(channel.id)) list.push(channel.id);
+
+          await MetaText.updateOne({ key: `invitelog_wl_channels_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`✅ Channel <#${channel.id}> berhasil di-whitelist dari anti-invite!`);
+        }
+
+        return message.reply("❌ Jenis whitelist tidak valid. Pilih: `cinvitelog whitelist user @User`, `role @Role`, atau `channel #Channel`.");
+      }
+
+      // cinvitelog removewhitelist
+      if (sub === "removewhitelist" || sub === "unwhitelist" || sub === "rmwl") {
+        const targetType = (args[1] || "").toLowerCase();
+
+        if (targetType === "user") {
+          const user = message.mentions.users.first() || await message.client.users.fetch(args[2]).catch(() => null);
+          if (!user) return message.reply("❌ Mention user.");
+          const wlDoc = await MetaText.findOne({ key: `invitelog_wl_users_${message.guild.id}` }).lean().catch(() => null);
+          let list = Array.isArray(wlDoc?.value) ? wlDoc.value : [];
+          list = list.filter(id => id !== user.id);
+          await MetaText.updateOne({ key: `invitelog_wl_users_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`🗑️ User <@${user.id}> dihapus dari whitelist.`);
+        }
+
+        if (targetType === "role") {
+          const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[2]);
+          if (!role) return message.reply("❌ Mention role.");
+          const wlDoc = await MetaText.findOne({ key: `invitelog_wl_roles_${message.guild.id}` }).lean().catch(() => null);
+          let list = Array.isArray(wlDoc?.value) ? wlDoc.value : [];
+          list = list.filter(id => id !== role.id);
+          await MetaText.updateOne({ key: `invitelog_wl_roles_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`🗑️ Role <@&${role.id}> dihapus dari whitelist.`);
+        }
+
+        if (targetType === "channel") {
+          const channel = message.mentions.channels.first() || message.guild.channels.cache.get(args[2]);
+          if (!channel) return message.reply("❌ Mention channel.");
+          const wlDoc = await MetaText.findOne({ key: `invitelog_wl_channels_${message.guild.id}` }).lean().catch(() => null);
+          let list = Array.isArray(wlDoc?.value) ? wlDoc.value : [];
+          list = list.filter(id => id !== channel.id);
+          await MetaText.updateOne({ key: `invitelog_wl_channels_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`🗑️ Channel <#${channel.id}> dihapus dari whitelist.`);
+        }
+
+        return message.reply("❌ Pilih: `cinvitelog removewhitelist user @User`, `role @Role`, atau `channel #Channel`.");
+      }
+
+      // Default Panel / Config / Status / Help
+      const toggleDoc = await MetaText.findOne({ key: `invitelog_enabled_${message.guild.id}` }).lean().catch(() => null);
+      const isEnabled = toggleDoc?.value !== "off";
+      const logChDoc = await MetaText.findOne({ key: `invitelog_channel_${message.guild.id}` }).lean().catch(() => null);
+      const autoDelDoc = await MetaText.findOne({ key: `invitelog_autodelete_${message.guild.id}` }).lean().catch(() => null);
+      const autoDel = autoDelDoc?.value !== "off";
+
+      const allowedDoc = await MetaText.findOne({ key: `invitelog_allowed_links_${message.guild.id}` }).lean().catch(() => null);
+      const allowedLinks = Array.isArray(allowedDoc?.value) ? allowedDoc.value : [];
+      const vanityCode = message.guild.vanityURLCode || "(tidak ada)";
+
+      const wlUsersDoc = await MetaText.findOne({ key: `invitelog_wl_users_${message.guild.id}` }).lean().catch(() => null);
+      const wlUsers = Array.isArray(wlUsersDoc?.value) ? wlUsersDoc.value : [];
+      const wlRolesDoc = await MetaText.findOne({ key: `invitelog_wl_roles_${message.guild.id}` }).lean().catch(() => null);
+      const wlRoles = Array.isArray(wlRolesDoc?.value) ? wlRolesDoc.value : [];
+      const wlChannelsDoc = await MetaText.findOne({ key: `invitelog_wl_channels_${message.guild.id}` }).lean().catch(() => null);
+      const wlChannels = Array.isArray(wlChannelsDoc?.value) ? wlChannelsDoc.value : [];
+
+      const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent("# 🚨 Anti-Invite Security & Alert Config"),
+          new TextDisplayBuilder().setContent(
+            [
+              `▸ **Status Sistem:** ${isEnabled ? "<a:971828statusonline:1521081779455397888> **[ ON / AKTIF ]**" : "<a:460240statusoffline:1521082558664806501> **[ OFF / NONAKTIF ]**"}`,
+              `▸ **Log Channel:** ${logChDoc?.value ? `<#${logChDoc.value}>` : "*Belum di-set (Ketik `cinvitelog setchannel #channel`)*"}`,
+              `▸ **Auto Delete Message:** ${autoDel ? "<a:971828statusonline:1521081779455397888> **ON (Hapus Otomatis)**" : "<a:460240statusoffline:1521082558664806501> **OFF (Hanya Log)**"}`,
+              `▸ **Server Vanity Code:** \`${vanityCode}\` *(Otomatis Dikecualikan)*`,
+              `▸ **Allowed Custom Links:** ${allowedLinks.length ? allowedLinks.map(l => `\`${l}\``).join(", ") : "*(belum ada)*"}`,
+              "",
+              "**Whitelisted Members / Roles / Channels:**",
+              `• **Users:** ${wlUsers.length ? wlUsers.map(u => `<@${u}>`).join(", ") : "*(kosong)*"}`,
+              `• **Roles:** ${wlRoles.length ? wlRoles.map(r => `<@&${r}>`).join(", ") : "*(kosong)*"}`,
+              `• **Channels:** ${wlChannels.length ? wlChannels.map(c => `<#${c}>`).join(", ") : "*(kosong)*"}`,
+            ].join("\n")
+          )
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            [
+              "## 📌 Perintah Pengaturan:",
+              "• `cinvitelog setchannel #channel` — Set channel alert log",
+              "• `cinvitelog toggle on|off` — Aktifkan/matikan sistem",
+              "• `cinvitelog autodelete on|off` — Toggle hapus otomatis pesan invite",
+              "• `cinvitelog allowlink <code_or_link>` — Izinkan link/vanity tertentu",
+              "• `cinvitelog whitelist user @user` — Pengecualian member",
+              "• `cinvitelog whitelist role @role` — Pengecualian role",
+              "• `cinvitelog whitelist channel #channel` — Pengecualian channel",
+            ].join("\n")
+          )
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(`Mystral Security • Anti-Invite Security Log`)
+        );
+
+      return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+    }
+
+    // ===================== STAFF LOG & MODERATION ACTION COMMAND (CSTAFFLOG) =====================
+    if (cmd === "stafflog" || cmd === "cstafflog" || cmd === "staffnotes" || cmd === "cstaffnotes") {
+      const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+      if (!isAdminUser) {
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin `Manage Guild` / `Administrator` untuk mengkonfigurasi Staff Log.")],
+          allowedMentions: { repliedUser: false },
+        });
+      }
+
+      const sub = (args[0] || "").toLowerCase();
+
+      // cstafflog setchannel #channel
+      if (sub === "setchannel" || sub === "channel" || sub === "setlog") {
+        const targetChannel = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
+        if (!targetChannel || !targetChannel.isTextBased()) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Channel Tidak Valid").setDescription("Mention channel teks tempat log tindakan staff akan dikirim.\n\n**Contoh:** `cstafflog setchannel #staff-logs`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        await MetaText.updateOne(
+          { key: `stafflog_channel_${message.guild.id}` },
+          { $set: { value: targetChannel.id } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Channel Staff Log Set").setDescription(`Channel log aktivitas staff berhasil di-set ke <#${targetChannel.id}>.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cstafflog toggle on|off
+      if (sub === "toggle" || sub === "statusset" || sub === "mode") {
+        const mode = (args[1] || "").toLowerCase();
+        const newState = mode === "off" || mode === "nonaktif" ? "off" : "on";
+
+        await MetaText.updateOne(
+          { key: `stafflog_enabled_${message.guild.id}` },
+          { $set: { value: newState } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(newState === "on" ? 0x2ecc71 : 0xe74c3c).setTitle(`Status Staff Log: ${newState === "on" ? "🟢 AKTIF" : "🔴 NONAKTIF"}`).setDescription(`Pencatatan aktivitas staff (role add/remove, ban, kick, timeout) sekarang **${newState === "on" ? "AKTIF" : "NONAKTIF"}**.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cstafflog note @user <catatan>
+      if (sub === "note" || sub === "catat" || sub === "addnote") {
+        const targetUser = message.mentions.users.first() || await message.client.users.fetch(args[1]).catch(() => null);
+        const noteText = args.slice(targetUser ? 2 : 1).join(" ").trim();
+
+        if (!targetUser || !noteText) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Format Tidak Lengkap").setDescription("Mention member dan tuliskan catatan staff.\n\n**Contoh:** `cstafflog note @User Peringatan 1: Melanggar aturan chat`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const notesDoc = await MetaText.findOne({ key: `staff_notes_${message.guild.id}_${targetUser.id}` }).lean().catch(() => null);
+        const currentNotes = Array.isArray(notesDoc?.value) ? notesDoc.value : [];
+        const newNoteObj = {
+          staff_id: message.author.id,
+          staff_tag: message.author.tag,
+          note: noteText,
+          timestamp: Date.now(),
+        };
+        currentNotes.push(newNoteObj);
+
+        await MetaText.updateOne(
+          { key: `staff_notes_${message.guild.id}_${targetUser.id}` },
+          { $set: { value: currentNotes } },
+          { upsert: true }
+        ).catch(() => null);
+
+        // Also send to staff log channel
+        await sendStaffLogEntry(message.guild, "📝 Staff Action: Manual Note Added", [
+          `▸ **Staff (Author):** <@${message.author.id}> (\`${message.author.tag}\`)`,
+          `▸ **Target Member:** <@${targetUser.id}> (\`${targetUser.tag}\`)`,
+          `▸ **User ID:** \`${targetUser.id}\``,
+          `▸ **Isi Catatan:** \`${noteText}\``,
+        ]);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Catatan Staff Tersimpan").setDescription(`Catatan untuk <@${targetUser.id}> berhasil disimpan dan dicatat di staff log channel!`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // cstafflog viewnotes @user
+      if (sub === "viewnotes" || sub === "notes" || sub === "cekcatatan") {
+        const targetUser = message.mentions.users.first() || await message.client.users.fetch(args[1]).catch(() => null) || message.author;
+        const notesDoc = await MetaText.findOne({ key: `staff_notes_${message.guild.id}_${targetUser.id}` }).lean().catch(() => null);
+        const currentNotes = Array.isArray(notesDoc?.value) ? notesDoc.value : [];
+
+        if (!currentNotes.length) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0x3498db).setTitle(`📝 Catatan Staff — ${targetUser.username}`).setDescription(`Belum ada catatan staff yang tersimpan untuk <@${targetUser.id}>.`)],
+            allowedMentions: { parse: [] },
+          });
+        }
+
+        const formattedLines = currentNotes.map((n, idx) => {
+          const ts = Math.floor(n.timestamp / 1000);
+          return `**${idx + 1}.** Oleh <@${n.staff_id}> (<t:${ts}:R>):\n> \`${n.note}\``;
+        });
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`## 📝 Daftar Catatan Staff — ${targetUser.username}`),
+            new TextDisplayBuilder().setContent(formattedLines.join("\n\n"))
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`Mystral • Staff Notes Record • Member ID: ${targetUser.id}`)
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      }
+
+      // Default Panel / Config / Status / Help
+      const toggleDoc = await MetaText.findOne({ key: `stafflog_enabled_${message.guild.id}` }).lean().catch(() => null);
+      const isEnabled = toggleDoc?.value !== "off";
+      const logChDoc = await MetaText.findOne({ key: `stafflog_channel_${message.guild.id}` }).lean().catch(() => null);
+
+      const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent("# 🛡️ Staff Action & Moderation Log Config"),
+          new TextDisplayBuilder().setContent(
+            [
+              `▸ **Status Logger:** ${isEnabled ? "<a:971828statusonline:1521081779455397888> **[ ON / AKTIF ]**" : "<a:460240statusoffline:1521082558664806501> **[ OFF / NONAKTIF ]**"}`,
+              `▸ **Staff Log Channel:** ${logChDoc?.value ? `<#${logChDoc.value}>` : "*Belum di-set (Ketik `cstafflog setchannel #channel`)*"}`,
+              "",
+              "**Aktivitas Yang Otomatis Dicatat:**",
+              "• ➕ **Role Granted** (Penambahan role member oleh staff)",
+              "• ➖ **Role Removed** (Penarikan role member oleh staff)",
+              "• 👢 **Member Kicked** (Pengeluaran member)",
+              "• 🔨 **Member Banned** (Pemblokiran member)",
+              "• ⏳ **Member Timed Out / Un-timeout** (Penetapan & pencabutan timeout)",
+              "• 📝 **Manual Staff Notes** (Catatan khusus staff untuk member)",
+            ].join("\n")
+          )
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            [
+              "## 📌 Perintah Pengaturan:",
+              "• `cstafflog setchannel #channel` — Set channel staff log",
+              "• `cstafflog toggle on|off` — Aktifkan/matikan sistem log",
+              "• `cstafflog note @user <catatan>` — Tambah catatan staff untuk member",
+              "• `cstafflog viewnotes @user` — Lihat riwayat catatan staff member",
+            ].join("\n")
+          )
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(`Mystral Moderation • Staff Action Log`)
+        );
+
+      return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+    }
+
     const ownerOnly = ["menfesspanel", "sortingpanel", "idcard"];
     if (ownerOnly.includes(cmd) && !isBotOwner(message.author.id)) {
       return message.reply({
@@ -11301,21 +14782,35 @@ Enjoy your reward ✨`
       return;
     }
     // chelp mod / chelp admin / chelpmod / chelpadmin / cmodhelp / cadminhelp
-    const isHelpAdminCmd = (cmd === "helpmod" || cmd === "helpadmin" || cmd === "modhelp" || cmd === "adminhelp" || cmd === "chelpmod" || cmd === "chelpadmin") ||
+    const isHelpAdminCmd = (cmd === "helpmod" || cmd === "helpadmin" || cmd === "modhelp" || cmd === "adminhelp" || cmd === "chelpmod" || cmd === "chelpadmin" || cmd === "cmodhelp" || cmd === "cadminhelp") ||
       ((cmd === "help" || cmd === "chelp") && (args[0]?.toLowerCase() === "mod" || args[0]?.toLowerCase() === "admin" || args[0]?.toLowerCase() === "staff"));
 
     if (isHelpAdminCmd) {
+      const staffCfg = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
       const isStaff = isBotOwner(message.author.id) ||
         hasPerm(message.member, PermissionsBitField.Flags.ManageRoles) ||
         hasPerm(message.member, PermissionsBitField.Flags.ManageMessages) ||
         hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers) ||
-        hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+        hasPerm(message.member, PermissionsBitField.Flags.Administrator) ||
+        (staffCfg?.staff_role_id && message.member.roles.cache.has(staffCfg.staff_role_id)) ||
+        message.member.roles.cache.has("1459465502320492679");
 
       if (!isStaff) {
         return message.reply("❌ Perintah ini khusus untuk Administrator dan Moderator server (`ManageRoles` / `ManageMessages` / `ModerateMembers`).");
       }
 
-      const ui = buildAdminHelpUI("home", message.author.id);
+      let subCategory = "home";
+      const rawArg = (cmd === "help" || cmd === "chelp") ? (args[1] || "").toLowerCase() : (args[0] || "").toLowerCase();
+      if (rawArg.includes("tag") || rawArg.includes("staff")) subCategory = "admin_staff_tagging";
+      else if (rawArg.includes("boost")) subCategory = "admin_booster";
+      else if (rawArg.includes("role")) subCategory = "admin_roles";
+      else if (rawArg.includes("mod") || rawArg.includes("warn") || rawArg.includes("invite") || rawArg.includes("log")) subCategory = "admin_moderation";
+      else if (rawArg.includes("auto") || rawArg.includes("sticky")) subCategory = "admin_automation";
+      else if (rawArg.includes("voice") || rawArg.includes("vc")) subCategory = "admin_voice";
+      else if (rawArg.includes("panel")) subCategory = "admin_panels";
+      else if (rawArg.includes("tool") || rawArg.includes("owner")) subCategory = "admin_tools";
+
+      const ui = buildAdminHelpUI(subCategory, message.author.id);
       return message.reply({ ...ui, allowedMentions: { repliedUser: false, parse: [] } });
     }
 
@@ -12061,6 +15556,118 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.deferred || interaction.replied) return;
 
   try {
+
+    // ===================== STAFF TAGGING TEST BUTTON INTERACTIONS =====================
+    if (interaction.isButton() && interaction.customId.startsWith("ctag_testbtn_")) {
+      const btnType = interaction.customId.replace("ctag_testbtn_", "");
+      const now = Date.now();
+      const config = await StaffTagConfig.findOne({ guild_id: interaction.guild?.id }).lean().catch(() => null);
+      const slotName = getStaffSlotName(1, config);
+
+      if (btnType === "done") {
+        const payload = buildStaffTagCompletedContainer(interaction.user.id, slotName, now, false, null);
+        return interaction.update(payload);
+      }
+
+      if (btnType === "busy") {
+        const payload = buildStaffTagBusyContainer(interaction.user.id, slotName, true, config?.staff_role_id);
+        return interaction.update(payload);
+      }
+
+      if (btnType === "takeover") {
+        const payload = buildStaffTagTakeoverContainer(interaction.user.id, "Staff_Prev", slotName, true);
+        return interaction.update(payload);
+      }
+    }
+
+    // ===================== STAFF TAGGING REAL BUTTON INTERACTIONS =====================
+    if (interaction.isButton() && interaction.customId.startsWith("ctag_btn_")) {
+      const btnType = interaction.customId.replace("ctag_btn_", "");
+      const guild = interaction.guild;
+      if (!guild) return;
+
+      const config = await StaffTagConfig.findOne({ guild_id: guild.id }).lean().catch(() => null);
+      const isStaff = config?.staff_role_id && interaction.member.roles.cache.has(config.staff_role_id);
+      const isAdmin = isBotOwner(interaction.user.id) || hasPerm(interaction.member, PermissionsBitField.Flags.ManageRoles);
+
+      const schedules = await getOrGenerateDailyStaffSchedule(guild);
+      if (!schedules || schedules.length < 2) {
+        return interaction.reply({ content: "❌ Tidak ada jadwal tag member yang aktif hari ini.", flags: MessageFlags.Ephemeral });
+      }
+
+      if (btnType === "done") {
+        const targetSched = schedules.find((s) => s.assigned_user_id === interaction.user.id && s.status !== "completed");
+        if (!targetSched) {
+          const activeSched = schedules.find((s) => s.status !== "completed");
+          if (!activeSched) {
+            return interaction.reply({ content: "✅ Semua tugas tag member hari ini sudah selesai!", flags: MessageFlags.Ephemeral });
+          }
+          return interaction.reply({
+            content: `❌ Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai tugas ini selesai.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        const now = Date.now();
+        const isTakeover = targetSched.assigned_user_id !== targetSched.original_user_id;
+        await StaffTagSchedule.updateOne(
+          { _id: targetSched._id },
+          { $set: { status: "completed", completed_at: now } }
+        ).catch(() => null);
+
+        const slotName = getStaffSlotName(targetSched.slot, config);
+        const payload = buildStaffTagCompletedContainer(interaction.user.id, slotName, now, isTakeover, targetSched.original_user_id);
+        return interaction.update(payload);
+      }
+
+      if (btnType === "busy") {
+        const targetSched = schedules.find((s) => s.assigned_user_id === interaction.user.id && s.status === "pending");
+        if (!targetSched) {
+          const activeSched = schedules.find((s) => s.status === "pending");
+          if (!activeSched) {
+            return interaction.reply({ content: "❌ Tidak ada giliran tag member yang sedang pending hari ini.", flags: MessageFlags.Ephemeral });
+          }
+          return interaction.reply({
+            content: `❌ Kamu bukan petugas staff yang ditugaskan meletakkan berhalangan.`,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        await StaffTagSchedule.updateOne({ _id: targetSched._id }, { $set: { status: "busy" } }).catch(() => null);
+        const slotName = getStaffSlotName(targetSched.slot, config);
+        const payload = buildStaffTagBusyContainer(interaction.user.id, slotName, false, config?.staff_role_id);
+        return interaction.update(payload);
+      }
+
+
+      if (btnType === "takeover") {
+        if (!isStaff && !isAdmin) {
+          return interaction.reply({ content: "❌ Hanya anggota staff yang dapat mengambil alih tugas tag member.", flags: MessageFlags.Ephemeral });
+        }
+
+        let targetSched = schedules.find((s) => s.status === "busy");
+        if (!targetSched) {
+          targetSched = schedules.find((s) => s.status === "pending" && s.assigned_user_id !== interaction.user.id);
+        }
+
+        if (!targetSched) {
+          return interaction.reply({ content: "❌ Tidak ada tugas tag member yang tersedia untuk di-takeover saat ini.", flags: MessageFlags.Ephemeral });
+        }
+
+        const prevUser = targetSched.assigned_user_id;
+        await StaffTagSchedule.updateOne(
+          { _id: targetSched._id },
+          { $set: { assigned_user_id: interaction.user.id, status: "pending", notified_at: Date.now(), reminder_sent: false } }
+        ).catch(() => null);
+
+        const slotName = getStaffSlotName(targetSched.slot, config);
+        const payload = buildStaffTagTakeoverContainer(interaction.user.id, prevUser, slotName);
+        return interaction.update(payload);
+      }
+    }
+
+
+
 
     // ===================== AUTORESPONSE STRING SELECT MENU =====================
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith("ar_select_")) {
@@ -12941,11 +16548,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const iStatus = new TextInputBuilder()
         .setCustomId("status")
-        .setLabel("Status (Opsional, Default: Light)")
+        .setLabel("Status - Contoh: In Love | Light atau Dark")
         .setStyle(TextInputStyle.Short)
         .setMaxLength(60)
         .setRequired(false)
-        .setPlaceholder("Contoh: In Love | Dark")
+        .setPlaceholder("Contoh: In Love | Light atau Dark")
         .setValue(
           existingIdCard?.status
             ? `${existingIdCard.status}${existingIdCard.theme ? ` | ${existingIdCard.theme}` : ""}`
@@ -13467,7 +17074,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const parts = interaction.customId.split(":");
       let targetUserId = parts[1];
       if (!targetUserId) {
-        targetUserId = getTicketOwnerIdFromTopic(interaction.channel.topic);
+        targetUserId = getTicketOwnerIdFromTopic(interaction.channel?.topic || "");
       }
 
       if (!targetUserId) {
@@ -13479,9 +17086,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: "❌ Member sudah tidak ada di server.", flags: MessageFlags.Ephemeral });
       }
 
+      let roleSuccess = true;
+      let roleErrMessage = "";
       await targetMember.roles.add(FEMALE_ROLE_ID).catch((e) => {
         console.error("[VERIF APPROVE ROLE ERROR]", e);
+        roleSuccess = false;
+        roleErrMessage = e.message || String(e);
       });
+
+      if (!roleSuccess) {
+        return interaction.reply({
+          content: `❌ Gagal memberikan role female: ${roleErrMessage}\nPastikan hirarki role Bot di Discord Server Settings lebih tinggi dari role Female.`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
 
       const UNVERIFIED_FEMALE_ROLE_ID = "1459518390661287987";
       if (targetMember.roles.cache.has(UNVERIFIED_FEMALE_ROLE_ID)) {
@@ -13490,11 +17108,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      const container = new ContainerBuilder().setAccentColor(0x2ecc71);
-      container.addTextDisplayComponents(
+      // Ambil teks instruksi lama agar tidak terhapus
+      const now = new Date();
+      const options = { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Jakarta" };
+      const hariTanggal = now.toLocaleDateString("id-ID", options);
+
+      const baseText =
+        `## 🌸 Tiket Verifikasi - ${targetMember.user?.username || targetUserId}\n\n` +
+        `Halo <@${targetUserId}>! Silakan kirimkan Voice Note (VN) langsung dari fitur Discord untuk verifikasi.\n\n` +
+        `Wajib sebutkan ini di VN:\n` +
+        `> *"Halo, aku ${targetMember.user?.username || targetUserId}/(nama panggilan), hari ini ${hariTanggal}, mau verif role female."*\n\n` +
+        `Staff akan segera mengecek tiketmu. Mohon bersabar ya!`;
+
+      const updatedContainer = new ContainerBuilder().setAccentColor(0x2ecc71);
+      updatedContainer.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-          `## ✅ Verifikasi Berhasil!\n\n` +
-          `Role <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}> oleh <@${interaction.user.id}>.`
+          `${baseText}\n\n---\n### ✅ Verifikasi Berhasil!\nRole <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}> oleh <@${interaction.user.id}>.`
         )
       );
 
@@ -13510,8 +17139,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setStyle(ButtonStyle.Danger)
       );
 
-      await interaction.message.edit({ components: [disabledRow] }).catch(() => { });
+      updatedContainer.addActionRowComponents(disabledRow);
 
+      // Log ke channel verif log (background)
       (async () => {
         try {
           const VERIF_LOG_CHANNEL_ID = "1459868526096420945";
@@ -13534,9 +17164,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       })();
 
-      return interaction.reply({
-        components: [container],
+      // Update message yang berisi button secara langsung
+      return interaction.update({
+        components: [updatedContainer],
         flags: MessageFlags.IsComponentsV2
+      }).catch(async () => {
+        await interaction.message.edit({
+          components: [updatedContainer],
+          flags: MessageFlags.IsComponentsV2
+        }).catch(() => { });
+        if (!interaction.replied && !interaction.deferred) {
+          return interaction.reply({
+            content: `<:emoji_31:1459573171916116124> Verifikasi Berhasil! Role <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}>.`,
+            flags: MessageFlags.Ephemeral
+          }).catch(() => { });
+        }
       });
     }
 

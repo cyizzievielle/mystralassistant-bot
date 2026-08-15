@@ -203,6 +203,64 @@ const ActiveVoiceSession = mongoose.models.ActiveVoiceSession || mongoose.model(
 const StickyMessage = mongoose.models.StickyMessage || mongoose.model("StickyMessage", createFlexSchema("sticky_messages"));
 const MediaSetting = mongoose.models.MediaSetting || mongoose.model("MediaSetting", createFlexSchema("media_settings"));
 
+const ActivityDailyChannel = mongoose.models.ActivityDailyChannel || mongoose.model("ActivityDailyChannel", createFlexSchema("activity_daily_channel"));
+const LeaderboardLobbyChannel = mongoose.models.LeaderboardLobbyChannel || mongoose.model("LeaderboardLobbyChannel", createFlexSchema("leaderboard_lobby_channels"));
+const MonthlyRecapSnapshot = mongoose.models.MonthlyRecapSnapshot || mongoose.model("MonthlyRecapSnapshot", createFlexSchema("monthly_recap_snapshots"));
+
+const leaderboardBlacklistSchema = new mongoose.Schema({
+  user_id: { type: String, unique: true, required: true },
+  reason: { type: String, default: "" },
+  added_by: { type: String, default: "" },
+  added_at: { type: Number, default: () => Date.now() },
+}, { strict: false, collection: "leaderboard_blacklist" });
+const LeaderboardBlacklist = mongoose.models.LeaderboardBlacklist || mongoose.model("LeaderboardBlacklist", leaderboardBlacklistSchema);
+
+const boosterCustomRoleSchema = new mongoose.Schema({
+  user_id: { type: String, unique: true, required: true },
+  guild_id: { type: String, required: true },
+  role_id: { type: String, required: true },
+  created_at: { type: Number, default: () => Date.now() },
+}, { strict: false, collection: "booster_custom_roles" });
+const BoosterCustomRole = mongoose.models.BoosterCustomRole || mongoose.model("BoosterCustomRole", boosterCustomRoleSchema);
+
+// Staff Tagging System Schemas
+const staffTagConfigSchema = new mongoose.Schema({
+  guild_id: { type: String, unique: true, required: true },
+  staff_role_id: String,
+  tag_channel_id: String,
+  timeout_minutes: { type: Number, default: 60 },
+  slot1_time: { type: String, default: "09:00" },
+  slot2_time: { type: String, default: "19:00" },
+  roster_index: { type: Number, default: 0 },
+  created_at: { type: Number, default: () => Date.now() },
+  updated_at: { type: Number, default: () => Date.now() },
+}, { strict: false, collection: "staff_tag_configs" });
+const StaffTagConfig = mongoose.models.StaffTagConfig || mongoose.model("StaffTagConfig", staffTagConfigSchema);
+
+const staffTagExemptSchema = new mongoose.Schema({
+  guild_id: { type: String, required: true },
+  user_id: { type: String, required: true },
+  added_by: String,
+  created_at: { type: Number, default: () => Date.now() },
+}, { strict: false, collection: "staff_tag_exempts" });
+staffTagExemptSchema.index({ guild_id: 1, user_id: 1 }, { unique: true });
+const StaffTagExempt = mongoose.models.StaffTagExempt || mongoose.model("StaffTagExempt", staffTagExemptSchema);
+
+const staffTagScheduleSchema = new mongoose.Schema({
+  guild_id: { type: String, required: true },
+  date_key: { type: String, required: true }, // Format YYYY-MM-DD
+  slot: { type: Number, required: true }, // 1 or 2
+  assigned_user_id: { type: String, required: true },
+  original_user_id: String,
+  status: { type: String, default: "pending" }, // pending, completed, busy, taken_over
+  notified_at: Number,
+  completed_at: Number,
+  reminder_sent: { type: Boolean, default: false },
+}, { strict: false, collection: "staff_tag_schedules" });
+staffTagScheduleSchema.index({ guild_id: 1, date_key: 1, slot: 1 }, { unique: true });
+const StaffTagSchedule = mongoose.models.StaffTagSchedule || mongoose.model("StaffTagSchedule", staffTagScheduleSchema);
+
+
 module.exports = {
   mongoose,
   connectMongo,
@@ -250,5 +308,13 @@ module.exports = {
   TimedRole,
   ActiveVoiceSession,
   StickyMessage,
-  MediaSetting,
+  ActivityDailyChannel,
+  LeaderboardLobbyChannel,
+  MonthlyRecapSnapshot,
+  LeaderboardBlacklist,
+  BoosterCustomRole,
+  StaffTagConfig,
+  StaffTagExempt,
+  StaffTagSchedule,
 };
+
