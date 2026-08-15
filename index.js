@@ -10064,11 +10064,14 @@ async function checkInviteLinkAlert(message) {
     const toggleDoc = await MetaText.findOne({ key: `invitelog_enabled_${guild.id}` }).lean().catch(() => null);
     if (toggleDoc?.value === "off") return false;
 
-    // Check log channel
-    const logChDoc = await MetaText.findOne({ key: `invitelog_channel_${guild.id}` }).lean().catch(() => null);
-    if (!logChDoc?.value) return false;
+    // Check log channel (with fallback to stafflog_channel)
+    let logChId = (await MetaText.findOne({ key: `invitelog_channel_${guild.id}` }).lean().catch(() => null))?.value;
+    if (!logChId) {
+      logChId = (await MetaText.findOne({ key: `stafflog_channel_${guild.id}` }).lean().catch(() => null))?.value;
+    }
+    if (!logChId) return false;
 
-    const alertChannel = guild.channels.cache.get(logChDoc.value) || await guild.channels.fetch(logChDoc.value).catch(() => null);
+    const alertChannel = guild.channels.cache.get(logChId) || await guild.channels.fetch(logChId).catch(() => null);
     if (!alertChannel?.isTextBased()) return false;
 
     // Whitelist checks
@@ -10235,12 +10238,15 @@ async function isActionAllowedByStaffLogRoleFilter(guild, executorUser = null, t
   try {
     const filterDoc = await MetaText.findOne({ key: `stafflog_roles_${guild.id}` }).lean().catch(() => null);
     const filterRoleIds = Array.isArray(filterDoc?.value) ? filterDoc.value : [];
-    if (!filterRoleIds.length) return true; // Default: allow all
+    if (!filterRoleIds.length) return true; // Default: allow all if no filter configured
 
     if (executorUser) {
       const execMember = guild.members.cache.get(executorUser.id) || await guild.members.fetch(executorUser.id).catch(() => null);
-      if (execMember && filterRoleIds.some(rId => execMember.roles.cache.has(rId))) {
-        return true;
+      if (execMember) {
+        if (filterRoleIds.some(rId => execMember.roles.cache.has(rId))) return true;
+        if (isBotOwner(executorUser.id) || hasPerm(execMember, PermissionsBitField.Flags.Administrator) || hasPerm(execMember, PermissionsBitField.Flags.ManageRoles)) {
+          return true;
+        }
       }
     }
 
@@ -10255,6 +10261,9 @@ async function isActionAllowedByStaffLogRoleFilter(guild, executorUser = null, t
         return true;
       }
     }
+
+    // If executor is not resolved from audit log, log it by default
+    if (!executorUser) return true;
 
     return false;
   } catch {
