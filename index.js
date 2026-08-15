@@ -10797,37 +10797,45 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     const removedRoles = oldMember.roles.cache.filter(r => !newMember.roles.cache.has(r.id));
 
     if (addedRoles.size > 0 || removedRoles.size > 0) {
-      let executor = null;
-      let reason = null;
-      try {
-        const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 1 }).catch(() => null);
-        const entry = logs?.entries?.first();
-        if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
-          executor = entry.executor;
-          reason = entry.reason;
-        }
-      } catch { }
+      const filterDoc = await MetaText.findOne({ key: `stafflog_roles_${guild.id}` }).lean().catch(() => null);
+      const filterRoleIds = Array.isArray(filterDoc?.value) ? filterDoc.value : [];
 
-      const targetRoleIds = [...addedRoles.keys(), ...removedRoles.keys()];
-      const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, executor, targetRoleIds, newMember);
+      let finalAdded = addedRoles;
+      let finalRemoved = removedRoles;
 
-      if (isAllowed) {
-        if (addedRoles.size > 0) {
+      if (filterRoleIds.length > 0) {
+        finalAdded = addedRoles.filter(r => filterRoleIds.includes(r.id));
+        finalRemoved = removedRoles.filter(r => filterRoleIds.includes(r.id));
+      }
+
+      if (finalAdded.size > 0 || finalRemoved.size > 0) {
+        let executor = null;
+        let reason = null;
+        try {
+          const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 1 }).catch(() => null);
+          const entry = logs?.entries?.first();
+          if (entry && entry.target?.id === newMember.id && (Date.now() - entry.createdTimestamp < 10000)) {
+            executor = entry.executor;
+            reason = entry.reason;
+          }
+        } catch { }
+
+        if (finalAdded.size > 0) {
           await sendStaffLogEntry(guild, "➕ Staff Action: Role Added", [
             `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
             `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
             `▸ **Server Nickname:** \`${newMember.displayName}\``,
-            `▸ **Role Ditambahkan:** ${addedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
+            `▸ **Role Ditambahkan:** ${finalAdded.map(r => `<@&${r.id}>`).join(", ")}`,
             `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
           ]);
         }
 
-        if (removedRoles.size > 0) {
+        if (finalRemoved.size > 0) {
           await sendStaffLogEntry(guild, "➖ Staff Action: Role Removed", [
             `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
             `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
             `▸ **Server Nickname:** \`${newMember.displayName}\``,
-            `▸ **Role Ditarik:** ${removedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
+            `▸ **Role Ditarik:** ${finalRemoved.map(r => `<@&${r.id}>`).join(", ")}`,
             `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
           ]);
         }
