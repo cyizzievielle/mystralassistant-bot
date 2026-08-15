@@ -7068,7 +7068,7 @@ function buildStaffTagActionRow() {
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId("ctag_btn_busy")
-      .setLabel("Berhalangan")
+      .setLabel("Sibuk")
       .setEmoji("⚠️")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
@@ -7088,7 +7088,7 @@ function buildStaffTagTestActionRow() {
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId("ctag_testbtn_busy")
-      .setLabel("Berhalangan")
+      .setLabel("Sibuk")
       .setEmoji("⚠️")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
@@ -7251,7 +7251,7 @@ function startStaffTagLoop(client) {
                   [
                     `Halo <@${sched.assigned_user_id}>, sekarang giliranmu untuk melakukan **Tag Member**! 📌`,
                     "",
-                    "**Opsi Cepat:** Tekan tombol di bawah, atau gunakan command `ctag done` / `ctag busy`.",
+                    "📌 **Opsi Cepat:** Silakan tekan tombol di bawah ini.",
                   ].join("\n")
                 )
               )
@@ -14424,7 +14424,7 @@ client.on(Events.MessageCreate, async (message) => {
                 "",
                 `Halo <@${assignedUserId}>, sekarang giliranmu untuk melakukan **Tag Member**! 📌`,
                 "",
-                "**Opsi Cepat:** Tekan tombol di bawah, atau gunakan command `ctag done` / `ctag busy`.",
+                "📌 **Opsi Cepat:** Silakan tekan tombol di bawah ini.",
               ].join("\n")
             )
           )
