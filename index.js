@@ -10563,6 +10563,43 @@ async function updateStaffPanelMessage(guild) {
   }
 }
 
+// Automatic real-time Staff Directory Panel refresh when staff presence changes
+const presenceDebounceMap = new Map();
+
+client.on(Events.PresenceUpdate, async (oldPresence, newPresence) => {
+  try {
+    if (!newPresence || !newPresence.guild) return;
+    const guild = newPresence.guild;
+
+    const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${guild.id}` }).lean().catch(() => null);
+    const configuredRoles = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
+    if (!configuredRoles.length) return;
+
+    const member = newPresence.member || await guild.members.fetch(newPresence.userId).catch(() => null);
+    if (!member) return;
+
+    const isStaffMember = configuredRoles.some(item => {
+      const rId = typeof item === "string" ? item : item.role_id;
+      return member.roles.cache.has(rId);
+    });
+
+    if (!isStaffMember) return;
+
+    if (presenceDebounceMap.has(guild.id)) {
+      clearTimeout(presenceDebounceMap.get(guild.id));
+    }
+
+    const timer = setTimeout(() => {
+      presenceDebounceMap.delete(guild.id);
+      updateStaffPanelMessage(guild).catch(() => null);
+    }, 5000);
+
+    presenceDebounceMap.set(guild.id, timer);
+  } catch (err) {
+    console.error("[PRESENCE UPDATE STAFF PANEL ERROR]", err);
+  }
+});
+
 async function buildStaffProfileContainer(member) {
   const guild = member.guild;
   const user = member.user;
