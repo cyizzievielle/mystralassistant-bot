@@ -14807,11 +14807,78 @@ client.on(Events.MessageCreate, async (message) => {
 
       const sub = (args[0] || "").toLowerCase();
 
+      // cstaffpanel setup / help / guide / info (or no sub)
+      if (!sub || sub === "setup" || sub === "help" || sub === "guide" || sub === "info") {
+        const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${message.guild.id}` }).lean().catch(() => null);
+        const currentRoles = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
+
+        const roleLines = currentRoles.length
+          ? currentRoles.map((r, idx) => {
+              const rId = typeof r === "string" ? r : r.role_id;
+              const rLabel = (typeof r === "object" && r.label) ? r.label : "Default Label";
+              return `${idx + 1}. <@&${rId}> — **${rLabel}**`;
+            }).join("\n")
+          : "*(Belum ada role terdaftar)*";
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## 📌 Staff Directory Panel — Setup & Copy Commands"),
+            new TextDisplayBuilder().setContent(
+              [
+                "Salin perintah 1-baris di bawah ini (klik untuk menyalin) untuk menambah role & mempublikasikan Staff Panel:",
+                "",
+                "**1️⃣ Tambah Role Staff Ke Panel (Langsung Copy):**",
+                "```",
+                "cstaffpanel addrole @Role Label Divisi",
+                "```",
+                "*(Contoh: `cstaffpanel addrole @Admin Administrator`)*",
+                "",
+                "**2️⃣ Deploy / Publikasikan Panel Ke Channel (Langsung Copy):**",
+                "```",
+                "cstaffpanel deploy #channel",
+                "```",
+                "",
+                "**3️⃣ Hapus Role Dari Panel (Langsung Copy):**",
+                "```",
+                "cstaffpanel removerole @Role",
+                "```",
+                "",
+                "**4️⃣ Blacklist User Dari Panel (Langsung Copy):**",
+                "```",
+                "cstaffpanel blacklist add @User",
+                "```",
+                "",
+                "**📋 List Role Terdaftar Saat Ini:**",
+                roleLines
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("Mystral Staff Panel • Direct Copy 1/1 Commands")
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+      }
+
       // cstaffpanel addrole @Role [Label]
       if (sub === "addrole" || sub === "roleadd" || sub === "role") {
         const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
         if (!role) {
-          return message.reply("❌ Mention role staff yang ingin ditambahkan ke panel.\n\n**Contoh:** `cstaffpanel addrole @Admin Moderator`");
+          const container = new ContainerBuilder()
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent("## ❌ Sebutkan Role Staff"),
+              new TextDisplayBuilder().setContent(
+                [
+                  "Gunakan perintah 1-baris siap copy di bawah ini:",
+                  "```",
+                  "cstaffpanel addrole @Role Label Divisi",
+                  "```",
+                  "**Contoh:** `cstaffpanel addrole @Admin Administrator`"
+                ].join("\n")
+              )
+            );
+          return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
         }
         const label = args.slice(2).join(" ").trim() || role.name;
 
@@ -14827,13 +14894,36 @@ client.on(Events.MessageCreate, async (message) => {
         ).catch(() => null);
 
         await updateStaffPanelMessage(message.guild);
-        return message.reply(`✅ Role <@&${role.id}> (${label}) berhasil ditambahkan ke daftar Staff Panel.`);
+
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## ✅ Role Berhasil Ditambahkan Ke Staff Panel"),
+            new TextDisplayBuilder().setContent(
+              [
+                `▸ **Role:** <@&${role.id}>`,
+                `▸ **Label Divisi:** \`${label}\``,
+                "",
+                "**📌 Langkah Selanjutnya — Deploy Ke Channel (Langsung Copy):**",
+                "```",
+                "cstaffpanel deploy #channel",
+                "```"
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("Mystral Staff Panel • Configured")
+          );
+
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
       }
 
       // cstaffpanel removerole @Role
       if (sub === "removerole" || sub === "delrole") {
         const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
-        if (!role) return message.reply("❌ Mention role yang ingin dihapus dari panel.");
+        if (!role) {
+          return message.reply("❌ Mention role yang ingin dihapus dari panel.\n\n**Contoh Copy:**\n```\ncstaffpanel removerole @Role\n```");
+        }
 
         const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${message.guild.id}` }).lean().catch(() => null);
         let list = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
@@ -14858,7 +14948,7 @@ client.on(Events.MessageCreate, async (message) => {
         let list = Array.isArray(excludedDoc?.value) ? excludedDoc.value : [];
 
         if (action === "add" || action === "tambah") {
-          if (!targetUser) return message.reply("❌ Mention user atau tuliskan User ID yang ingin di-blacklist dari Staff Panel.\n\n**Contoh:** `cstaffpanel blacklist add @User`");
+          if (!targetUser) return message.reply("❌ Mention user atau tuliskan User ID yang ingin di-blacklist dari Staff Panel.\n\n**Contoh Copy:**\n```\ncstaffpanel blacklist add @User\n```");
           if (!list.includes(targetUser.id)) list.push(targetUser.id);
           await MetaText.updateOne({ key: `staffpanel_excluded_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
 
@@ -14877,21 +14967,23 @@ client.on(Events.MessageCreate, async (message) => {
           }
           return message.reply(`📋 **Daftar User Blacklist Staff Panel:**\n${list.map((id, idx) => `${idx + 1}. <@${id}> (\`${id}\`)`).join("\n")}`);
         } else {
-          return message.reply("❌ Format: `cstaffpanel blacklist add @User`, `cstaffpanel blacklist remove @User`, atau `cstaffpanel blacklist list`.");
+          return message.reply("❌ Format Copy:\n```\ncstaffpanel blacklist add @User\ncstaffpanel blacklist remove @User\ncstaffpanel blacklist list\n```");
         }
       }
 
-      // Default setup / deploy
-      const targetChannel = message.mentions.channels.first() || message.guild.channels.cache.get(args[0]) || message.channel;
-      const container = await buildStaffDirectoryContainer(message.guild);
+      // cstaffpanel deploy #channel / cstaffpanel #channel
+      if (sub === "deploy" || sub === "kirim" || sub === "publish" || message.mentions.channels.first() || (args[0] && message.guild.channels.cache.has(args[0]))) {
+        const targetChannel = message.mentions.channels.first() || message.guild.channels.cache.get(args[0]) || message.guild.channels.cache.get(args[1]) || message.channel;
+        const container = await buildStaffDirectoryContainer(message.guild);
 
-      const panelMsg = await targetChannel.send({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
-      if (panelMsg) {
-        await MetaText.updateOne({ key: `staffpanel_channel_${message.guild.id}` }, { $set: { value: targetChannel.id } }, { upsert: true }).catch(() => null);
-        await MetaText.updateOne({ key: `staffpanel_message_${message.guild.id}` }, { $set: { value: panelMsg.id } }, { upsert: true }).catch(() => null);
-        return message.reply(`✅ Staff Directory Panel berhasil di-deploy di <#${targetChannel.id}>!`);
-      } else {
-        return message.reply("❌ Gagal mempublikasikan Staff Panel. Pastikan bot memiliki izin di channel tersebut.");
+        const panelMsg = await targetChannel.send({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
+        if (panelMsg) {
+          await MetaText.updateOne({ key: `staffpanel_channel_${message.guild.id}` }, { $set: { value: targetChannel.id } }, { upsert: true }).catch(() => null);
+          await MetaText.updateOne({ key: `staffpanel_message_${message.guild.id}` }, { $set: { value: panelMsg.id } }, { upsert: true }).catch(() => null);
+          return message.reply(`✅ Staff Directory Panel berhasil di-deploy di <#${targetChannel.id}>!`);
+        } else {
+          return message.reply("❌ Gagal mempublikasikan Staff Panel. Pastikan bot memiliki izin di channel tersebut.");
+        }
       }
     }
 
