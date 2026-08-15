@@ -10463,6 +10463,25 @@ async function buildStaffDirectoryContainer(guild) {
   return container;
 }
 
+async function updateStaffPanelMessage(guild) {
+  try {
+    const chDoc = await MetaText.findOne({ key: `staffpanel_channel_${guild.id}` }).lean().catch(() => null);
+    const msgDoc = await MetaText.findOne({ key: `staffpanel_message_${guild.id}` }).lean().catch(() => null);
+    if (chDoc?.value && msgDoc?.value) {
+      const channel = guild.channels.cache.get(chDoc.value);
+      if (channel) {
+        const msg = await channel.messages.fetch(msgDoc.value).catch(() => null);
+        if (msg) {
+          const container = await buildStaffDirectoryContainer(guild);
+          await msg.edit({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[UPDATE STAFF PANEL ERROR]", err);
+  }
+}
+
 async function buildStaffProfileContainer(member) {
   const guild = member.guild;
   const user = member.user;
@@ -14593,6 +14612,7 @@ client.on(Events.MessageCreate, async (message) => {
           { upsert: true }
         ).catch(() => null);
 
+        await updateStaffPanelMessage(message.guild);
         return message.reply(`✅ Role <@&${role.id}> (${label}) berhasil ditambahkan ke daftar Staff Panel.`);
       }
 
@@ -14611,26 +14631,39 @@ client.on(Events.MessageCreate, async (message) => {
           { upsert: true }
         ).catch(() => null);
 
+        await updateStaffPanelMessage(message.guild);
         return message.reply(`🗑️ Role <@&${role.id}> dihapus dari daftar Staff Panel.`);
       }
 
-      // cstaffpanel exclude add/remove @User
-      if (sub === "exclude") {
+      // cstaffpanel blacklist add/remove/list @User OR cstaffpanel exclude add/remove/list @User
+      if (sub === "blacklist" || sub === "exclude" || sub === "bl") {
         const action = (args[1] || "").toLowerCase();
-        const targetUser = message.mentions.users.first() || await message.client.users.fetch(args[2]).catch(() => null);
-        if (!targetUser) return message.reply("❌ Format: `cstaffpanel exclude add @User` atau `cstaffpanel exclude remove @User`.");
+        const targetUser = message.mentions.users.first() || (args[2] ? await message.client.users.fetch(args[2]).catch(() => null) : null);
 
         const excludedDoc = await MetaText.findOne({ key: `staffpanel_excluded_${message.guild.id}` }).lean().catch(() => null);
         let list = Array.isArray(excludedDoc?.value) ? excludedDoc.value : [];
 
-        if (action === "add") {
+        if (action === "add" || action === "tambah") {
+          if (!targetUser) return message.reply("❌ Mention user atau tuliskan User ID yang ingin di-blacklist dari Staff Panel.\n\n**Contoh:** `cstaffpanel blacklist add @User`");
           if (!list.includes(targetUser.id)) list.push(targetUser.id);
           await MetaText.updateOne({ key: `staffpanel_excluded_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
-          return message.reply(`✅ User <@${targetUser.id}> dimasukkan ke daftar pengecualian Staff Panel.`);
-        } else if (action === "remove" || action === "del") {
+
+          await updateStaffPanelMessage(message.guild);
+          return message.reply(`✅ User <@${targetUser.id}> (\`@${targetUser.username}\`) berhasil dimasukkan ke daftar **Blacklist / Pengecualian Staff Panel** (tidak akan muncul di directory).`);
+        } else if (action === "remove" || action === "del" || action === "hapus") {
+          if (!targetUser) return message.reply("❌ Mention user atau tuliskan User ID yang ingin dihapus dari blacklist.");
           list = list.filter(id => id !== targetUser.id);
           await MetaText.updateOne({ key: `staffpanel_excluded_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
-          return message.reply(`🗑️ User <@${targetUser.id}> dihapus dari pengecualian Staff Panel.`);
+
+          await updateStaffPanelMessage(message.guild);
+          return message.reply(`🗑️ User <@${targetUser.id}> dihapus dari blacklist Staff Panel.`);
+        } else if (action === "list" || !action) {
+          if (!list.length) {
+            return message.reply("ℹ️ Belum ada akun staff yang dimasukkan ke daftar Blacklist / Pengecualian Staff Panel.");
+          }
+          return message.reply(`📋 **Daftar User Blacklist Staff Panel:**\n${list.map((id, idx) => `${idx + 1}. <@${id}> (\`${id}\`)`).join("\n")}`);
+        } else {
+          return message.reply("❌ Format: `cstaffpanel blacklist add @User`, `cstaffpanel blacklist remove @User`, atau `cstaffpanel blacklist list`.");
         }
       }
 
