@@ -10860,21 +10860,17 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       if (isAllowed) {
         if (addedRoles.size > 0) {
           await sendStaffLogEntry(guild, "➕ Staff Action: Role Added", [
-            `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-            `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-            `▸ **Server Nickname:** \`${newMember.displayName}\``,
+            `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`@${executor.username}\`)` : "*Direct / Bot*"}`,
+            `▸ **Target User:** <@${newMember.id}> (\`@${newMember.user.username}\`)`,
             `▸ **Role Ditambahkan:** ${addedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
-            `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
           ]);
         }
 
         if (removedRoles.size > 0) {
           await sendStaffLogEntry(guild, "➖ Staff Action: Role Removed", [
-            `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-            `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-            `▸ **Server Nickname:** \`${newMember.displayName}\``,
+            `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`@${executor.username}\`)` : "*Direct / Bot*"}`,
+            `▸ **Target User:** <@${newMember.id}> (\`@${newMember.user.username}\`)`,
             `▸ **Role Ditarik:** ${removedRoles.map(r => `<@&${r.id}>`).join(", ")}`,
-            `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
           ]);
         }
       }
@@ -10900,9 +10896,8 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       if (isAllowed) {
         const untilTs = Math.floor(newTimeout / 1000);
         await sendStaffLogEntry(guild, "⏳ Staff Action: Member Timed Out", [
-          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-          `▸ **Server Nickname:** \`${newMember.displayName}\``,
+          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`@${executor.username}\`)` : "*Direct / Bot*"}`,
+          `▸ **Target User:** <@${newMember.id}> (\`@${newMember.user.username}\`)`,
           `▸ **Timeout Sampai:** <t:${untilTs}:F> (<t:${untilTs}:R>)`,
           `▸ **Alasan / Reason:** \`${reason || "Tidak ada alasan"}\``,
         ]);
@@ -10920,9 +10915,8 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, executor, [], newMember);
       if (isAllowed) {
         await sendStaffLogEntry(guild, "🔓 Staff Action: Timeout Removed", [
-          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`${executor.tag}\`)` : "*Direct / Bot*"}`,
-          `▸ **Target User:** <@${newMember.id}> (\`${newMember.user.tag}\`)`,
-          `▸ **Server Nickname:** \`${newMember.displayName}\``,
+          `▸ **Staff (Executor):** ${executor ? `<@${executor.id}> (\`@${executor.username}\`)` : "*Direct / Bot*"}`,
+          `▸ **Target User:** <@${newMember.id}> (\`@${newMember.user.username}\`)`,
           `▸ **Status:** *Timeout telah dicabut / berakhir*`,
         ]);
       }
@@ -10942,9 +10936,8 @@ client.on(Events.GuildMemberRemove, async (member) => {
       const isAllowed = await isActionAllowedByStaffLogRoleFilter(guild, entry.executor, [], member);
       if (isAllowed) {
         await sendStaffLogEntry(guild, "👢 Staff Action: Member Kicked", [
-          `▸ **Staff (Executor):** <@${entry.executor.id}> (\`${entry.executor.tag}\`)`,
-          `▸ **Target User:** <@${member.id}> (\`${member.user.tag}\`)`,
-          `▸ **Server Nickname:** \`${member.displayName}\``,
+          `▸ **Staff (Executor):** <@${entry.executor.id}> (\`@${entry.executor.username}\`)`,
+          `▸ **Target User:** <@${member.id}> (\`@${member.user.username}\`)`,
           `▸ **User ID:** \`${member.id}\``,
           `▸ **Alasan Kick:** \`${entry.reason || "Tidak ada alasan"}\``,
         ]);
