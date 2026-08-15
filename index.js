@@ -7251,7 +7251,7 @@ function startStaffTagLoop(client) {
                   [
                     `Halo <@${sched.assigned_user_id}>, sekarang giliranmu untuk melakukan **Tag Member**! 📌`,
                     "",
-                    "📌 **Opsi Cepat:** Silakan tekan tombol di bawah ini.",
+                    "Selesaikan tugas atau tandai status giliranmu melalui tombol di bawah ini:",
                   ].join("\n")
                 )
               )
@@ -14424,7 +14424,7 @@ client.on(Events.MessageCreate, async (message) => {
                 "",
                 `Halo <@${assignedUserId}>, sekarang giliranmu untuk melakukan **Tag Member**! 📌`,
                 "",
-                "📌 **Opsi Cepat:** Silakan tekan tombol di bawah ini.",
+                "Selesaikan tugas atau tandai status giliranmu melalui tombol di bawah ini:",
               ].join("\n")
             )
           )
