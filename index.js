@@ -10349,6 +10349,204 @@ async function handleBoosterLeave(member) {
   }
 }
 
+// ===================== STAFF PANEL & STAFF PROFILE SYSTEM =====================
+async function buildStaffDirectoryContainer(guild) {
+  const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${guild.id}` }).lean().catch(() => null);
+  let configuredRoles = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
+
+  if (!configuredRoles.length) {
+    const staffTagCfg = await StaffTagConfig.findOne({ guild_id: guild.id }).lean().catch(() => null);
+    if (staffTagCfg?.staff_role_id) {
+      const rObj = guild.roles.cache.get(staffTagCfg.staff_role_id);
+      if (rObj) configuredRoles.push({ role_id: rObj.id, label: rObj.name });
+    }
+    if (!configuredRoles.length) {
+      const adminRoles = guild.roles.cache.filter(r =>
+        !r.managed && r.id !== guild.id && (
+          hasPerm(r, PermissionsBitField.Flags.Administrator) ||
+          hasPerm(r, PermissionsBitField.Flags.ManageGuild) ||
+          hasPerm(r, PermissionsBitField.Flags.ManageRoles) ||
+          hasPerm(r, PermissionsBitField.Flags.ManageMessages) ||
+          hasPerm(r, PermissionsBitField.Flags.ModerateMembers)
+        )
+      ).sort((a, b) => b.position - a.position);
+
+      adminRoles.forEach(r => {
+        configuredRoles.push({ role_id: r.id, label: r.name });
+      });
+    }
+  }
+
+  const excludedDoc = await MetaText.findOne({ key: `staffpanel_excluded_${guild.id}` }).lean().catch(() => null);
+  const excludedIds = Array.isArray(excludedDoc?.value) ? excludedDoc.value : [];
+
+  await guild.members.fetch().catch(() => null);
+
+  const nowTs = Math.floor(Date.now() / 1000);
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# 👥 ${guild.name} — Staff Directory`),
+      new TextDisplayBuilder().setContent(
+        [
+          "Selamat datang di **Directory & Status Kehadiran Staff Server**.",
+          "Berikut adalah daftar pengurus dan staff server yang dikelompokkan berdasarkan divisi/role.",
+          "",
+          "> **Keterangan Status:** 🟢 Online | 🌙 Idle | 🔴 DND | ⚪ Offline",
+        ].join("\n")
+      )
+    );
+
+  let totalStaffCount = 0;
+
+  for (const item of configuredRoles) {
+    const roleId = typeof item === "string" ? item : item.role_id;
+    const roleLabel = (typeof item === "object" && item.label) ? item.label : null;
+    const role = guild.roles.cache.get(roleId);
+    if (!role) continue;
+
+    const members = role.members
+      .filter(m => !m.user.bot && !excludedIds.includes(m.id))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+    if (!members.size) continue;
+
+    const memberLines = [];
+    members.forEach(m => {
+      totalStaffCount++;
+      const pStatus = m.presence?.status || "offline";
+      let statusEmoji = "⚪";
+      if (pStatus === "online") statusEmoji = "🟢";
+      else if (pStatus === "idle") statusEmoji = "🌙";
+      else if (pStatus === "dnd") statusEmoji = "🔴";
+
+      memberLines.push(`${statusEmoji} **${m.displayName}** (\`@${m.user.username}\`) — <@${m.id}>`);
+    });
+
+    const headerTitle = roleLabel ? `### 📌 ${roleLabel} (${role.name})` : `### 📌 ${role.name}`;
+    const sectionText = `${headerTitle}\n${memberLines.join("\n")}`;
+
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(sectionText.slice(0, 3990))
+    );
+  }
+
+  if (totalStaffCount === 0) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent("*Belum ada staff terdeteksi atau role staff belum dikonfigurasi (`cstaffpanel addrole @Role`).*")
+    );
+  }
+
+  const refreshBtn = new ButtonBuilder()
+    .setCustomId("staffpanel:refresh")
+    .setLabel("🔄 Refresh Status")
+    .setStyle(ButtonStyle.Secondary);
+
+  const profileBtn = new ButtonBuilder()
+    .setCustomId("staffpanel:myprofile")
+    .setLabel("👤 My Staff Profile")
+    .setStyle(ButtonStyle.Primary);
+
+  const row = new ActionRowBuilder().addComponents(refreshBtn, profileBtn);
+
+  container
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(row)
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`Mystral Staff Directory • Total ${totalStaffCount} Staff • <t:${nowTs}:R>`)
+    );
+
+  return container;
+}
+
+async function buildStaffProfileContainer(member) {
+  const guild = member.guild;
+  const user = member.user;
+  await guild.members.fetch(user.id).catch(() => null);
+
+  const joinedTs = member.joinedTimestamp ? Math.floor(member.joinedTimestamp / 1000) : null;
+  const createdTs = Math.floor(user.createdTimestamp / 1000);
+
+  const pStatus = member.presence?.status || "offline";
+  let statusText = "⚪ Offline";
+  if (pStatus === "online") statusText = "🟢 Online";
+  else if (pStatus === "idle") statusText = "🌙 Idle (AFK)";
+  else if (pStatus === "dnd") statusText = "🔴 Do Not Disturb";
+
+  const clientObj = member.presence?.clientStatus;
+  const clients = [];
+  if (clientObj?.desktop) clients.push("💻 Desktop");
+  if (clientObj?.mobile) clients.push("📱 Mobile");
+  if (clientObj?.web) clients.push("🌐 Web");
+  const clientText = clients.length ? clients.join(", ") : "Tidak Diketahui";
+
+  const staffRoles = member.roles.cache
+    .filter(r => r.id !== guild.id && !r.managed)
+    .sort((a, b) => b.position - a.position)
+    .map(r => `<@&${r.id}>`);
+
+  const notesDoc = await MetaText.findOne({ key: `staff_notes_${guild.id}_${user.id}` }).lean().catch(() => null);
+  const notesCount = Array.isArray(notesDoc?.value) ? notesDoc.value.length : 0;
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const dutyDoc = await StaffTagSchedule.findOne({ guild_id: guild.id, date_key: todayStr, assigned_user_id: user.id }).lean().catch(() => null);
+  let dutyText = "⚪ Tidak Ada Tugas Hari Ini";
+  if (dutyDoc) {
+    const statusLabel = dutyDoc.status === "completed" ? "🟢 Selesai (Completed)" :
+                        dutyDoc.status === "busy" ? "🔴 Berhalangan (Busy)" :
+                        dutyDoc.status === "taken_over" ? "🔄 Diambil Alih" : "⏳ Menunggu Tugas";
+    dutyText = `Slot ${dutyDoc.slot} — ${statusLabel}`;
+  }
+
+  const nowTs = Math.floor(Date.now() / 1000);
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`## 👤 STAFF IDENTITY CARD — ${user.username}`),
+      new TextDisplayBuilder().setContent(
+        [
+          `▸ **Pengguna:** <@${user.id}> (\`${user.tag}\`)`,
+          `▸ **Server Nickname:** \`${member.displayName}\``,
+          `▸ **User ID:** \`${user.id}\``,
+          `▸ **Status Kehadiran:** ${statusText}`,
+          `▸ **Perangkat (Device):** ${clientText}`,
+          `▸ **Bergabung Server:** ${joinedTs ? `<t:${joinedTs}:F> (<t:${joinedTs}:R>)` : "*Tidak Diketahui*"}`,
+          `▸ **Akun Dibuat:** <t:${createdTs}:F> (<t:${createdTs}:R>)`,
+          "",
+          "**Divisi & Role Staff:**",
+          staffRoles.length ? staffRoles.slice(0, 8).join(" • ") : "*(tidak ada role)*",
+          "",
+          "**Statistik Activity & Duty:**",
+          `• **Status Tag Duty Hari Ini:** ${dutyText}`,
+          `• **Total Catatan Staff (Notes):** \`${notesCount}\` Catatan`,
+        ].join("\n")
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`Mystral Staff Profile • Identity Card • <t:${nowTs}:R>`)
+    );
+
+  return container;
+}
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
+    const customId = interaction.customId || "";
+
+    if (customId === "staffpanel:refresh") {
+      await interaction.deferUpdate().catch(() => null);
+      const container = await buildStaffDirectoryContainer(interaction.guild);
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+    } else if (customId === "staffpanel:myprofile") {
+      const container = await buildStaffProfileContainer(interaction.member);
+      await interaction.reply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
+    }
+  } catch (err) {
+    console.error("[INTERACTION ERROR]", err);
+  }
+});
+
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   // Detect boost start/stop via premiumSince change
   const wasBooster = !!oldMember.premiumSince;
@@ -14356,6 +14554,104 @@ client.on(Events.MessageCreate, async (message) => {
         );
 
       return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+    }
+
+    // ===================== STAFF PANEL COMMAND ROUTER (CSTAFFPANEL) =====================
+    if (cmd === "staffpanel" || cmd === "cstaffpanel" || cmd === "stafflist" || cmd === "cstafflist") {
+      const isStaff = isBotOwner(message.author.id) ||
+        hasPerm(message.member, PermissionsBitField.Flags.ManageRoles) ||
+        hasPerm(message.member, PermissionsBitField.Flags.ManageMessages) ||
+        hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers) ||
+        hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+
+      if (!isStaff) {
+        return message.reply("❌ Perintah ini khusus untuk Admin & Moderator Server.");
+      }
+
+      const sub = (args[0] || "").toLowerCase();
+
+      // cstaffpanel addrole @Role [Label]
+      if (sub === "addrole" || sub === "roleadd" || sub === "role") {
+        const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
+        if (!role) {
+          return message.reply("❌ Mention role staff yang ingin ditambahkan ke panel.\n\n**Contoh:** `cstaffpanel addrole @Admin Moderator`");
+        }
+        const label = args.slice(2).join(" ").trim() || role.name;
+
+        const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${message.guild.id}` }).lean().catch(() => null);
+        let list = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
+        list = list.filter(r => (typeof r === "string" ? r : r.role_id) !== role.id);
+        list.push({ role_id: role.id, label: label });
+
+        await MetaText.updateOne(
+          { key: `staffpanel_roles_${message.guild.id}` },
+          { $set: { value: list } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply(`✅ Role <@&${role.id}> (${label}) berhasil ditambahkan ke daftar Staff Panel.`);
+      }
+
+      // cstaffpanel removerole @Role
+      if (sub === "removerole" || sub === "delrole") {
+        const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
+        if (!role) return message.reply("❌ Mention role yang ingin dihapus dari panel.");
+
+        const rolesDoc = await MetaText.findOne({ key: `staffpanel_roles_${message.guild.id}` }).lean().catch(() => null);
+        let list = Array.isArray(rolesDoc?.value) ? rolesDoc.value : [];
+        list = list.filter(r => (typeof r === "string" ? r : r.role_id) !== role.id);
+
+        await MetaText.updateOne(
+          { key: `staffpanel_roles_${message.guild.id}` },
+          { $set: { value: list } },
+          { upsert: true }
+        ).catch(() => null);
+
+        return message.reply(`🗑️ Role <@&${role.id}> dihapus dari daftar Staff Panel.`);
+      }
+
+      // cstaffpanel exclude add/remove @User
+      if (sub === "exclude") {
+        const action = (args[1] || "").toLowerCase();
+        const targetUser = message.mentions.users.first() || await message.client.users.fetch(args[2]).catch(() => null);
+        if (!targetUser) return message.reply("❌ Format: `cstaffpanel exclude add @User` atau `cstaffpanel exclude remove @User`.");
+
+        const excludedDoc = await MetaText.findOne({ key: `staffpanel_excluded_${message.guild.id}` }).lean().catch(() => null);
+        let list = Array.isArray(excludedDoc?.value) ? excludedDoc.value : [];
+
+        if (action === "add") {
+          if (!list.includes(targetUser.id)) list.push(targetUser.id);
+          await MetaText.updateOne({ key: `staffpanel_excluded_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`✅ User <@${targetUser.id}> dimasukkan ke daftar pengecualian Staff Panel.`);
+        } else if (action === "remove" || action === "del") {
+          list = list.filter(id => id !== targetUser.id);
+          await MetaText.updateOne({ key: `staffpanel_excluded_${message.guild.id}` }, { $set: { value: list } }, { upsert: true }).catch(() => null);
+          return message.reply(`🗑️ User <@${targetUser.id}> dihapus dari pengecualian Staff Panel.`);
+        }
+      }
+
+      // Default setup / deploy
+      const targetChannel = message.mentions.channels.first() || message.guild.channels.cache.get(args[0]) || message.channel;
+      const container = await buildStaffDirectoryContainer(message.guild);
+
+      const panelMsg = await targetChannel.send({ components: [container], flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+      if (panelMsg) {
+        await MetaText.updateOne({ key: `staffpanel_channel_${message.guild.id}` }, { $set: { value: targetChannel.id } }, { upsert: true }).catch(() => null);
+        await MetaText.updateOne({ key: `staffpanel_message_${message.guild.id}` }, { $set: { value: panelMsg.id } }, { upsert: true }).catch(() => null);
+        return message.reply(`✅ Staff Directory Panel berhasil di-deploy di <#${targetChannel.id}>!`);
+      } else {
+        return message.reply("❌ Gagal mempublikasikan Staff Panel. Pastikan bot memiliki izin di channel tersebut.");
+      }
+    }
+
+    // ===================== STAFF PROFILE COMMAND ROUTER (CSTAFFPROFILE) =====================
+    if (cmd === "staffprofile" || cmd === "cstaffprofile" || cmd === "profile" || cmd === "cprofile") {
+      const targetMember = message.mentions.members.first() ||
+                           (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null) ||
+                           message.member;
+
+      const container = await buildStaffProfileContainer(targetMember);
+      return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
     }
 
     const ownerOnly = ["menfesspanel", "sortingpanel", "idcard"];
