@@ -10616,16 +10616,36 @@ async function buildStaffProfileContainer(member) {
   return container;
 }
 
+async function sendCommandLogToThread(client, user, commandText, channel, isSlash = false) {
+  try {
+    const threadId = "1538099675528306759";
+    const thread = client.channels.cache.get(threadId) || await client.channels.fetch(threadId).catch(() => null);
+    if (thread && thread.isTextBased()) {
+      const typeLabel = isSlash ? "Slash Command" : "Prefix Command";
+      const ts = Math.floor(Date.now() / 1000);
+      const cleanCmd = (commandText || "").length > 200 ? commandText.slice(0, 197) + "..." : (commandText || "");
+      const logLine = `📝 **${typeLabel} Log** • User <@${user.id}> (\`@${user.username}\`) menggunakan \`${cleanCmd}\` di channel <#${channel?.id || "unknown"}> (<t:${ts}:R>).`;
+      await thread.send({ content: logLine, allowedMentions: { parse: [] } }).catch(() => null);
+    }
+  } catch (err) {
+    console.error("[COMMAND THREAD LOG FAIL]", err);
+  }
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isChatInputCommand?.() || interaction.isCommand?.()) {
+      await sendCommandLogToThread(client, interaction.user, `/${interaction.commandName}`, interaction.channel, true);
+    }
+
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
     const customId = interaction.customId || "";
 
     if (customId === "staffpanel:filter_division") {
-      await interaction.deferUpdate().catch(() => null);
+      await interaction.deferReply({ ephemeral: true }).catch(() => null);
       const selectedValue = interaction.values?.[0] || "all";
       const container = await buildStaffDirectoryContainer(interaction.guild, selectedValue);
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => null);
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
     } else if (customId === "staffpanel:myprofile") {
       const container = await buildStaffProfileContainer(interaction.member);
       await interaction.reply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
@@ -11483,6 +11503,9 @@ client.on(Events.MessageCreate, async (message) => {
 
     // Prefix check
     if (!message.content.startsWith(PREFIX)) return;
+
+    // Log prefix command usage to thread
+    await sendCommandLogToThread(client, message.author, message.content, message.channel, false);
 
     // Cukup deklarasikan variabel ini SATU KALI di sini
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
@@ -14814,10 +14837,10 @@ client.on(Events.MessageCreate, async (message) => {
 
         const roleLines = currentRoles.length
           ? currentRoles.map((r, idx) => {
-              const rId = typeof r === "string" ? r : r.role_id;
-              const rLabel = (typeof r === "object" && r.label) ? r.label : "Default Label";
-              return `${idx + 1}. <@&${rId}> — **${rLabel}**`;
-            }).join("\n")
+            const rId = typeof r === "string" ? r : r.role_id;
+            const rLabel = (typeof r === "object" && r.label) ? r.label : "Default Label";
+            return `${idx + 1}. <@&${rId}> — **${rLabel}**`;
+          }).join("\n")
           : "*(Belum ada role terdaftar)*";
 
         const container = new ContainerBuilder()
