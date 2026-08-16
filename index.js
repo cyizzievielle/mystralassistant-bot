@@ -7323,6 +7323,245 @@ function startStaffTagLoop(client) {
   }, 2 * 60 * 1000);
 }
 
+// ===================== NEW STAFF ONBOARDING / WELCOME SYSTEM =====================
+async function buildStaffWelcomeOnboardingPayload(guild, newStaffUsers, manualDivision = "", customHeader = null, customThumbnail = null) {
+  try {
+    const welcomeChannelId = (await MetaText.findOne({ key: `staff_welcome_channel_${guild.id}` }).lean().catch(() => null))?.value;
+    const welcomeRoleId = (await MetaText.findOne({ key: `staff_welcome_role_${guild.id}` }).lean().catch(() => null))?.value;
+    const savedThumbnail = (await MetaText.findOne({ key: `staff_welcome_thumbnail_${guild.id}` }).lean().catch(() => null))?.value;
+    const savedHeader = (await MetaText.findOne({ key: `staff_welcome_header_${guild.id}` }).lean().catch(() => null))?.value;
+
+    const thumbnailUrl = customThumbnail || savedThumbnail || guild.iconURL({ dynamic: true, size: 512 }) || "https://cdn.discordapp.com/embed/avatars/0.png";
+    const headerMsgText = customHeader || savedHeader || "A new chapter begins. Please extend a warm welcome to our newest team member(s)! 👑";
+
+    const profileTextBlocks = [];
+
+    for (let i = 0; i < newStaffUsers.length; i++) {
+      const u = newStaffUsers[i];
+      const member = guild.members.cache.get(u.id) || await guild.members.fetch(u.id).catch(() => null);
+
+      let divisionName = manualDivision ? manualDivision.trim() : "";
+      if (!divisionName && member) {
+        // Auto detect division from highest staff role (excluding @everyone & managed roles)
+        const staffRoles = member.roles.cache
+          .filter(r => r.id !== guild.id && !r.managed)
+          .sort((a, b) => b.position - a.position);
+
+        const firstRole = staffRoles.first();
+        if (firstRole) divisionName = firstRole.name;
+      }
+      if (!divisionName) divisionName = "Staff Personnel";
+
+      const joinedServerTs = member?.joinedTimestamp ? Math.floor(member.joinedTimestamp / 1000) : null;
+      const joinedServerStr = joinedServerTs ? `<t:${joinedServerTs}:D> (<t:${joinedServerTs}:R>)` : "*Unknown*";
+      const displayName = member ? member.displayName : u.username;
+
+      profileTextBlocks.push(
+        `📌 | **PERSONNEL PROFILE #${i + 1}**`,
+        `• **User:** <@${u.id}> (\`@${u.username}\`)`,
+        `• **Name:** \`${displayName}\``,
+        `• **Division / Jabatan:** \`${divisionName}\``,
+        `• **Account ID:** \`${u.id}\``,
+        `• **Joined Server:** ${joinedServerStr}`
+      );
+
+      if (i < newStaffUsers.length - 1) {
+        profileTextBlocks.push("");
+      }
+    }
+
+    const nowTs = Math.floor(Date.now() / 1000);
+
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("## ✨ NEW STAFF ONBOARDING ✨"),
+        new TextDisplayBuilder().setContent(
+          [
+            "### 👑 | Welcome to the Team!",
+            `${headerMsgText}`,
+            "",
+            "───────────────────────────",
+            "",
+            ...profileTextBlocks,
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • New Staff Onboarding • <t:${nowTs}:R>`)
+      );
+
+    const outerPingText = `📢 ${welcomeRoleId ? `<@&${welcomeRoleId}>` : "**@Community Staff**"}, please welcome our new personnel! ${newStaffUsers.map(u => `<@${u.id}>`).join(", ")}`;
+
+    return {
+      container,
+      outerPingText,
+      welcomeChannelId,
+      welcomeRoleId,
+      fallbackEmbed: new EmbedBuilder()
+        .setColor(0xf1c40f)
+        .setTitle("✦ . NEW STAFF ONBOARDING")
+        .setThumbnail(thumbnailUrl)
+        .setDescription(
+          [
+            "👑 | **Welcome to the Team!**",
+            headerMsgText,
+            "",
+            "───────────────────────────",
+            "",
+            ...profileTextBlocks,
+          ].join("\n")
+        )
+        .setFooter({ text: "Mystral • New Staff Onboarding" })
+        .setTimestamp(),
+    };
+  } catch (err) {
+    console.error("[STAFF WELCOME BUILD FAIL]", err);
+    return null;
+  }
+}
+
+async function handleStaffWelcomeCommand(message, args) {
+  try {
+    const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+    if (!isAdminUser) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin `Manage Guild` / `Manage Roles` untuk menggunakan perintah welcome staff.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const mentionedUsers = [...message.mentions.users.values()];
+    if (!mentionedUsers.length) {
+      return message.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0xe74c3c)
+          .setTitle("❌ Format Command Tidak Valid")
+          .setDescription("Sebutkan minimal 1 mention user staff baru.\n\n**Contoh Penggunaan:**\n`cstaff welcome @User1` *(Auto detect divisi)*\n`cstaff welcome @User1 @User2 Sentinel Division` *(Custom divisi)*\n`cwelcomestaff @User1` *(Alias)*")
+        ],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    // Extract non-mention string as manual division
+    const manualDivision = args.filter(arg => !arg.startsWith("<@") && !arg.startsWith("<#") && !arg.startsWith("<&")).join(" ").trim();
+
+    const payloadData = await buildStaffWelcomeOnboardingPayload(message.guild, mentionedUsers, manualDivision);
+    if (!payloadData) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Membuat Kartu").setDescription("Terjadi kesalahan saat memuat kartu onboarding staff baru.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    // Determine target channel
+    let targetChannel = message.channel;
+    if (payloadData.welcomeChannelId) {
+      const ch = message.guild.channels.cache.get(payloadData.welcomeChannelId) || await message.guild.channels.fetch(payloadData.welcomeChannelId).catch(() => null);
+      if (ch && ch.isTextBased()) {
+        targetChannel = ch;
+      }
+    }
+
+    const allowedUserIds = mentionedUsers.map(u => u.id);
+    const allowedRoleIds = payloadData.welcomeRoleId ? [payloadData.welcomeRoleId] : [];
+
+    const sentMsg = await targetChannel.send({
+      content: payloadData.outerPingText,
+      components: [payloadData.container],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { users: allowedUserIds, roles: allowedRoleIds },
+    }).catch(() => null);
+
+    if (!sentMsg) {
+      await targetChannel.send({
+        content: payloadData.outerPingText,
+        embeds: [payloadData.fallbackEmbed],
+        allowedMentions: { users: allowedUserIds, roles: allowedRoleIds },
+      }).catch(err => console.error("[STAFF WELCOME SEND ERR]", err));
+    }
+
+    if (targetChannel.id !== message.channel.id) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Onboarding Staff Terkirim").setDescription(`Kartu onboarding untuk ${mentionedUsers.map(u => `<@${u.id}>`).join(", ")} telah dikirim ke channel <#${targetChannel.id}>.`)],
+        allowedMentions: { parse: [] },
+      });
+    }
+  } catch (err) {
+    console.error("[STAFF WELCOME CMD FAIL]", err);
+  }
+}
+
+async function handleStaffWelcomeSetupCommand(message, args) {
+  try {
+    const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+    if (!isAdminUser) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin `Manage Guild` / `Manage Roles` untuk mengatur konfigurasi welcome staff.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const channel = message.mentions.channels.first();
+    const role = message.mentions.roles.first();
+    const urlArg = args.find(a => a.startsWith("http://") || a.startsWith("https://"));
+
+    let updatedLines = [];
+
+    if (channel) {
+      await MetaText.updateOne({ key: `staff_welcome_channel_${message.guild.id}` }, { $set: { value: channel.id } }, { upsert: true }).catch(() => null);
+      updatedLines.push(`• **Channel Onboarding:** <#${channel.id}>`);
+    }
+
+    if (role) {
+      await MetaText.updateOne({ key: `staff_welcome_role_${message.guild.id}` }, { $set: { value: role.id } }, { upsert: true }).catch(() => null);
+      updatedLines.push(`• **Role Staff Mention:** <@&${role.id}>`);
+    }
+
+    if (urlArg) {
+      await MetaText.updateOne({ key: `staff_welcome_thumbnail_${message.guild.id}` }, { $set: { value: urlArg } }, { upsert: true }).catch(() => null);
+      updatedLines.push(`• **Custom Thumbnail URL:** \`${urlArg}\``);
+    }
+
+    const savedChannelId = (await MetaText.findOne({ key: `staff_welcome_channel_${message.guild.id}` }).lean().catch(() => null))?.value;
+    const savedRoleId = (await MetaText.findOne({ key: `staff_welcome_role_${message.guild.id}` }).lean().catch(() => null))?.value;
+    const savedThumbnail = (await MetaText.findOne({ key: `staff_welcome_thumbnail_${message.guild.id}` }).lean().catch(() => null))?.value;
+
+    const isConfigured = !!(savedChannelId && savedRoleId);
+
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("## 👑 Setup & Konfigurasi Welcome Staff Baru"),
+        new TextDisplayBuilder().setContent(
+          [
+            ...(updatedLines.length ? ["**<a:Fm_check:1523182720493289666> Berhasil Diperbarui:**", updatedLines.join("\n"), ""] : []),
+            "**📌 Status Konfigurasi Saat Ini:**",
+            `▸ **Status Sistem:** ${isConfigured ? "<a:971828statusonline:1521081779455397888> **[ READY / SIAP ]**" : "<a:460240statusoffline:1521082558664806501> **[ UNCONFIGURED / BELUM LENGKAP ]**"}`,
+            `▸ **Channel Onboarding:** ${savedChannelId ? `<#${savedChannelId}>` : "*Belum di-set (Fallback ke channel pengirim)*"}`,
+            `▸ **Role Staff Mention:** ${savedRoleId ? `<@&${savedRoleId}>` : "*Belum di-set (Fallback ke @Community Staff)*"}`,
+            `▸ **Thumbnail URL:** ${savedThumbnail ? `[Preview Image](${savedThumbnail})` : "*Default Server Icon*"}`,
+            "",
+            "**💡 Cara Setup 1-Baris Cepat:**",
+            "`cstaff welcomesetup #channel-welcome @CommunityStaff [thumbnailUrl]`",
+            "",
+            "**Perintah Penggunaan:**",
+            "• `cstaff welcome @User` — Sambut 1 staff baru (auto detect divisi)",
+            "• `cstaff welcome @User1 @User2 Event Division` — Sambut beberapa staff baru dengan nama divisi kustom",
+            "• `cwelcomestaff @User` — Alias perintah welcome staff",
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • New Staff Onboarding Setup Wizard`)
+      );
+
+    return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+  } catch (err) {
+    console.error("[STAFF WELCOME SETUP FAIL]", err);
+  }
+}
+
 
 async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
   // Prefix sticky commands
@@ -13685,6 +13924,15 @@ client.on(Events.MessageCreate, async (message) => {
         return message.reply(buildStaffTagHelpPanel());
       }
 
+      // ─── ACTION: welcome / onboarding / welcomesetup — New Staff Onboarding ───
+      if (sub === "welcome" || sub === "onboarding" || sub === "sambut") {
+        return handleStaffWelcomeCommand(message, args.slice(1));
+      }
+
+      if (sub === "welcomesetup" || sub === "welcomeconfig") {
+        return handleStaffWelcomeSetupCommand(message, args.slice(1));
+      }
+
       // ─── ACTION: duty / status — View Today's Schedule ───
       if (sub === "duty" || sub === "status" || sub === "jadwal" || sub === "cek") {
         const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
@@ -15290,6 +15538,15 @@ client.on(Events.MessageCreate, async (message) => {
           return message.reply("❌ Gagal mempublikasikan Staff Panel. Pastikan bot memiliki izin di channel tersebut.");
         }
       }
+    }
+
+    // ===================== NEW STAFF WELCOME / ONBOARDING ROUTERS =====================
+    if (cmd === "welcomestaff" || cmd === "cwelcomestaff" || cmd === "staffwelcome" || cmd === "cstaffwelcome" || cmd === "welcomeonboarding" || cmd === "cwelcomeonboarding") {
+      return handleStaffWelcomeCommand(message, args);
+    }
+
+    if (cmd === "welcomesetup" || cmd === "cwelcomesetup" || cmd === "welcomeconfig" || cmd === "cwelcomeconfig") {
+      return handleStaffWelcomeSetupCommand(message, args);
     }
 
     // ===================== STAFF PROFILE COMMAND ROUTER (CSTAFFPROFILE) =====================
