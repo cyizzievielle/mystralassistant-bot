@@ -5815,6 +5815,9 @@ const ADMIN_HELP_CATEGORIES = {
       "`cstaffprofile [@user]` — Lihat kartu profil identitas & statistik aktivitas staff.",
       "`cstaff welcome @user` — Sambut & umumkan staff baru (New Staff Onboarding).",
       "`cstaff welcomesetup` — Setup channel & role mention welcome staff 1-baris.",
+      "`cstaff leave @user [alasan]` — Kartu pelepasan & apresiasi staff pengunduran diri/pensiun.",
+      "`cstaff sotm @user` — Pengumuman anugerah Staff of the Month.",
+      "`cstaff lb` — Papan peringkat keaktifan tugas staff.",
       "`cstaffpanel setup` — Deploy panel daftar staff & status online/offline real-time.",
       "`cstaffpanel addrole` / `exclude` — Kelola struktur divisi & pengecualian ID panel staff."
     ]
@@ -7393,7 +7396,7 @@ async function buildStaffWelcomeOnboardingPayload(guild, newStaffUsers, manualDi
       )
       .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`Mystral • New Staff Onboarding • <t:${nowTs}:R>`)
+        new TextDisplayBuilder().setContent(`Mystral New Staff Onboarding • <t:${nowTs}:R>`)
       );
 
     const outerPingText = `📢 ${welcomeRoleId ? `<@&${welcomeRoleId}>` : "**@Community Staff**"}, please welcome our new personnel! ${newStaffUsers.map(u => `<@${u.id}>`).join(", ")}`;
@@ -7564,6 +7567,295 @@ async function handleStaffWelcomeSetupCommand(message, args) {
     return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
   } catch (err) {
     console.error("[STAFF WELCOME SETUP FAIL]", err);
+  }
+}
+
+// ===================== STAFF FAREWELL & RESIGNATION SYSTEM =====================
+async function buildStaffFarewellPayload(guild, staffUser, reasonStr = "") {
+  try {
+    const member = guild.members.cache.get(staffUser.id) || await guild.members.fetch(staffUser.id).catch(() => null);
+
+    const startTs = member?.joinedTimestamp || staffUser.createdTimestamp || Date.now();
+    const msDiff = Math.max(0, Date.now() - startTs);
+    const totalDays = Math.floor(msDiff / (1000 * 60 * 60 * 24));
+    const years = Math.floor(totalDays / 365);
+    const months = Math.floor((totalDays % 365) / 30);
+    const days = (totalDays % 365) % 30;
+
+    let tenureStr = "";
+    if (years > 0) tenureStr += `${years} Tahun `;
+    if (months > 0) tenureStr += `${months} Bulan `;
+    tenureStr += `${days} Hari`;
+    if (!tenureStr.trim()) tenureStr = "1 Hari";
+
+    let divisionName = "";
+    if (member) {
+      const staffRoles = member.roles.cache
+        .filter(r => r.id !== guild.id && !r.managed)
+        .sort((a, b) => b.position - a.position);
+      const firstRole = staffRoles.first();
+      if (firstRole) divisionName = firstRole.name;
+    }
+    if (!divisionName) divisionName = "Staff Personnel";
+
+    const displayName = member ? member.displayName : staffUser.username;
+    const nowTs = Math.floor(Date.now() / 1000);
+    const thumbnailUrl = member?.user.displayAvatarURL({ dynamic: true, size: 512 }) || staffUser.displayAvatarURL({ dynamic: true, size: 512 });
+
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("## 🎗️ HONORARY STAFF FAREWELL & RETIREMENT"),
+        new TextDisplayBuilder().setContent(
+          [
+            "### 🎖️ | Terima Kasih Atas Dedikasi & Pengabdianmu!",
+            "Hari ini kita melepas salah satu anggota jajaran staff yang telah memberikan kontribusi besar untuk komunitas server. Semoga sukses di langkah berikutnya! 📜✨",
+            "",
+            "───────────────────────────",
+            "",
+            "📜 ✧ **STAFF RETIREMENT RECORD**",
+            `▸ 👤 **Staff Member:** <@${staffUser.id}> (\`@${staffUser.username}\`)`,
+            `▸ 🏷️ **Name:** \`${displayName}\``,
+            `▸ 🛡️ **Divisi Terakhir:** \`${divisionName}\``,
+            `▸ 🆔 **Account ID:** \`${staffUser.id}\``,
+            `▸ ⏳ **Masa Pengabdian (Tenure):** \`${tenureStr}\``,
+            `▸ 📝 **Alasan / Catatan Perpisahan:** ${reasonStr ? `*${reasonStr.trim()}*` : "*Mengundurkan diri secara terhormat*"}`,
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • Staff Honor & Appreciation Award • <t:${nowTs}:R>`)
+      );
+
+    const fallbackEmbed = new EmbedBuilder()
+      .setColor(0xe67e22)
+      .setTitle("🎗️ HONORARY STAFF FAREWELL & RETIREMENT")
+      .setThumbnail(thumbnailUrl)
+      .setDescription(
+        [
+          "🎖️ | **Terima Kasih Atas Dedikasi & Pengabdianmu!**",
+          "Hari ini kita melepas salah satu anggota jajaran staff yang telah memberikan kontribusi besar untuk komunitas server.",
+          "",
+          "───────────────────────────",
+          "",
+          `▸ 👤 **Staff Member:** <@${staffUser.id}> (\`@${staffUser.username}\`)`,
+          `▸ 🏷️ **Name:** \`${displayName}\``,
+          `▸ 🛡️ **Divisi Terakhir:** \`${divisionName}\``,
+          `▸ 🆔 **Account ID:** \`${staffUser.id}\``,
+          `▸ ⏳ **Masa Pengabdian (Tenure):** \`${tenureStr}\``,
+          `▸ 📝 **Alasan / Catatan Perpisahan:** ${reasonStr ? `*${reasonStr.trim()}*` : "*Mengundurkan diri secara terhormat*"}`,
+        ].join("\n")
+      )
+      .setFooter({ text: "Mystral • Staff Honor & Appreciation Award" })
+      .setTimestamp();
+
+    return { container, fallbackEmbed };
+  } catch (err) {
+    console.error("[STAFF FAREWELL BUILD FAIL]", err);
+    return null;
+  }
+}
+
+async function handleStaffLeaveCommand(message, args) {
+  try {
+    const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+    if (!isAdminUser) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin `Manage Guild` / `Manage Roles` untuk memproses pelepasan staff.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const staffUser = message.mentions.users.first() || (args[0] ? await message.client.users.fetch(args[0]).catch(() => null) : null);
+    if (!staffUser) {
+      return message.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0xe74c3c)
+          .setTitle("❌ Format Command Tidak Valid")
+          .setDescription("Mention member staff yang mengundurkan diri/pensiun.\n\n**Contoh:**\n`cstaff leave @Staff Pensiun karena fokus pendidikan`\n`cstaff resign @Staff`")
+        ],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const reasonStr = args.filter(a => !a.startsWith("<@") && !a.startsWith("<#") && !a.startsWith("<&")).join(" ").trim();
+
+    const payloadData = await buildStaffFarewellPayload(message.guild, staffUser, reasonStr);
+    if (!payloadData) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Gagal Membuat Kartu").setDescription("Terjadi kesalahan saat memuat kartu pelepasan staff.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const sentMsg = await message.channel.send({
+      components: [payloadData.container],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { users: [staffUser.id] },
+    }).catch(() => null);
+
+    if (!sentMsg) {
+      await message.channel.send({
+        embeds: [payloadData.fallbackEmbed],
+        allowedMentions: { users: [staffUser.id] },
+      }).catch(() => null);
+    }
+  } catch (err) {
+    console.error("[STAFF LEAVE CMD FAIL]", err);
+  }
+}
+
+// ===================== STAFF LEADERBOARD & STAFF OF THE MONTH =====================
+async function handleStaffLeaderboardCommand(message, args) {
+  try {
+    const schedules = await StaffTagSchedule.find({ guild_id: message.guild.id, status: "completed" }).lean().catch(() => []);
+
+    const userCounts = {};
+    for (const sched of schedules) {
+      const uId = sched.assigned_user_id;
+      if (uId) userCounts[uId] = (userCounts[uId] || 0) + 1;
+    }
+
+    const sortedUsers = Object.entries(userCounts).sort((a, b) => b[1] - a[1]);
+
+    const lines = [];
+    if (!sortedUsers.length) {
+      lines.push("*(Belum ada data tugas tag member yang diselesaikan oleh staff)*");
+    } else {
+      const topCount = Math.min(10, sortedUsers.length);
+      for (let i = 0; i < topCount; i++) {
+        const [uId, count] = sortedUsers[i];
+        let medal = `\`#${i + 1}\``;
+        if (i === 0) medal = "🥇 **[STAFF OF THE MONTH]**";
+        else if (i === 1) medal = "🥈";
+        else if (i === 2) medal = "🥉";
+
+        lines.push(`${medal} <@${uId}> — **${count} Tugas Duty Selesai**`);
+      }
+    }
+
+    const nowTs = Math.floor(Date.now() / 1000);
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("## 🏆 STAFF ACTIVITY LEADERBOARD"),
+        new TextDisplayBuilder().setContent(
+          [
+            "Papan peringkat keaktifan penyelesaian tugas tag member staff! 📋✨",
+            "",
+            "───────────────────────────",
+            "",
+            ...lines,
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • Staff Activity Leaderboard • <t:${nowTs}:R>`)
+      );
+
+    return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
+  } catch (err) {
+    console.error("[STAFF LEADERBOARD CMD FAIL]", err);
+  }
+}
+
+async function handleStaffOfTheMonthCommand(message, args) {
+  try {
+    const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+    if (!isAdminUser) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin admin untuk mengumumkan Staff of the Month.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const staffUser = message.mentions.users.first() || (args[0] ? await message.client.users.fetch(args[0]).catch(() => null) : null);
+    if (!staffUser) {
+      return message.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0xe74c3c)
+          .setTitle("❌ Mention Staff User")
+          .setDescription("Mention member staff yang terpilih sebagai Staff of the Month!\n\n**Contoh:**\n`cstaff sotm @Staff Dedikasi dan keaktifan luar biasa bulan ini!`\n`cstaff staffofthemonth @Staff`")
+        ],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const member = message.guild.members.cache.get(staffUser.id) || await message.guild.members.fetch(staffUser.id).catch(() => null);
+
+    let divisionName = "";
+    if (member) {
+      const staffRoles = member.roles.cache
+        .filter(r => r.id !== message.guild.id && !r.managed)
+        .sort((a, b) => b.position - a.position);
+      const firstRole = staffRoles.first();
+      if (firstRole) divisionName = firstRole.name;
+    }
+    if (!divisionName) divisionName = "Staff Personnel";
+
+    const customMsg = args.filter(a => !a.startsWith("<@") && !a.startsWith("<#") && !a.startsWith("<&")).join(" ").trim();
+    const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+    const currentMonthStr = `${monthNames[new Date().getMonth()]} ${new Date().getFullYear()}`;
+
+    const displayName = member ? member.displayName : staffUser.username;
+    const nowTs = Math.floor(Date.now() / 1000);
+    const thumbnailUrl = member?.user.displayAvatarURL({ dynamic: true, size: 512 }) || staffUser.displayAvatarURL({ dynamic: true, size: 512 });
+
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent("## 🥇 STAFF OF THE MONTH AWARD ✨"),
+        new TextDisplayBuilder().setContent(
+          [
+            "### 🏆 | Congratulations & Highest Recognition!",
+            "Apresiasi tertinggi bulan ini dianugerahkan kepada anggota staff dengan dedikasi, keaktifan, dan kepemimpinan terbaik! 🌟",
+            "",
+            "───────────────────────────",
+            "",
+            "👑 ✧ **HONORED STAFF PERSONNEL**",
+            `▸ 👤 **Award Recipient:** <@${staffUser.id}> (\`@${staffUser.username}\`)`,
+            `▸ 🏷️ **Name:** \`${displayName}\``,
+            `▸ 🛡️ **Division:** \`${divisionName}\``,
+            `▸ 📅 **Periode:** \`${currentMonthStr}\``,
+            `▸ 🌟 **Pencapaian & Catatan:** ${customMsg ? `*${customMsg}*` : "*Telah menunjukkan performa & dedikasi luar biasa dalam menjaga dan memajukan komunitas server!*"}`,
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • Staff of the Month Award • <t:${nowTs}:R>`)
+      );
+
+    const outerPingText = `🎉 Selamat kepada <@${staffUser.id}> yang terpilih sebagai **🥇 STAFF OF THE MONTH (${currentMonthStr})**! Terima kasih atas dedikasi dan kerja kerasmu! 👑✨`;
+
+    const sentMsg = await message.channel.send({
+      content: outerPingText,
+      components: [container],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { users: [staffUser.id] },
+    }).catch(() => null);
+
+    if (!sentMsg) {
+      const fallbackEmbed = new EmbedBuilder()
+        .setColor(0xf1c40f)
+        .setTitle("🥇 STAFF OF THE MONTH AWARD")
+        .setThumbnail(thumbnailUrl)
+        .setDescription(
+          [
+            "🏆 | **Congratulations & Highest Recognition!**",
+            `▸ 👤 **Award Recipient:** <@${staffUser.id}> (\`@${staffUser.username}\`)`,
+            `▸ 🏷️ **Name:** \`${displayName}\``,
+            `▸ 🛡️ **Division:** \`${divisionName}\``,
+            `▸ 📅 **Periode:** \`${currentMonthStr}\``,
+            `▸ 🌟 **Pencapaian & Catatan:** ${customMsg ? `*${customMsg}*` : "*Telah menunjukkan performa & dedikasi luar biasa dalam menjaga dan memajukan komunitas server!*"}`,
+          ].join("\n")
+        )
+        .setFooter({ text: "Mystral • Staff of the Month Award" })
+        .setTimestamp();
+
+      await message.channel.send({ content: outerPingText, embeds: [fallbackEmbed], allowedMentions: { users: [staffUser.id] } }).catch(() => null);
+    }
+  } catch (err) {
+    console.error("[STAFF SOTM CMD FAIL]", err);
   }
 }
 
@@ -13938,6 +14230,21 @@ client.on(Events.MessageCreate, async (message) => {
         return handleStaffWelcomeSetupCommand(message, args.slice(1));
       }
 
+      // ─── ACTION: leave / resign / farewell — Staff Retirement Card ───
+      if (sub === "leave" || sub === "resign" || sub === "farewell" || sub === "pensiun") {
+        return handleStaffLeaveCommand(message, args.slice(1));
+      }
+
+      // ─── ACTION: sotm / staffofthemonth — Staff of the Month Award ───
+      if (sub === "sotm" || sub === "staffofthemonth" || sub === "som") {
+        return handleStaffOfTheMonthCommand(message, args.slice(1));
+      }
+
+      // ─── ACTION: lb / leaderboard — Staff Activity Leaderboard ───
+      if (sub === "lb" || sub === "leaderboard" || sub === "top") {
+        return handleStaffLeaderboardCommand(message, args.slice(1));
+      }
+
       // ─── ACTION: duty / status — View Today's Schedule ───
       if (sub === "duty" || sub === "status" || sub === "jadwal" || sub === "cek") {
         const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
@@ -15552,6 +15859,18 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (cmd === "welcomesetup" || cmd === "cwelcomesetup" || cmd === "welcomeconfig" || cmd === "cwelcomeconfig") {
       return handleStaffWelcomeSetupCommand(message, args);
+    }
+
+    if (cmd === "staffleave" || cmd === "cstaffleave" || cmd === "staffresign" || cmd === "cstaffresign" || cmd === "staffpensiun") {
+      return handleStaffLeaveCommand(message, args);
+    }
+
+    if (cmd === "staffsotm" || cmd === "cstaffsotm" || cmd === "sotm" || cmd === "csotm" || cmd === "staffofthemonth") {
+      return handleStaffOfTheMonthCommand(message, args);
+    }
+
+    if (cmd === "stafflb" || cmd === "cstafflb" || cmd === "staffleaderboard" || cmd === "cstaffleaderboard") {
+      return handleStaffLeaderboardCommand(message, args);
     }
 
     // ===================== STAFF PROFILE COMMAND ROUTER (CSTAFFPROFILE) =====================
