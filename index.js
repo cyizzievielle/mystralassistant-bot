@@ -7356,6 +7356,8 @@ async function buildStaffWelcomeOnboardingPayload(guild, newStaffUsers, manualDi
 
       const joinedServerTs = member?.joinedTimestamp ? Math.floor(member.joinedTimestamp / 1000) : null;
       const joinedServerStr = joinedServerTs ? `<t:${joinedServerTs}:D> (<t:${joinedServerTs}:R>)` : "*Unknown*";
+      const joinedStaffTs = Math.floor(Date.now() / 1000);
+      const joinedStaffStr = `<t:${joinedStaffTs}:D> (<t:${joinedStaffTs}:R>)`;
       const displayName = member ? member.displayName : u.username;
 
       profileTextBlocks.push(
@@ -7364,7 +7366,8 @@ async function buildStaffWelcomeOnboardingPayload(guild, newStaffUsers, manualDi
         `• **Name:** \`${displayName}\``,
         `• **Division / Jabatan:** \`${divisionName}\``,
         `• **Account ID:** \`${u.id}\``,
-        `• **Joined Server:** ${joinedServerStr}`
+        `• **Joined Server:** ${joinedServerStr}`,
+        `• **Joined Staff:** ${joinedStaffStr}`
       );
 
       if (i < newStaffUsers.length - 1) {
