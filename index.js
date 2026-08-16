@@ -5813,6 +5813,8 @@ const ADMIN_HELP_CATEGORIES = {
       "`ctag exempt add/remove/list` — Kelola daftar pengecualian staff.",
       "`ctag random` — Acak ulang rotasi staff hari ini.",
       "`cstaffprofile [@user]` — Lihat kartu profil identitas & statistik aktivitas staff.",
+      "`cstaff welcome @user` — Sambut & umumkan staff baru (New Staff Onboarding).",
+      "`cstaff welcomesetup` — Setup channel & role mention welcome staff 1-baris.",
       "`cstaffpanel setup` — Deploy panel daftar staff & status online/offline real-time.",
       "`cstaffpanel addrole` / `exclude` — Kelola struktur divisi & pengecualian ID panel staff."
     ]
@@ -13857,8 +13859,8 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(buildMyRoleHelpPanel());
     }
 
-    // ===================== STAFF TAGGING SYSTEM (CTAG) =====================
-    if (cmd === "tag" || cmd === "ctag" || cmd === "ctagging" || cmd === "stafftag" || cmd === "ctaghelp" || cmd === "taghelp") {
+    // ===================== STAFF TAGGING SYSTEM (CTAG & CSTAFF) =====================
+    if (cmd === "staff" || cmd === "cstaff" || cmd === "tag" || cmd === "ctag" || cmd === "ctagging" || cmd === "stafftag" || cmd === "ctaghelp" || cmd === "taghelp") {
       const sub = (args[0] || "").toLowerCase();
 
       // ─── Helper: build beautiful Container V2 help panel ───
