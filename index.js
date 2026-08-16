@@ -7361,13 +7361,13 @@ async function buildStaffWelcomeOnboardingPayload(guild, newStaffUsers, manualDi
       const displayName = member ? member.displayName : u.username;
 
       profileTextBlocks.push(
-        `📌 | **PERSONNEL PROFILE #${i + 1}**`,
-        `• **User:** <@${u.id}> (\`@${u.username}\`)`,
-        `• **Name:** \`${displayName}\``,
-        `• **Division / Jabatan:** \`${divisionName}\``,
-        `• **Account ID:** \`${u.id}\``,
-        `• **Joined Server:** ${joinedServerStr}`,
-        `• **Joined Staff:** ${joinedStaffStr}`
+        `📜 ✧ **PERSONNEL PROFILE #${i + 1}**`,
+        `▸ 👤 **User:** <@${u.id}> (\`@${u.username}\`)`,
+        `▸ 🏷️ **Name:** \`${displayName}\``,
+        `▸ 🛡️ **Division:** \`${divisionName}\``,
+        `▸ 🆔 **Account ID:** \`${u.id}\``,
+        `▸ 🌐 **Joined Server:** ${joinedServerStr}`,
+        `▸ ⭐ **Joined Staff:** ${joinedStaffStr}`
       );
 
       if (i < newStaffUsers.length - 1) {
