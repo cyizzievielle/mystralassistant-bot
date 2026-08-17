@@ -5828,6 +5828,7 @@ const ADMIN_HELP_CATEGORIES = {
     description: "Pengumuman Server Boost & pengelolaan custom role booster.",
     commands: [
       "`cbooster setup` — Setup 1-baris (log channel, custom role channel, base role).",
+      "`cbooster send @user` — Kirim kartu pengumuman terima kasih booster secara manual.",
       "`cbooster toggle|setmsg|settitle|setlog|setrolechannel` — Kelola kartu pengumuman.",
       "`cbooster config` / `test` — Cek status & pratinjau kartu booster.",
       "`cmyrole claim <nama>` — Klaim/buat custom role booster.",
@@ -13238,8 +13239,36 @@ client.on(Events.MessageCreate, async (message) => {
         return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2 });
       }
 
+      // ─── ACTION: announce / send / thank / kirim — Manually trigger/send booster thank-you card ───
+      if (sub === "announce" || sub === "send" || sub === "thank" || sub === "kirim" || sub === "sambutboost") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) {
+          return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles untuk mengirim pengumuman booster.");
+        }
+        const targetMember = message.mentions.members.first() || (args[1] ? await message.guild.members.fetch(args[1]).catch(() => null) : null);
+        if (!targetMember) {
+          return message.reply("❌ Tag member booster yang ingin dikirimkan ucapan terima kasih!\n**Contoh:** `cbooster send @User` atau `cbooster thank @User`");
+        }
+
+        const logChId = await MetaText.findOne({ key: `booster_log_channel_${message.guild.id}` }).lean().catch(() => null);
+        const targetCh = (logChId?.value ? message.guild.channels.cache.get(logChId.value) : null) || message.channel;
+
+        const embed = await buildBoosterRewardEmbed(targetMember);
+        const sent = await targetCh.send({
+          content: `🎉 Terima kasih atas boost-nya, <@${targetMember.id}>!`,
+          embeds: [embed],
+          allowedMentions: { users: [targetMember.id] },
+        }).catch(() => null);
+
+        if (sent) {
+          return message.reply(`✅ Kartu ucapan terima kasih booster berhasil dikirim untuk <@${targetMember.id}> di channel <#${targetCh.id}>! 🎉`);
+        } else {
+          return message.reply("❌ Gagal mengirimkan kartu booster. Pastikan bot memiliki izin kirim pesan di channel tersebut.");
+        }
+      }
+
       // ─── ACTION: test / testboost — Preview Booster Rewards embed ───
-      if (sub === "test" || sub === "testboost" || sub === "cardtest" || sub === "preview" || cmd === "cbooster" && (!sub || sub === "test")) {
+      if (sub === "test" || sub === "testboost" || sub === "cardtest" || sub === "preview" || (cmd === "cbooster" && (!sub || sub === "test"))) {
         const targetMember = message.mentions.members.first() || message.member;
         const embed = await buildBoosterRewardEmbed(targetMember);
         return message.reply({
