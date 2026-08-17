@@ -14579,7 +14579,18 @@ client.on(Events.MessageCreate, async (message) => {
           });
         }
 
-        const targetSched = schedules.find((s) => s.assigned_user_id === message.author.id && s.status !== "completed");
+        let targetSched = null;
+
+        // Support specifying slot number: ctag done 1 or ctag done 2 (for admins or assigned staff)
+        const slotArg = parseInt(args[1], 10);
+        if ((slotArg === 1 || slotArg === 2) && isAdminUser) {
+          targetSched = schedules.find((s) => s.slot === slotArg && s.status !== "completed");
+        }
+
+        if (!targetSched) {
+          targetSched = schedules.find((s) => s.assigned_user_id === message.author.id && s.status !== "completed");
+        }
+
         if (!targetSched) {
           const activeSched = schedules.find((s) => s.status !== "completed");
           if (!activeSched) {
@@ -14589,7 +14600,7 @@ client.on(Events.MessageCreate, async (message) => {
             });
           }
           return message.reply({
-            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Akses Ditolak").setDescription(`Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai tugas ini selesai.`)],
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Akses Ditolak").setDescription(`Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai tugas ini selesai (atau Admin dapat menggunakan \`ctag done 1\` / \`ctag done 2\`).`)],
             allowedMentions: { parse: [] },
           });
         }
