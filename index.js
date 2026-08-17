@@ -19112,6 +19112,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       })();
 
+      // Kirim pesan Embed Baru di channel tiket yang mencatat hasil approval & staff yang menyetujui
+      (async () => {
+        try {
+          const verifNoticeContainer = new ContainerBuilder().setAccentColor(0x2ecc71);
+          verifNoticeContainer.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## ✅ Verifikasi Disetujui / Approved!"),
+            new TextDisplayBuilder().setContent(
+              [
+                `Role <@&${FEMALE_ROLE_ID}> telah berhasil ditambahkan! ✨`,
+                "",
+                `• **Target Member:** <@${targetUserId}>`,
+                `• **Role Diberikan:** <@&${FEMALE_ROLE_ID}>`,
+                `• **Disetujui Oleh Staff:** <@${interaction.user.id}>`,
+                `• **Waktu Disetujui:** <t:${Math.floor(Date.now() / 1000)}:F>`
+              ].join("\n")
+            )
+          );
+
+          await interaction.channel.send({
+            components: [verifNoticeContainer],
+            flags: MessageFlags.IsComponentsV2
+          });
+        } catch (e) {
+          console.error("[VERIF APPROVED IN-CHANNEL EMBED ERROR]", e);
+        }
+      })();
+
       // Update message yang berisi button secara langsung
       return interaction.update({
         components: [updatedContainer],
@@ -19123,7 +19150,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).catch(() => { });
         if (!interaction.replied && !interaction.deferred) {
           return interaction.reply({
-            content: `<:emoji_31:1459573171916116124> Verifikasi Berhasil! Role <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}>.`,
+            content: `<:emoji_31:1459573171916116124> Verifikasi Berhasil! Role <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}> oleh <@${interaction.user.id}>.`,
             flags: MessageFlags.Ephemeral
           }).catch(() => { });
         }
@@ -19171,7 +19198,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
 
         await interaction.message.edit({ components: [newRow] }).catch(() => { });
-        await interaction.channel.send(`🧠 Ticket di-claim oleh <@${interaction.user.id}>.`).catch(() => { });
+
+        // Send beautiful Container V2 claim notification card in channel
+        const claimNoticeContainer = new ContainerBuilder().setAccentColor(0x3498db);
+        claimNoticeContainer.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent("## ⚡ Tiket Berhasil Di-Claim"),
+          new TextDisplayBuilder().setContent(
+            [
+              `Tiket ini telah diambil alih oleh staff dan sedang ditangani. 🤝`,
+              "",
+              `• **Staff Pengambil Alih:** <@${interaction.user.id}>`,
+              `• **Status Tiket:** \`[ ⏳ SEDANG DITANGANI ]\``,
+              `• **Waktu Claim:** <t:${Math.floor(Date.now() / 1000)}:F>`
+            ].join("\n")
+          )
+        );
+
+        await interaction.channel.send({
+          components: [claimNoticeContainer],
+          flags: MessageFlags.IsComponentsV2
+        }).catch(() => { });
 
         // ===================== LOG TICKET: CLAIMED (ADD-ONLY) =====================
         (async () => {
