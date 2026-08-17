@@ -5808,6 +5808,8 @@ const ADMIN_HELP_CATEGORIES = {
       "`ctag duty` / `status` — Lihat tugas tag hari ini.",
       "`ctag roster` / `minggu` — Lihat rotasi mingguan (Senin - Minggu).",
       "`ctag done` / `busy` / `takeover` — Selesai, berhalangan, atau ambil alih tugas.",
+      "`ctag send [1/2]` — Kirim ulang pengumuman duty tag member (otomatis tentukan slot 1/2 sesuai jam).",
+      "`ctag reminder [1/2]` — Kirim pengumuman timeout reminder agar staff lain bantu takeover.",
       "`ctag assign <1/2> @user` — Set petugas Slot 1 / Slot 2 manual.",
       "`ctag config role|channel|timeout|time` — Atur role, channel, reminder, & jam slot.",
       "`ctag exempt add/remove/list` — Kelola daftar pengecualian staff.",
@@ -7324,6 +7326,174 @@ function startStaffTagLoop(client) {
       console.error("[STAFF TAG LOOP FAIL]", err);
     }
   }, 30 * 1000);
+}
+
+async function handleStaffTagSend(message, args) {
+  try {
+    const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+    if (!config || !config.tag_channel_id || !config.staff_role_id) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Configuration Missing").setDescription("Tag channel dan role staff belum dikonfigurasi.\nGunakan `ctag setup` atau `ctag config role @Role` / `ctag config channel #channel`.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const channel = message.guild.channels.cache.get(config.tag_channel_id);
+    if (!channel) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Channel Tidak Ditemukan").setDescription(`Channel notifikasi tag <#${config.tag_channel_id}> tidak ditemukan.`)],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const schedules = await getOrGenerateDailyStaffSchedule(message.guild);
+    if (!schedules || schedules.length < 2) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Schedule Error").setDescription("Gagal mengambil jadwal tag member hari ini.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    // Determine slot (default by current WIB time: before 14:00 WIB -> Slot 1, after 14:00 WIB -> Slot 2)
+    const hour = parseInt(getWibTimeHHMM().split(":")[0], 10);
+    let targetSlot = hour < 14 ? 1 : 2;
+
+    if (args[0]) {
+      const parsedSlot = parseInt(args[0], 10);
+      if (parsedSlot === 1 || parsedSlot === 2) targetSlot = parsedSlot;
+      else if (args[0].toLowerCase() === "slot1" || args[0].toLowerCase() === "pagi") targetSlot = 1;
+      else if (args[0].toLowerCase() === "slot2" || args[0].toLowerCase() === "malam") targetSlot = 2;
+    }
+
+    const sched = schedules.find((s) => s.slot === targetSlot) || schedules[0];
+    const slotName = getStaffSlotName(sched.slot, config);
+    const now = Date.now();
+
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`## 📣 Duty Tag Member — ${slotName}`),
+        new TextDisplayBuilder().setContent(
+          [
+            `Halo <@${sched.assigned_user_id}>, sekarang giliranmu untuk melakukan **Tag Member**! 📌`,
+            "",
+            "Selesaikan tugas atau tandai status giliranmu melalui tombol di bawah ini:",
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addActionRowComponents(buildStaffTagActionRow())
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • Staff Tagging System • <t:${Math.floor(now / 1000)}:R>`)
+      );
+
+    const sentMsg = await channel.send({
+      components: [container],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { users: [sched.assigned_user_id] },
+    }).catch(() => null);
+
+    if (sentMsg) {
+      await StaffTagSchedule.updateOne(
+        { _id: sched._id },
+        { $set: { notified_at: now, message_id: sentMsg.id } }
+      ).catch(() => null);
+
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Pengumuman Duty Tag Terkirim").setDescription(`Kartu duty tag **${slotName}** untuk <@${sched.assigned_user_id}> berhasil dikirim ulang di <#${channel.id}>!`)],
+        allowedMentions: { parse: [] },
+      });
+    } else {
+      return message.reply("❌ Gagal mengirimkan pengumuman duty tag ke channel.");
+    }
+  } catch (err) {
+    console.error("[STAFF TAG SEND FAIL]", err);
+  }
+}
+
+async function handleStaffTagReminder(message, args) {
+  try {
+    const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+    if (!config || !config.tag_channel_id || !config.staff_role_id) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Configuration Missing").setDescription("Tag channel dan role staff belum dikonfigurasi.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const channel = message.guild.channels.cache.get(config.tag_channel_id);
+    if (!channel) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Channel Tidak Ditemukan").setDescription(`Channel notifikasi tag <#${config.tag_channel_id}> tidak ditemukan.`)],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    const schedules = await getOrGenerateDailyStaffSchedule(message.guild);
+    if (!schedules || schedules.length < 2) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Schedule Error").setDescription("Gagal mengambil jadwal tag member hari ini.")],
+        allowedMentions: { repliedUser: false },
+      });
+    }
+
+    // Determine slot (default by current WIB time: before 14:00 WIB -> Slot 1, after 14:00 WIB -> Slot 2)
+    const hour = parseInt(getWibTimeHHMM().split(":")[0], 10);
+    let targetSlot = hour < 14 ? 1 : 2;
+
+    if (args[0]) {
+      const parsedSlot = parseInt(args[0], 10);
+      if (parsedSlot === 1 || parsedSlot === 2) targetSlot = parsedSlot;
+      else if (args[0].toLowerCase() === "slot1" || args[0].toLowerCase() === "pagi") targetSlot = 1;
+      else if (args[0].toLowerCase() === "slot2" || args[0].toLowerCase() === "malam") targetSlot = 2;
+    }
+
+    const sched = schedules.find((s) => s.slot === targetSlot) || schedules[0];
+    const slotName = getStaffSlotName(sched.slot, config);
+    const now = Date.now();
+    const staffRoleId = config.staff_role_id;
+    const staffMention = staffRoleId ? `<@&${staffRoleId}>` : "Halo Staff";
+
+    const container = new ContainerBuilder()
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`## ⚠️ Timeout Reminder — Tag Member ${slotName}`),
+        new TextDisplayBuilder().setContent(
+          [
+            `📢 ${staffMention}, petugas <@${sched.assigned_user_id}> belum menyelesaikan tugas tag member! ⏰`,
+            "",
+            "> ⚡ **Staff lain yang bersedia mohon menekan tombol Takeover di bawah untuk mengambil alih tugas!**",
+          ].join("\n")
+        )
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addActionRowComponents(buildStaffTagActionRow())
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`Mystral • Staff Tagging System • <t:${Math.floor(now / 1000)}:R>`)
+      );
+
+    const sentMsg = await channel.send({
+      components: [container],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: staffRoleId ? { roles: [staffRoleId] } : { parse: [] },
+    }).catch(() => null);
+
+    if (sentMsg) {
+      await StaffTagSchedule.updateOne(
+        { _id: sched._id },
+        { $set: { reminder_sent: true } }
+      ).catch(() => null);
+
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor(0xe67e22).setTitle("✅ Timeout Reminder Terkirim").setDescription(`Pesan Timeout Reminder **${slotName}** (<@${sched.assigned_user_id}>) berhasil dikirim di <#${channel.id}> untuk memanggil staff pengganti! ⚡`)],
+        allowedMentions: { parse: [] },
+      });
+    } else {
+      return message.reply("❌ Gagal mengirimkan pesan timeout reminder ke channel.");
+    }
+  } catch (err) {
+    console.error("[STAFF TAG REMINDER FAIL]", err);
+  }
 }
 
 // ===================== NEW STAFF ONBOARDING / WELCOME SYSTEM =====================
@@ -13240,15 +13410,15 @@ client.on(Events.MessageCreate, async (message) => {
       }
 
       // ─── ACTION: announce / send / thank / kirim — Manually trigger/send booster thank-you card ───
-      if (sub === "announce" || sub === "send" || sub === "thank" || sub === "kirim" || sub === "sambutboost") {
+      if (sub === "announce" || sub === "send" || sub === "thank" || sub === "kirim" || sub === "sambutboost" || cmd === "cboostersend" || cmd === "cboosterthank" || cmd === "cthankboost") {
         const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
         if (!isAdminUser) {
           return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles untuk mengirim pengumuman booster.");
         }
-        const targetMember = message.mentions.members.first() || (args[1] ? await message.guild.members.fetch(args[1]).catch(() => null) : null);
-        if (!targetMember) {
-          return message.reply("❌ Tag member booster yang ingin dikirimkan ucapan terima kasih!\n**Contoh:** `cbooster send @User` atau `cbooster thank @User`");
-        }
+        const targetMember = message.mentions.members.first() ||
+          (args[0] && !args[0].startsWith("<@") ? await message.guild.members.fetch(args[0]).catch(() => null) : null) ||
+          (args[1] ? await message.guild.members.fetch(args[1]).catch(() => null) : null) ||
+          message.member;
 
         const logChId = await MetaText.findOne({ key: `booster_log_channel_${message.guild.id}` }).lean().catch(() => null);
         const targetCh = (logChId?.value ? message.guild.channels.cache.get(logChId.value) : null) || message.channel;
@@ -14269,6 +14439,16 @@ client.on(Events.MessageCreate, async (message) => {
       // ─── ACTION: lb / leaderboard — Staff Activity Leaderboard ───
       if (sub === "lb" || sub === "leaderboard" || sub === "top") {
         return handleStaffLeaderboardCommand(message, args.slice(1));
+      }
+
+      // ─── ACTION: send / notify / resend / ping / trigger — Kirim ulang pengumuman duty tag ───
+      if (sub === "send" || sub === "notify" || sub === "resend" || sub === "ping" || sub === "trigger" || sub === "kirim") {
+        return handleStaffTagSend(message, args.slice(1));
+      }
+
+      // ─── ACTION: reminder / remind / timeout — Kirim ulang pengumuman timeout reminder ───
+      if (sub === "reminder" || sub === "remind" || sub === "timeout") {
+        return handleStaffTagReminder(message, args.slice(1));
       }
 
       // ─── ACTION: duty / status — View Today's Schedule ───
@@ -15895,8 +16075,39 @@ client.on(Events.MessageCreate, async (message) => {
       return handleStaffOfTheMonthCommand(message, args);
     }
 
-    if (cmd === "stafflb" || cmd === "cstafflb" || cmd === "staffleaderboard" || cmd === "cstaffleaderboard") {
-      return handleStaffLeaderboardCommand(message, args);
+    if (cmd === "tagsend" || cmd === "ctagsend" || cmd === "tagnotify" || cmd === "ctagnotify" || cmd === "tagping" || cmd === "ctagping") {
+      return handleStaffTagSend(message, args);
+    }
+
+    if (cmd === "tagreminder" || cmd === "ctagreminder" || cmd === "tagremind" || cmd === "ctagremind" || cmd === "tagtimeout" || cmd === "ctagtimeout") {
+      return handleStaffTagReminder(message, args);
+    }
+
+    if (cmd === "boostersend" || cmd === "cboostersend" || cmd === "boosterthank" || cmd === "cboosterthank" || cmd === "thankboost" || cmd === "cthankboost" || cmd === "boosterannounce" || cmd === "cboosterannounce") {
+      const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+      if (!isAdminUser) {
+        return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles untuk mengirim pengumuman booster.");
+      }
+
+      const targetMember = message.mentions.members.first() ||
+        (args[0] && !args[0].startsWith("<@") ? await message.guild.members.fetch(args[0]).catch(() => null) : null) ||
+        message.member;
+
+      const logChId = await MetaText.findOne({ key: `booster_log_channel_${message.guild.id}` }).lean().catch(() => null);
+      const targetCh = (logChId?.value ? message.guild.channels.cache.get(logChId.value) : null) || message.channel;
+
+      const embed = await buildBoosterRewardEmbed(targetMember);
+      const sent = await targetCh.send({
+        content: `🎉 Terima kasih atas boost-nya, <@${targetMember.id}>!`,
+        embeds: [embed],
+        allowedMentions: { users: [targetMember.id] },
+      }).catch(() => null);
+
+      if (sent) {
+        return message.reply(`✅ Kartu ucapan terima kasih booster berhasil dikirim untuk <@${targetMember.id}> di channel <#${targetCh.id}>! 🎉`);
+      } else {
+        return message.reply("❌ Gagal mengirimkan kartu booster. Pastikan bot memiliki izin kirim pesan di channel tersebut.");
+      }
     }
 
     // ===================== STAFF PROFILE COMMAND ROUTER (CSTAFFPROFILE) =====================
