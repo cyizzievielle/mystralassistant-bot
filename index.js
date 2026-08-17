@@ -2729,28 +2729,27 @@ async function seedSupportLeaderboard() {
     // Clean up old string-based entries to re-seed with correct Discord IDs
     await safeRun("DELETE FROM support_leaderboard WHERE user_id IN ('kemasharfy', 'ayapaw', '24114012423426', 'victoriesberry', 'lovely_feyy')");
 
-    const row = await safeGet("SELECT COUNT(*) AS count FROM support_leaderboard");
-    if (row && row.count <= 1) {
-      const now = Date.now();
-      const initialData = [
-        { user_id: "michelinea", type: "sponsor", username: "michelinea", amount: 800000 },
-        { user_id: "837146352013017088", type: "donatur", username: "kemasharfy", amount: 300000 },
-        { user_id: "1013039564409032817", type: "donatur", username: "ayapaw", amount: 150000 },
-        { user_id: "1441473211391934615", type: "donatur", username: "L", amount: 100000 },
-        { user_id: "1362417662738567180", type: "donatur", username: "victoriesberry", amount: 50000 },
-        { user_id: "1460057271944872193", type: "donatur", username: "lovely_feyy", amount: 35000 },
-        { user_id: "aethrayn", type: "donatur", username: "aethrayn", amount: 30000 }
-      ];
-      for (const item of initialData) {
-        await safeRun(
-          `INSERT INTO support_leaderboard (user_id, type, username, amount, updated_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(user_id, type) DO UPDATE SET amount = excluded.amount`,
-          [item.user_id, item.type, item.username, item.amount, now]
-        );
-      }
-      console.log("[DB] support_leaderboard seeded/updated successfully with Discord IDs.");
+    const now = Date.now();
+    const initialData = [
+      { user_id: "michelinea", type: "sponsor", username: "michelinea", amount: 800000 },
+      { user_id: "837146352013017088", type: "donatur", username: "kemasharfy", amount: 300000 },
+      { user_id: "1013039564409032817", type: "donatur", username: "ayapaw", amount: 150000 },
+      { user_id: "569981849380847618", type: "donatur", username: "569981849380847618", amount: 150000 },
+      { user_id: "1441473211391934615", type: "donatur", username: "L", amount: 100000 },
+      { user_id: "1362417662738567180", type: "donatur", username: "victoriesberry", amount: 50000 },
+      { user_id: "1460057271944872193", type: "donatur", username: "lovely_feyy", amount: 35000 },
+      { user_id: "aethrayn", type: "donatur", username: "aethrayn", amount: 30000 }
+    ];
+
+    for (const item of initialData) {
+      await safeRun(
+        `INSERT INTO support_leaderboard (user_id, type, username, amount, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, type) DO UPDATE SET amount = excluded.amount, updated_at = excluded.updated_at`,
+        [item.user_id, item.type, item.username, item.amount, now]
+      );
     }
+    console.log("[DB] support_leaderboard seeded/updated successfully with Discord IDs.");
   } catch (err) {
     console.error("[DB] Failed to seed support_leaderboard:", err);
   }
@@ -5804,22 +5803,24 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Staff Tagging & Duty System",
     description: "Sistem rotasi & giliran tag member 2x sehari serta direktori staff.",
     commands: [
-      "• `ctag duty` — Lihat jadwal & status tugas hari ini",
-      "• `ctag roster` — Lihat rotasi jadwal mingguan",
-      "• `ctag done` / `busy` / `takeover` — Selesai, berhalangan, atau ambil alih tugas",
-      "• `ctag send [1/2]` — Kirim ulang pengumuman duty tag",
-      "• `ctag reminder [1/2]` — Kirim pengumuman reminder timeout",
-      "• `ctag assign <1/2> @user [done]` — Atur petugas Slot 1/2 manual",
-      "• `ctag setup` — Status & wizard konfigurasi lengkap",
-      "• `ctag config role|channel|timeout|time` — Atur role, channel, reminder, & jam slot",
-      "• `ctag exempt add/remove/list` — Kelola daftar pengecualian staff",
-      "• `ctag random` — Acak ulang rotasi staff hari ini",
-      "• `cstaffprofile [@user]` — Profil & statistik keaktifan staff",
-      "• `cstaff welcome @user` — Sambut staff baru (New Onboarding)",
-      "• `cstaff leave @user` — Kartu pelepasan staff pensiun",
-      "• `cstaff sotm @user` — Anugerah Staff of the Month",
-      "• `cstaff lb` — Leaderboard keaktifan tugas staff",
-      "• `cstaffpanel setup` — Deploy panel status kehadiran staff real-time"
+      "`ctag setup` — Wizard & status setup 1-baris.",
+      "`ctag duty` / `status` — Lihat tugas tag hari ini.",
+      "`ctag roster` / `minggu` — Lihat rotasi mingguan (Senin - Minggu).",
+      "`ctag done` / `busy` / `takeover` — Selesai, berhalangan, atau ambil alih tugas.",
+      "`ctag send [1/2]` — Kirim ulang pengumuman duty tag member (otomatis tentukan slot 1/2 sesuai jam).",
+      "`ctag reminder [1/2]` — Kirim pengumuman timeout reminder agar staff lain bantu takeover.",
+      "`ctag assign <1/2> @user` — Set petugas Slot 1 / Slot 2 manual.",
+      "`ctag config role|channel|timeout|time` — Atur role, channel, reminder, & jam slot.",
+      "`ctag exempt add/remove/list` — Kelola daftar pengecualian staff.",
+      "`ctag random` — Acak ulang rotasi staff hari ini.",
+      "`cstaffprofile [@user]` — Lihat kartu profil identitas & statistik aktivitas staff.",
+      "`cstaff welcome @user` — Sambut & umumkan staff baru (New Staff Onboarding).",
+      "`cstaff welcomesetup` — Setup channel & role mention welcome staff 1-baris.",
+      "`cstaff leave @user [alasan]` — Kartu pelepasan & apresiasi staff pengunduran diri/pensiun.",
+      "`cstaff sotm @user` — Pengumuman anugerah Staff of the Month.",
+      "`cstaff lb` — Papan peringkat keaktifan tugas staff.",
+      "`cstaffpanel setup` — Deploy panel daftar staff & status online/offline real-time.",
+      "`cstaffpanel addrole` / `exclude` — Kelola struktur divisi & pengecualian ID panel staff."
     ]
   },
   admin_booster: {
@@ -5827,11 +5828,12 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Booster Rewards & Custom Roles",
     description: "Pengumuman Server Boost & pengelolaan custom role booster.",
     commands: [
-      "• `cbooster setup` — Setup wizard 1-baris channel & role booster",
-      "• `cbooster send @user` — Kirim kartu apresiasi booster manual",
-      "• `cbooster config` / `test` — Cek status & pratinjau kartu booster",
-      "• `cmyrole claim <nama>` — Klaim/buat custom role booster",
-      "• `cmyrole color|icon|rename` — Edit warna, icon, & detail role"
+      "`cbooster setup` — Setup 1-baris (log channel, custom role channel, base role).",
+      "`cbooster send @user` — Kirim kartu pengumuman terima kasih booster secara manual.",
+      "`cbooster toggle|setmsg|settitle|setlog|setrolechannel` — Kelola kartu pengumuman.",
+      "`cbooster config` / `test` — Cek status & pratinjau kartu booster.",
+      "`cmyrole claim <nama>` — Klaim/buat custom role booster.",
+      "`cmyrole color|icon|removebg|rename|info` — Edit warna, icon, bg, & detail role."
     ]
   },
   admin_roles: {
@@ -5839,12 +5841,13 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Role Management System",
     description: "Kelola role masal, warna gradien, dan icon role.",
     commands: [
-      "• `ccr <nama> [#hex1] [#hex2] [icon]` — Buat role baru secara cepat",
-      "• `crole color @role #hex1 [#hex2]` — Set warna role (dukung 2 warna gradien)",
-      "• `crole icon @role <url>` — Pasang atau hapus icon role",
-      "• `crole add @role <@user|all|human|bot>` — Tambah role masal",
-      "• `crole remove @role <@user|all|human|bot>` — Hapus role masal",
-      "• `crole info|members|rename|delete` — Info, anggota, rename, & hapus role"
+      "`ccr <nama> [#hex1] [#hex2] [icon]` — Buat role baru secara cepat.",
+      "`crole color @role #hex1 [#hex2]` — Set warna role (dukung 2 warna gradien).",
+      "`crole icon @role <url|lampiran>` / `removeicon` — Pasang/hapus icon role.",
+      "`crole add @role <@user|all|human|bot>` — Tambahkan role masal.",
+      "`crole remove @role <@user|all|human|bot>` — Hapus role masal.",
+      "`crole addall` / `removeall` — Perintah cepat role masal.",
+      "`crole info` / `members` / `rename` / `delete` — Informasi, daftar member, rename, & hapus role."
     ]
   },
   admin_moderation: {
@@ -5852,11 +5855,11 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Server Moderation Shield",
     description: "Moderasi member, warning, timeout, kick, ban, & security log.",
     commands: [
-      "• `cinvitelog` — Anti-invite link detector & whitelist log manager",
-      "• `cstafflog` — Audit log otomatis (role, kick, ban, timeout)",
-      "• `cwarn` / `cwarnings` / `cclearwarn` — Sistem warning member",
-      "• `ctimeout <user> <durasi>` — Timeout & cabut timeout",
-      "• `cpurge <jumlah>` / `cmute` / `ckick` / `cban` — Moderasi aksi cepat"
+      "`cinvitelog` — Anti-invite link detector & whitelist log manager.",
+      "`cstafflog` — Audit log otomatis (role, kick, ban, timeout) & staff notes.",
+      "`cwarn` / `cwarnings` / `cclearwarn` / `cunwarn` — Sistem warning member.",
+      "`ctimeout <user> <durasi>` / `cuntimeout` — Timeout & cabut timeout.",
+      "`cpurge <jumlah>` / `cmute` / `ckick` / `cban` / `cunban` — Purge, mute, kick, & ban."
     ]
   },
   admin_automation: {
@@ -5864,10 +5867,10 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Autoresponder & Sticky Messages",
     description: "Respon otomatis, pesan sticky, dan media embed.",
     commands: [
-      "• `cadd autoresponse <trigger> | <response>` — Tambah autoresponder",
-      "• `cedit/cdelete/clist/cenable` — Kelola autoresponse",
-      "• `c sticky set <content>` / `remove` — Atur/hapus pesan sticky channel",
-      "• `c media enable/disable/status` — Universal Media Embed setting"
+      "`cadd autoresponse <trigger> | <response>` — Tambah autoresponse.",
+      "`cedit/cdelete/clist/cenable/cdisable autoresponse` — Kelola autoresponse.",
+      "`c sticky set <content>` / `remove` — Atur/hapus pesan sticky channel.",
+      "`c media enable/disable/status` — Universal Media Embed setting."
     ]
   },
   admin_voice: {
@@ -5875,21 +5878,22 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Voice Channel Control",
     description: "Kontrol member di voice channel.",
     commands: [
-      "• `c move voice <user> <channel>` — Pindahkan member ke VC lain",
-      "• `c disconnect voice <user>` — Putuskan member dari VC",
-      "• `c mute voice <user>` / `deafen` — Server mute / deafen member"
+      "`c move voice <user> <channel>` — Pindahkan member ke VC lain.",
+      "`c disconnect voice <user>` — Putuskan member dari VC.",
+      "`c mute voice <user>` / `deafen` — Server mute / deafen member."
     ]
   },
   admin_panels: {
     emoji: "📋",
     label: "Panel Setup & Deploy",
-    description: "Pengiriman panel tiket, verifikasi, staff directory, & leaderboard.",
+    description: "Pengiriman panel tiket, verifikasi, staff directory, sorting, & menfess.",
     commands: [
-      "• `cstaffpanel setup` — Deploy panel status kehadiran staff real-time",
-      "• `c leaderboard send [#channel]` — Pasang panel Live Leaderboard",
-      "• `c leaderboard lobby add/remove` — Kelola lobby channel leaderboard",
-      "• `/ticketpanel` / `/setup-verif` / `/sortingpanel` — Deploy panel tiket, verif, & sorting",
-      "• `/menfesspanel` / `/selfrolespanel` / `/faq_panel` — Deploy panel menfess, selfroles, & FAQ"
+      "`cstaffpanel setup` — Deploy panel daftar staff & status kehadiran real-time.",
+      "`c leaderboard send [#channel]` — Pasang panel Live Leaderboard.",
+      "`c leaderboard lobby add/remove/list` — Kelola lobby channel leaderboard.",
+      "`c leaderboard blacklist add/remove/list` — Kelola blacklist user leaderboard.",
+      "`/ticketpanel` / `/setup-verif` / `/sortingpanel` — Deploy panel tiket, verif, & sorting.",
+      "`/menfesspanel` / `/selfrolespanel` / `/faq_panel` — Deploy panel menfess, selfroles, & FAQ."
     ]
   },
   admin_tools: {
@@ -5897,9 +5901,10 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Admin & Owner System Tools",
     description: "Backup database, export data, dan embed custom.",
     commands: [
-      "• `/backup_now` — Instant backup database MongoDB/SQLite",
-      "• `/idcard_export` — Export database ID Card ke JSON",
-      "• `/sendembed` / `/sendembedv2` — Buat & kirim embed custom"
+      "`/backup_now` — Backup instant database MongoDB/SQLite.",
+      "`/idcard_export` — Export database ID Card ke format JSON.",
+      "`/tod_add` — Tambah pertanyaan Truth or Dare.",
+      "`/sendembed` / `/sendembedv2` — Buat & kirim embed custom."
     ]
   }
 };
@@ -15327,8 +15332,132 @@ client.on(Events.MessageCreate, async (message) => {
         });
       }
 
-      // ─── Unknown subcommand → show help ───
-      return message.reply(buildStaffTagHelpPanel());
+    }
+
+
+    // ===================== DONATUR & SPONSOR SUPPORT COMMAND (CDONATUR / CSPONSOR / CSUPPORT) =====================
+    if (cmd === "donatur" || cmd === "cdonatur" || cmd === "sponsor" || cmd === "csponsor" || cmd === "support" || cmd === "csupport") {
+      const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+      const sub = (args[0] || "").toLowerCase();
+
+      if (sub === "add" || sub === "set" || sub === "tambah") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin Admin/Owner untuk mengedit data donatur.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const targetArg = args[1];
+        const amountArg = parseInt(args[2], 10) || parseInt(args[3], 10);
+
+        if (!targetArg || isNaN(amountArg)) {
+          return message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0xe74c3c)
+              .setTitle("❌ Format Perintah Salah")
+              .setDescription(
+                "Gunakan format:\n" +
+                "`cdonatur add <@user|userID|username> <amount>`\n\n" +
+                "**Contoh:**\n" +
+                "• `cdonatur add 569981849380847618 150000`\n" +
+                "• `cdonatur add @User 100000`"
+              )
+            ],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const targetUser = message.mentions.users.first() || (targetArg ? await message.client.users.fetch(targetArg).catch(() => null) : null);
+        const targetUserId = targetUser ? targetUser.id : targetArg.toLowerCase().replace(/[^a-z0-9_]/g, "");
+        const targetUsername = targetUser ? targetUser.username : targetArg.replace(/[<@!>]/g, "");
+        const type = (cmd.includes("sponsor") ? "sponsor" : "donatur");
+        const now = Date.now();
+
+        await safeRun(
+          `INSERT INTO support_leaderboard (user_id, type, username, amount, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id, type) DO UPDATE SET username = excluded.username, amount = excluded.amount, updated_at = excluded.updated_at`,
+          [targetUserId, type, targetUsername, amountArg, now]
+        );
+
+        return message.reply({
+          embeds: [new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle("✅ Data Donatur Berhasil Ditambahkan/Diperbarui")
+            .setDescription(
+              `• **User:** <@${targetUserId}> (\`${targetUsername}\`)\n` +
+              `• **Tipe:** \`${type}\`\n` +
+              `• **Jumlah:** \`Rp ${amountArg.toLocaleString("id-ID")}\``
+            )
+            .setFooter({ text: "Mystral • Support Leaderboard" })
+            .setTimestamp()
+          ],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      if (sub === "remove" || sub === "del" || sub === "hapus") {
+        if (!isAdminUser) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Permission Denied").setDescription("Kamu membutuhkan izin Admin/Owner untuk menghapus data donatur.")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const targetArg = args[1];
+        if (!targetArg) {
+          return message.reply({
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Mention / User ID Kosong").setDescription("Contoh: `cdonatur remove 569981849380847618`")],
+            allowedMentions: { repliedUser: false },
+          });
+        }
+
+        const cleanTarget = targetArg.replace(/[<@!>]/g, "");
+        await safeRun("DELETE FROM support_leaderboard WHERE user_id = ? OR username = ?", [cleanTarget, cleanTarget]);
+
+        return message.reply({
+          embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle("✅ Data Donatur Berhasil Dihapus").setDescription(`Data kontribusi donatur untuk \`${cleanTarget}\` telah dihapus.`)],
+          allowedMentions: { parse: [] },
+        });
+      }
+
+      // Default: List donators & sponsors
+      const list = await safeAll("SELECT * FROM support_leaderboard ORDER BY amount DESC, updated_at ASC");
+      const donaturs = list.filter(x => x.type === "donatur");
+      const sponsors = list.filter(x => x.type === "sponsor");
+
+      const formatRow = (r, idx) => `${idx + 1}. <@${r.user_id}> (\`${r.username}\`) — **Rp ${Number(r.amount || 0).toLocaleString("id-ID")}**`;
+      const donaturLines = donaturs.length ? donaturs.map(formatRow).join("\n") : "*(Belum ada donatur)*";
+      const sponsorLines = sponsors.length ? sponsors.map(formatRow).join("\n") : "*(Belum ada sponsor)*";
+
+      const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent("# 💎 Mystral Support & Donatur Leaderboard"),
+          new TextDisplayBuilder().setContent("Terima kasih kepada seluruh donatur dan sponsor yang telah mendukung perkembangan Mystral Bot! 💖")
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            [
+              "## ⭐ Donatur Server",
+              donaturLines,
+              "",
+              "## 👑 Sponsor Server",
+              sponsorLines,
+            ].join("\n")
+          )
+        )
+        .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent("Mystral Assistant • Terima kasih atas dukungan kalian! ✨")
+        );
+
+      return message.reply({
+        components: [container],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: { parse: [] },
+      });
     }
 
 
