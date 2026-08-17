@@ -4,6 +4,7 @@
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
+    "prestart": "npm install --omit=dev",
     "start": "node index.js",
     "deploy:commands": "node deploy-commands.js",
     "migrate": "node migrate-json-to-sqlite.js"
