@@ -9553,20 +9553,30 @@ function formatRankLine(rank, name, value, icon = "◆") {
 }
 
 async function isLeaderboardStaff(guild, userId) {
-  if (!guild || !/^\d{17,20}$/.test(String(userId))) return false;
+  try {
+    if (!guild || !/^\d{17,20}$/.test(String(userId))) return false;
 
-  const staffRoleIds = String(process.env.STAFF_ROLE_ID || process.env.TICKET_STAFF_ROLE_ID || "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
+    const staffRoleIds = String(process.env.STAFF_ROLE_ID || process.env.TICKET_STAFF_ROLE_ID || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
 
-  const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
-  if (!member) return false;
+    const staffTagConfig = await StaffTagConfig.findOne({ guild_id: guild.id }).lean().catch(() => null);
+    if (staffTagConfig?.staff_role_id) {
+      staffRoleIds.push(staffTagConfig.staff_role_id);
+    }
 
-  if (staffRoleIds.some((roleId) => member.roles.cache.has(roleId))) return true;
+    const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+    if (!member) return false;
 
-  return member.permissions.has(PermissionsBitField.Flags.Administrator) ||
-    member.permissions.has(PermissionsBitField.Flags.ManageGuild);
+    if (staffRoleIds.some((roleId) => member.roles?.cache?.has(roleId))) return true;
+
+    return hasPerm(member, PermissionsBitField.Flags.Administrator) ||
+      hasPerm(member, PermissionsBitField.Flags.ManageGuild) ||
+      hasPerm(member, PermissionsBitField.Flags.ManageRoles);
+  } catch (err) {
+    return false;
+  }
 }
 
 // ===================== LEADERBOARD BLACKLIST HELPERS =====================
