@@ -14366,6 +14366,7 @@ client.on(Events.MessageCreate, async (message) => {
     // ===================== STAFF TAGGING SYSTEM (CTAG & CSTAFF) =====================
     if (cmd === "staff" || cmd === "cstaff" || cmd === "tag" || cmd === "ctag" || cmd === "ctagging" || cmd === "stafftag" || cmd === "ctaghelp" || cmd === "taghelp") {
       const sub = (args[0] || "").toLowerCase();
+      const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
 
       // ─── Helper: build beautiful Container V2 help panel ───
       function buildStaffTagHelpPanel() {
@@ -14762,7 +14763,6 @@ client.on(Events.MessageCreate, async (message) => {
 
 
       // ─── ADMIN ACTIONS ───
-      const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageGuild) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
 
       // ─── ACTION: assign / setduty / manual — Assign staff manually to slot 1 or 2 ───
       if (sub === "assign" || sub === "setduty" || sub === "setjadwal" || sub === "manual") {
