@@ -19134,14 +19134,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           verifNoticeContainer.addTextDisplayComponents(
             new TextDisplayBuilder().setContent("## 🌸 Verifikasi Disetujui • Role Granted! ✨"),
             new TextDisplayBuilder().setContent(
-              [
-                `Selamat! Role verifikasi <@&${FEMALE_ROLE_ID}> telah resmi diberikan 🎀`,
-                "",
-                `> 🩰 **Member:** <@${targetUserId}>`,
-                `> 🎀 **Role Diberikan:** <@&${FEMALE_ROLE_ID}>`,
-                `> 🤍 **Disetujui Oleh Staff:** <@${interaction.user.id}>`,
-                `> ⏱️ **Waktu Disetujui:** <t:${Math.floor(Date.now() / 1000)}:R>`
-              ].join("\n")
+              `Role verifikasi <@&${FEMALE_ROLE_ID}> telah berhasil ditambahkan ke <@${targetUserId}> oleh staff <@${interaction.user.id}> 🎀 (<t:${Math.floor(Date.now() / 1000)}:R>)`
             )
           );
 
@@ -19227,32 +19220,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const newRow = new ActionRowBuilder().addComponents(newRowComponents);
         await interaction.message.edit({ components: [newRow] }).catch(() => { });
 
-        // Send cute & cool Container V2 claim notification card in channel
+        // Send cute & cool Container V2 claim notification card in channel (1 paragraph)
         const claimNoticeContainer = new ContainerBuilder().setAccentColor(isVerifTicket ? 0xFFB6C1 : 0x3498db);
         if (isVerifTicket) {
           claimNoticeContainer.addTextDisplayComponents(
             new TextDisplayBuilder().setContent("## 🌸 Tiket Di-Claim • Under Hand ✨"),
             new TextDisplayBuilder().setContent(
-              [
-                `Tiket verifikasi ini telah diambil alih oleh staff 🌷`,
-                "",
-                `> 🩰 **Staff Petugas:** <@${interaction.user.id}>`,
-                `> 🎀 **Status Tiket:** \`[ ⏳ Sedang Ditangani ]\``,
-                `> ⏱️ **Waktu Claim:** <t:${Math.floor(Date.now() / 1000)}:R>`
-              ].join("\n")
+              `Tiket verifikasi ini telah di-claim dan sedang ditangani oleh staff <@${interaction.user.id}> 🌷 \`[ ⏳ Sedang Ditangani ]\` (<t:${Math.floor(Date.now() / 1000)}:R>)`
             )
           );
         } else {
           claimNoticeContainer.addTextDisplayComponents(
             new TextDisplayBuilder().setContent("## ⚡ Tiket Berhasil Di-Claim"),
             new TextDisplayBuilder().setContent(
-              [
-                `Tiket ini telah diambil alih oleh staff dan sedang ditangani. 🤝`,
-                "",
-                `> 🛡️ **Staff Pengambil Alih:** <@${interaction.user.id}>`,
-                `> ⏳ **Status Tiket:** \`[ ⏳ SEDANG DITANGANI ]\``,
-                `> ⏱️ **Waktu Claim:** <t:${Math.floor(Date.now() / 1000)}:R>`
-              ].join("\n")
+              `Tiket ini telah di-claim dan sedang ditangani oleh staff <@${interaction.user.id}> 🤝 \`[ ⏳ SEDANG DITANGANI ]\` (<t:${Math.floor(Date.now() / 1000)}:R>)`
             )
           );
         }
