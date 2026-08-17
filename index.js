@@ -19112,20 +19112,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       })();
 
-      // Kirim pesan Embed Baru di channel tiket yang mencatat hasil approval & staff yang menyetujui
+      // Kirim pesan Embed Baru di channel tiket yang mencatat hasil approval & staff yang menyetujui (Style: Cute & Cool 🌸)
       (async () => {
         try {
-          const verifNoticeContainer = new ContainerBuilder().setAccentColor(0x2ecc71);
+          const verifNoticeContainer = new ContainerBuilder().setAccentColor(0xFFC0CB);
           verifNoticeContainer.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent("## ✅ Verifikasi Disetujui / Approved!"),
+            new TextDisplayBuilder().setContent("## 🌸 Verifikasi Disetujui • Role Granted! ✨"),
             new TextDisplayBuilder().setContent(
               [
-                `Role <@&${FEMALE_ROLE_ID}> telah berhasil ditambahkan! ✨`,
+                `Selamat! Role verifikasi <@&${FEMALE_ROLE_ID}> telah resmi diberikan 🎀`,
                 "",
-                `• **Target Member:** <@${targetUserId}>`,
-                `• **Role Diberikan:** <@&${FEMALE_ROLE_ID}>`,
-                `• **Disetujui Oleh Staff:** <@${interaction.user.id}>`,
-                `• **Waktu Disetujui:** <t:${Math.floor(Date.now() / 1000)}:F>`
+                `> 🩰 **Member:** <@${targetUserId}>`,
+                `> 🎀 **Role Diberikan:** <@&${FEMALE_ROLE_ID}>`,
+                `> 🤍 **Disetujui Oleh Staff:** <@${interaction.user.id}>`,
+                `> ⏱️ **Waktu Disetujui:** <t:${Math.floor(Date.now() / 1000)}:R>`
               ].join("\n")
             )
           );
@@ -19199,20 +19199,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.message.edit({ components: [newRow] }).catch(() => { });
 
-        // Send beautiful Container V2 claim notification card in channel
-        const claimNoticeContainer = new ContainerBuilder().setAccentColor(0x3498db);
-        claimNoticeContainer.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent("## ⚡ Tiket Berhasil Di-Claim"),
-          new TextDisplayBuilder().setContent(
-            [
-              `Tiket ini telah diambil alih oleh staff dan sedang ditangani. 🤝`,
-              "",
-              `• **Staff Pengambil Alih:** <@${interaction.user.id}>`,
-              `• **Status Tiket:** \`[ ⏳ SEDANG DITANGANI ]\``,
-              `• **Waktu Claim:** <t:${Math.floor(Date.now() / 1000)}:F>`
-            ].join("\n")
-          )
-        );
+        // Send cute & cool Container V2 claim notification card in channel
+        const isVerifTicket = topic.includes("[TICKET:verification]") || topic.includes("verif") || interaction.channel.name.includes("verif");
+        const claimNoticeContainer = new ContainerBuilder().setAccentColor(isVerifTicket ? 0xFFB6C1 : 0x3498db);
+        if (isVerifTicket) {
+          claimNoticeContainer.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## 🌸 Tiket Di-Claim • Under Hand ✨"),
+            new TextDisplayBuilder().setContent(
+              [
+                `Tiket verifikasi ini telah diambil alih oleh staff 🌷`,
+                "",
+                `> 🩰 **Staff Petugas:** <@${interaction.user.id}>`,
+                `> 🎀 **Status Tiket:** \`[ ⏳ Sedang Ditangani ]\``,
+                `> ⏱️ **Waktu Claim:** <t:${Math.floor(Date.now() / 1000)}:R>`
+              ].join("\n")
+            )
+          );
+        } else {
+          claimNoticeContainer.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("## ⚡ Tiket Berhasil Di-Claim"),
+            new TextDisplayBuilder().setContent(
+              [
+                `Tiket ini telah diambil alih oleh staff dan sedang ditangani. 🤝`,
+                "",
+                `> 🛡️ **Staff Pengambil Alih:** <@${interaction.user.id}>`,
+                `> ⏳ **Status Tiket:** \`[ ⏳ SEDANG DITANGANI ]\``,
+                `> ⏱️ **Waktu Claim:** <t:${Math.floor(Date.now() / 1000)}:R>`
+              ].join("\n")
+            )
+          );
+        }
 
         await interaction.channel.send({
           components: [claimNoticeContainer],
