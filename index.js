@@ -14773,18 +14773,38 @@ client.on(Events.MessageCreate, async (message) => {
           });
         }
 
-        const slotNum = parseInt(args[1]);
+        const slotNum = parseInt(args[1], 10);
         const targetUser = message.mentions.users.first() || (args[2] ? await message.client.users.fetch(args[2]).catch(() => null) : null);
 
         if (isNaN(slotNum) || (slotNum !== 1 && slotNum !== 2) || !targetUser) {
           return message.reply({
             embeds: [new EmbedBuilder()
               .setColor(0xe74c3c)
-              .setTitle("❌ Format Command Tidak Valid")
-              .setDescription("Sebutkan nomor slot (1 atau 2) dan mention user staff.\n\n**Contoh:**\n`ctag assign 1 @StaffA` (Set Slot 1)\n`ctag assign 2 @StaffB` (Set Slot 2)")
+              .setTitle("❌ Format Perintah Manual")
+              .setDescription(
+                "Sebutkan nomor slot (1 atau 2), mention user staff, dan opsional status.\n\n" +
+                "**Contoh Penggunaan:**\n" +
+                "• `ctag assign 1 @StaffA` *(Set Slot 1 — Pending)*\n" +
+                "• `ctag assign 1 @StaffA done` *(Set Slot 1 — Langsung Selesai)*\n" +
+                "• `ctag assign 2 @StaffB` *(Set Slot 2 — Pending)*"
+              )
             ],
             allowedMentions: { repliedUser: false },
           });
+        }
+
+        const customStatusRaw = (args[3] || args[2] || "").toLowerCase();
+        let targetStatus = "pending";
+        let completedAt = null;
+        let notifiedAt = null;
+
+        if (customStatusRaw === "done" || customStatusRaw === "selesai" || customStatusRaw === "completed" || customStatusRaw === "acc") {
+          targetStatus = "completed";
+          completedAt = Date.now();
+          notifiedAt = Date.now();
+        } else if (customStatusRaw === "busy" || customStatusRaw === "sibuk" || customStatusRaw === "berhalangan") {
+          targetStatus = "busy";
+          notifiedAt = Date.now();
         }
 
         const dateKey = getStaffTagDateKey();
@@ -14795,22 +14815,31 @@ client.on(Events.MessageCreate, async (message) => {
             $set: {
               assigned_user_id: targetUser.id,
               original_user_id: targetUser.id,
-              status: "pending",
-              notified_at: null,
-              completed_at: null,
+              status: targetStatus,
+              notified_at: notifiedAt,
+              completed_at: completedAt,
               reminder_sent: false,
             },
           },
           { upsert: true, returnDocument: 'after' }
         ).catch(() => null);
 
-        const slotName = slotNum === 1 ? "Slot 1 (Pagi/Siang)" : "Slot 2 (Sore/Malam)";
+        const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
+        const slotName = getStaffSlotName(slotNum, config);
+        const statusLabel = targetStatus === "completed" ? "✅ Selesai (Completed)" : (targetStatus === "busy" ? "⚠️ Sibuk (Busy)" : "⌛ Pending");
 
         return message.reply({
           embeds: [new EmbedBuilder()
-            .setColor(0x2ecc71)
-            .setTitle("✅ Jadwal Manual Berhasil Di-Set")
-            .setDescription(`Staff <@${targetUser.id}> telah ditugaskan secara manual untuk **${slotName}** hari ini.`)
+            .setColor(targetStatus === "completed" ? 0x2ecc71 : (targetStatus === "busy" ? 0xe67e22 : 0x3498db))
+            .setTitle("📌 Penugasan Manual Staff Berhasil")
+            .setDescription(
+              `Petugas untuk **${slotName}** berhasil diatur.\n\n` +
+              `• **Staff:** <@${targetUser.id}>\n` +
+              `• **Status:** ${statusLabel}\n` +
+              `• **Tanggal:** \`${dateKey}\``
+            )
+            .setFooter({ text: "Mystral • Staff Tagging System" })
+            .setTimestamp()
           ],
           allowedMentions: { parse: [] },
         });
