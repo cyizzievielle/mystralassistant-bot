@@ -17371,13 +17371,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (btnType === "done") {
-        // Cari schedule yang ditugaskan ke user ini (bisa via takeover)
-        let targetSched = schedules.find((s) => s.assigned_user_id === interaction.user.id && s.status !== "completed");
+        // Query langsung ke DB (fresh) untuk menghindari stale cache setelah takeover
+        const dateKey = getStaffTagDateKey();
+        const freshSched = await StaffTagSchedule.findOne({
+          guild_id: guild.id,
+          date_key: dateKey,
+          assigned_user_id: interaction.user.id,
+          status: { $ne: "completed" },
+        }).lean().catch(() => null);
 
-        // Fallback: jika staff ini adalah admin/staff role dan ada slot yang pending, izinkan selesaikan
-        if (!targetSched && (isStaff || isAdmin)) {
-          targetSched = schedules.find((s) => s.status === "pending");
-        }
+        const targetSched = freshSched;
 
         if (!targetSched) {
           const activeSched = schedules.find((s) => s.status !== "completed");
@@ -17394,7 +17397,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const isTakeover = targetSched.assigned_user_id !== targetSched.original_user_id;
         await StaffTagSchedule.updateOne(
           { _id: targetSched._id },
-          { $set: { status: "completed", completed_at: now, assigned_user_id: interaction.user.id } }
+          { $set: { status: "completed", completed_at: now } }
         ).catch(() => null);
 
         const slotName = getStaffSlotName(targetSched.slot, config);
