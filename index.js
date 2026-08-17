@@ -18962,13 +18962,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const actionRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
+            .setCustomId("ticket:claim")
+            .setLabel("Claim Ticket")
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji("🧠"),
+          new ButtonBuilder()
             .setCustomId(`btn_approve_verif:${interaction.user.id}`)
-            .setLabel("✅ Approve")
-            .setStyle(ButtonStyle.Success),
+            .setLabel("Approved")
+            .setStyle(ButtonStyle.Success)
+            .setEmoji("✅"),
           new ButtonBuilder()
             .setCustomId("btn_close_ticket")
-            .setLabel("🔒 Close Ticket")
+            .setLabel("Close Ticket")
             .setStyle(ButtonStyle.Danger)
+            .setEmoji("🔒")
         );
 
         ticketContainer.addActionRowComponents(actionRow);
@@ -19077,14 +19084,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const disabledRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
+          .setCustomId("ticket:claim")
+          .setLabel("Claimed")
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji("🧠")
+          .setDisabled(true),
+        new ButtonBuilder()
           .setCustomId("btn_approve_verif_done")
-          .setLabel("✅ Approved")
+          .setLabel("Approved")
           .setStyle(ButtonStyle.Success)
+          .setEmoji("✅")
           .setDisabled(true),
         new ButtonBuilder()
           .setCustomId("btn_close_ticket")
-          .setLabel("🔒 Close Ticket")
+          .setLabel("Close Ticket")
           .setStyle(ButtonStyle.Danger)
+          .setEmoji("🔒")
       );
 
       updatedContainer.addActionRowComponents(disabledRow);
@@ -19192,15 +19207,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.channel.setTopic(setClaimedTopic(topic, interaction.user.id)).catch(() => { });
 
-        const newRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("ticket:claim").setLabel("Claimed").setStyle(ButtonStyle.Secondary).setEmoji("🧠").setDisabled(true),
-          new ButtonBuilder().setCustomId("ticket:close").setLabel("Close").setStyle(ButtonStyle.Secondary).setEmoji("🔒")
+        const isVerifTicket = topic.includes("[TICKET:verification]") || topic.includes("verif") || interaction.channel.name.includes("verif");
+        const ownerId2 = getTicketOwnerIdFromTopic(topic);
+
+        const newRowComponents = [
+          new ButtonBuilder().setCustomId("ticket:claim").setLabel("Claimed").setStyle(ButtonStyle.Secondary).setEmoji("🧠").setDisabled(true)
+        ];
+
+        if (isVerifTicket && ownerId2) {
+          newRowComponents.push(
+            new ButtonBuilder().setCustomId(`btn_approve_verif:${ownerId2}`).setLabel("Approved").setStyle(ButtonStyle.Success).setEmoji("✅")
+          );
+        }
+
+        newRowComponents.push(
+          new ButtonBuilder().setCustomId("btn_close_ticket").setLabel("Close Ticket").setStyle(ButtonStyle.Danger).setEmoji("🔒")
         );
 
+        const newRow = new ActionRowBuilder().addComponents(newRowComponents);
         await interaction.message.edit({ components: [newRow] }).catch(() => { });
 
         // Send cute & cool Container V2 claim notification card in channel
-        const isVerifTicket = topic.includes("[TICKET:verification]") || topic.includes("verif") || interaction.channel.name.includes("verif");
         const claimNoticeContainer = new ContainerBuilder().setAccentColor(isVerifTicket ? 0xFFB6C1 : 0x3498db);
         if (isVerifTicket) {
           claimNoticeContainer.addTextDisplayComponents(
