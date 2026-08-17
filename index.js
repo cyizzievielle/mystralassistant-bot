@@ -7325,7 +7325,7 @@ function startStaffTagLoop(client) {
     } catch (err) {
       console.error("[STAFF TAG LOOP FAIL]", err);
     }
-  }, 30 * 1000);
+  }, 60 * 1000);
 }
 
 async function handleStaffTagSend(message, args) {
@@ -10163,10 +10163,13 @@ client.once(Events.ClientReady, async (c) => {
     c.guilds.cache.forEach((g) => updateStatsChannels(g));
   }, (Number(process.env.STATS_UPDATE_MIN) || 5) * 60 * 1000);
 
-  // live leaderboard auto-update loop (setiap 1 menit)
-  setInterval(() => {
+  // live leaderboard auto-update loop (setiap 3 menit, diberi delay 45 detik agar tidak tabrakan dengan interval lain)
+  setTimeout(() => {
     updateLiveLeaderboards(c);
-  }, 1 * 60 * 1000);
+    setInterval(() => {
+      updateLiveLeaderboards(c);
+    }, 3 * 60 * 1000);
+  }, 45_000);
 });
 
 // ===================== REMINDER LOOP =====================
@@ -17368,7 +17371,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (btnType === "done") {
-        const targetSched = schedules.find((s) => s.assigned_user_id === interaction.user.id && s.status !== "completed");
+        // Cari schedule yang ditugaskan ke user ini (bisa via takeover)
+        let targetSched = schedules.find((s) => s.assigned_user_id === interaction.user.id && s.status !== "completed");
+
+        // Fallback: jika staff ini adalah admin/staff role dan ada slot yang pending, izinkan selesaikan
+        if (!targetSched && (isStaff || isAdmin)) {
+          targetSched = schedules.find((s) => s.status === "pending");
+        }
+
         if (!targetSched) {
           const activeSched = schedules.find((s) => s.status !== "completed");
           if (!activeSched) {
@@ -17384,7 +17394,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const isTakeover = targetSched.assigned_user_id !== targetSched.original_user_id;
         await StaffTagSchedule.updateOne(
           { _id: targetSched._id },
-          { $set: { status: "completed", completed_at: now } }
+          { $set: { status: "completed", completed_at: now, assigned_user_id: interaction.user.id } }
         ).catch(() => null);
 
         const slotName = getStaffSlotName(targetSched.slot, config);
