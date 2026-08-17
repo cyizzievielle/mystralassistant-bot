@@ -5787,7 +5787,7 @@ const HELP_CATEGORIES = {
     label: "Booster Custom Roles",
     description: "Fitur custom role eksklusif untuk Server Booster.",
     commands: [
-      "`cmyrole claim <nama_role>` - Klaim/buat custom role khusus Server Booster.",
+      "`cmyrole claim namarole` - Klaim/buat custom role khusus Server Booster.",
       "`cmyrole color #HEX` - Ganti warna custom role-mu.",
       "`cmyrole icon <url|gambar>` - Set gambar icon custom role (Server Boost Lv 2).",
       "`cmyrole removeicon` - Hapus gambar icon dari custom role.",
@@ -5802,26 +5802,24 @@ const ADMIN_HELP_CATEGORIES = {
   admin_staff_tagging: {
     emoji: "📌",
     label: "Staff Tagging & Duty System",
-    description: "Rotasi & giliran tag member 2x sehari, profil staff, & directory panel.",
+    description: "Sistem rotasi & giliran tag member 2x sehari serta direktori staff.",
     commands: [
-      "`ctag setup` — Wizard & status setup 1-baris.",
-      "`ctag duty` / `status` — Lihat tugas tag hari ini.",
-      "`ctag roster` / `minggu` — Lihat rotasi mingguan (Senin - Minggu).",
-      "`ctag done` / `busy` / `takeover` — Selesai, berhalangan, atau ambil alih tugas.",
-      "`ctag send [1/2]` — Kirim ulang pengumuman duty tag member (otomatis tentukan slot 1/2 sesuai jam).",
-      "`ctag reminder [1/2]` — Kirim pengumuman timeout reminder agar staff lain bantu takeover.",
-      "`ctag assign <1/2> @user` — Set petugas Slot 1 / Slot 2 manual.",
-      "`ctag config role|channel|timeout|time` — Atur role, channel, reminder, & jam slot.",
-      "`ctag exempt add/remove/list` — Kelola daftar pengecualian staff.",
-      "`ctag random` — Acak ulang rotasi staff hari ini.",
-      "`cstaffprofile [@user]` — Lihat kartu profil identitas & statistik aktivitas staff.",
-      "`cstaff welcome @user` — Sambut & umumkan staff baru (New Staff Onboarding).",
-      "`cstaff welcomesetup` — Setup channel & role mention welcome staff 1-baris.",
-      "`cstaff leave @user [alasan]` — Kartu pelepasan & apresiasi staff pengunduran diri/pensiun.",
-      "`cstaff sotm @user` — Pengumuman anugerah Staff of the Month.",
-      "`cstaff lb` — Papan peringkat keaktifan tugas staff.",
-      "`cstaffpanel setup` — Deploy panel daftar staff & status online/offline real-time.",
-      "`cstaffpanel addrole` / `exclude` — Kelola struktur divisi & pengecualian ID panel staff."
+      "• `ctag duty` — Lihat jadwal & status tugas hari ini",
+      "• `ctag roster` — Lihat rotasi jadwal mingguan",
+      "• `ctag done` / `busy` / `takeover` — Selesai, berhalangan, atau ambil alih tugas",
+      "• `ctag send [1/2]` — Kirim ulang pengumuman duty tag",
+      "• `ctag reminder [1/2]` — Kirim pengumuman reminder timeout",
+      "• `ctag assign <1/2> @user [done]` — Atur petugas Slot 1/2 manual",
+      "• `ctag setup` — Status & wizard konfigurasi lengkap",
+      "• `ctag config role|channel|timeout|time` — Atur role, channel, reminder, & jam slot",
+      "• `ctag exempt add/remove/list` — Kelola daftar pengecualian staff",
+      "• `ctag random` — Acak ulang rotasi staff hari ini",
+      "• `cstaffprofile [@user]` — Profil & statistik keaktifan staff",
+      "• `cstaff welcome @user` — Sambut staff baru (New Onboarding)",
+      "• `cstaff leave @user` — Kartu pelepasan staff pensiun",
+      "• `cstaff sotm @user` — Anugerah Staff of the Month",
+      "• `cstaff lb` — Leaderboard keaktifan tugas staff",
+      "• `cstaffpanel setup` — Deploy panel status kehadiran staff real-time"
     ]
   },
   admin_booster: {
@@ -14388,11 +14386,11 @@ client.on(Events.MessageCreate, async (message) => {
             new TextDisplayBuilder().setContent(
               [
                 "## 📋 Perintah Staff",
-                "`ctag duty` / `ctag status` — lihat jadwal & status tugas hari ini",
-                "`ctag roster` / `ctag minggu` — lihat jadwal rotasi mingguan (Senin - Minggu)",
-                "`ctag done` — tandai tugas tag member selesai",
-                "`ctag busy` — tandai berhalangan (buka giliran untuk takeover)",
-                "`ctag takeover` — ambil alih tugas tag member yang belum selesai",
+                "• `ctag duty` — Lihat jadwal & status tugas hari ini",
+                "• `ctag roster` — Lihat rotasi jadwal mingguan",
+                "• `ctag done` — Tandai tugas tag member selesai",
+                "• `ctag busy` — Tandai berhalangan (buka giliran takeover)",
+                "• `ctag takeover` — Ambil alih tugas yang belum selesai",
               ].join("\n")
             )
           )
@@ -14401,22 +14399,22 @@ client.on(Events.MessageCreate, async (message) => {
             new TextDisplayBuilder().setContent(
               [
                 "## ⚙️ Perintah Admin",
-                "`ctag setup` — wizard & status konfigurasi lengkap 1-baris",
-                "`ctag test` / `ctag test 2` — uji pengumuman tag Slot 1 / Slot 2 di channel",
-                "`ctag test timeout` — uji pengumuman reminder timeout di channel",
-                "`ctag assign <1/2> @user` — atur petugas Slot 1 atau Slot 2 secara manual",
-                "`ctag config role @RoleStaff` — set role staff",
-                "`ctag config channel #channel` — set channel notifikasi tag",
-                "`ctag config timeout <menit>` — set batas reminder (default 60)",
-                "`ctag config time <HH:MM> <HH:MM>` — set jam Slot 1 & Slot 2",
-                "`ctag exempt add/remove/list` — kelola pengecualian staff",
-                "`ctag random` / `randomall` — acak ulang rotasi seluruh staff",
+                "• `ctag setup` — Status & wizard konfigurasi lengkap",
+                "• `ctag assign <1/2> @user [done]` — Atur petugas Slot 1/2 manual",
+                "• `ctag send [1/2]` — Kirim ulang pengumuman duty tag",
+                "• `ctag reminder [1/2]` — Kirim pengumuman timeout reminder",
+                "• `ctag config role @Role` — Set role staff",
+                "• `ctag config channel #channel` — Set channel notifikasi tag",
+                "• `ctag config timeout <menit>` — Set batas waktu reminder",
+                "• `ctag config time <JAM1> <JAM2>` — Set jam Slot 1 & Slot 2",
+                "• `ctag exempt add/remove/list` — Kelola pengecualian staff",
+                "• `ctag random` — Acak ulang rotasi seluruh staff",
               ].join("\n")
             )
           )
           .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
           .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`Mystral • Staff Tagging • <t:${Math.floor(Date.now() / 1000)}:R>`)
+            new TextDisplayBuilder().setContent("Mystral • Staff Tagging System")
           );
 
         return {
