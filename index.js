@@ -6830,24 +6830,20 @@ async function getOrGenerateDailyStaffSchedule(guild, forceReshuffle = false, ta
     await StaffTagSchedule.deleteMany({ guild_id: guild.id, date_key: dateKey }).catch(() => null);
   }
 
-  const curWibTime = getWibTimeHHMM();
-  const isToday = dateKey === getStaffTagDateKey();
-  const slot1Time = config.slot1_time || "09:00";
-  const slot2Time = config.slot2_time || "19:00";
-
-  const isSlot1Past = forceReshuffle && isToday && (curWibTime > slot1Time);
-  const isSlot2Past = forceReshuffle && isToday && (curWibTime > slot2Time);
+  const existing1 = await StaffTagSchedule.findOne({ guild_id: guild.id, date_key: dateKey, slot: 1 }).lean().catch(() => null);
+  const existing2 = await StaffTagSchedule.findOne({ guild_id: guild.id, date_key: dateKey, slot: 2 }).lean().catch(() => null);
 
   const schedule1 = await StaffTagSchedule.findOneAndUpdate(
     { guild_id: guild.id, date_key: dateKey, slot: 1 },
     {
       $set: {
         assigned_user_id: slot1User,
-        original_user_id: slot1User,
-        status: "pending",
-        notified_at: isSlot1Past ? Date.now() : null,
-        completed_at: null,
-        reminder_sent: false,
+        original_user_id: existing1?.original_user_id || slot1User,
+        status: existing1?.status || "pending",
+        notified_at: existing1?.notified_at || null,
+        message_id: existing1?.message_id || null,
+        completed_at: existing1?.completed_at || null,
+        reminder_sent: existing1?.reminder_sent || false,
       },
     },
     { upsert: true, returnDocument: 'after' }
@@ -6858,11 +6854,12 @@ async function getOrGenerateDailyStaffSchedule(guild, forceReshuffle = false, ta
     {
       $set: {
         assigned_user_id: slot2User,
-        original_user_id: slot2User,
-        status: "pending",
-        notified_at: isSlot2Past ? Date.now() : null,
-        completed_at: null,
-        reminder_sent: false,
+        original_user_id: existing2?.original_user_id || slot2User,
+        status: existing2?.status || "pending",
+        notified_at: existing2?.notified_at || null,
+        message_id: existing2?.message_id || null,
+        completed_at: existing2?.completed_at || null,
+        reminder_sent: existing2?.reminder_sent || false,
       },
     },
     { upsert: true, returnDocument: 'after' }
@@ -7247,7 +7244,7 @@ function startStaffTagLoop(client) {
           const slotTime = isSlot1 ? slot1Time : slot2Time;
           const slotName = getStaffSlotName(sched.slot, cfg);
 
-          // Trigger notification at or after slot time if not notified yet
+          // 1. Trigger initial notification at or after slot time if not notified yet
           if (!sched.notified_at && currentTime >= slotTime && sched.status === "pending") {
             const container = new ContainerBuilder()
               .addTextDisplayComponents(
@@ -7273,19 +7270,19 @@ function startStaffTagLoop(client) {
               allowedMentions: { users: [sched.assigned_user_id] },
             }).catch(() => null);
 
+            sched.notified_at = now;
             await StaffTagSchedule.updateOne(
               { _id: sched._id },
               { $set: { notified_at: now, message_id: sentMsg?.id || null } }
             ).catch(() => null);
-
           }
 
-          // Timeout Reminder check
+          // 2. Timeout Reminder check (runs after timeoutMs from notified_at)
           if (
             sched.notified_at &&
             sched.status === "pending" &&
             !sched.reminder_sent &&
-            now - sched.notified_at >= timeoutMs
+            (now - sched.notified_at >= timeoutMs)
           ) {
             const staffRoleId = cfg.staff_role_id;
             const staffMention = staffRoleId ? `<@&${staffRoleId}>` : "Halo Staff";
@@ -7314,7 +7311,7 @@ function startStaffTagLoop(client) {
               allowedMentions: staffRoleId ? { roles: [staffRoleId] } : { parse: [] },
             }).catch(() => null);
 
-
+            sched.reminder_sent = true;
             await StaffTagSchedule.updateOne(
               { _id: sched._id },
               { $set: { reminder_sent: true } }
@@ -7325,7 +7322,7 @@ function startStaffTagLoop(client) {
     } catch (err) {
       console.error("[STAFF TAG LOOP FAIL]", err);
     }
-  }, 2 * 60 * 1000);
+  }, 30 * 1000);
 }
 
 // ===================== NEW STAFF ONBOARDING / WELCOME SYSTEM =====================
