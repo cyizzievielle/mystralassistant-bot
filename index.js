@@ -5827,12 +5827,11 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Booster Rewards & Custom Roles",
     description: "Pengumuman Server Boost & pengelolaan custom role booster.",
     commands: [
-      "`cbooster setup` — Setup 1-baris (log channel, custom role channel, base role).",
-      "`cbooster send @user` — Kirim kartu pengumuman terima kasih booster secara manual.",
-      "`cbooster toggle|setmsg|settitle|setlog|setrolechannel` — Kelola kartu pengumuman.",
-      "`cbooster config` / `test` — Cek status & pratinjau kartu booster.",
-      "`cmyrole claim <nama>` — Klaim/buat custom role booster.",
-      "`cmyrole color|icon|removebg|rename|info` — Edit warna, icon, bg, & detail role."
+      "• `cbooster setup` — Setup wizard 1-baris channel & role booster",
+      "• `cbooster send @user` — Kirim kartu apresiasi booster manual",
+      "• `cbooster config` / `test` — Cek status & pratinjau kartu booster",
+      "• `cmyrole claim <nama>` — Klaim/buat custom role booster",
+      "• `cmyrole color|icon|rename` — Edit warna, icon, & detail role"
     ]
   },
   admin_roles: {
@@ -5840,13 +5839,12 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Role Management System",
     description: "Kelola role masal, warna gradien, dan icon role.",
     commands: [
-      "`ccr <nama> [#hex1] [#hex2] [icon]` — Buat role baru secara cepat.",
-      "`crole color @role #hex1 [#hex2]` — Set warna role (dukung 2 warna gradien).",
-      "`crole icon @role <url|lampiran>` / `removeicon` — Pasang/hapus icon role.",
-      "`crole add @role <@user|all|human|bot>` — Tambahkan role masal.",
-      "`crole remove @role <@user|all|human|bot>` — Hapus role masal.",
-      "`crole addall` / `removeall` — Perintah cepat role masal.",
-      "`crole info` / `members` / `rename` / `delete` — Informasi, daftar member, rename, & hapus role."
+      "• `ccr <nama> [#hex1] [#hex2] [icon]` — Buat role baru secara cepat",
+      "• `crole color @role #hex1 [#hex2]` — Set warna role (dukung 2 warna gradien)",
+      "• `crole icon @role <url>` — Pasang atau hapus icon role",
+      "• `crole add @role <@user|all|human|bot>` — Tambah role masal",
+      "• `crole remove @role <@user|all|human|bot>` — Hapus role masal",
+      "• `crole info|members|rename|delete` — Info, anggota, rename, & hapus role"
     ]
   },
   admin_moderation: {
@@ -5854,11 +5852,11 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Server Moderation Shield",
     description: "Moderasi member, warning, timeout, kick, ban, & security log.",
     commands: [
-      "`cinvitelog` — Anti-invite link detector & whitelist log manager.",
-      "`cstafflog` — Audit log otomatis (role, kick, ban, timeout) & staff notes.",
-      "`cwarn` / `cwarnings` / `cclearwarn` / `cunwarn` — Sistem warning member.",
-      "`ctimeout <user> <durasi>` / `cuntimeout` — Timeout & cabut timeout.",
-      "`cpurge <jumlah>` / `cmute` / `ckick` / `cban` / `cunban` — Purge, mute, kick, & ban."
+      "• `cinvitelog` — Anti-invite link detector & whitelist log manager",
+      "• `cstafflog` — Audit log otomatis (role, kick, ban, timeout)",
+      "• `cwarn` / `cwarnings` / `cclearwarn` — Sistem warning member",
+      "• `ctimeout <user> <durasi>` — Timeout & cabut timeout",
+      "• `cpurge <jumlah>` / `cmute` / `ckick` / `cban` — Moderasi aksi cepat"
     ]
   },
   admin_automation: {
@@ -5866,10 +5864,10 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Autoresponder & Sticky Messages",
     description: "Respon otomatis, pesan sticky, dan media embed.",
     commands: [
-      "`cadd autoresponse <trigger> | <response>` — Tambah autoresponse.",
-      "`cedit/cdelete/clist/cenable/cdisable autoresponse` — Kelola autoresponse.",
-      "`c sticky set <content>` / `remove` — Atur/hapus pesan sticky channel.",
-      "`c media enable/disable/status` — Universal Media Embed setting."
+      "• `cadd autoresponse <trigger> | <response>` — Tambah autoresponder",
+      "• `cedit/cdelete/clist/cenable` — Kelola autoresponse",
+      "• `c sticky set <content>` / `remove` — Atur/hapus pesan sticky channel",
+      "• `c media enable/disable/status` — Universal Media Embed setting"
     ]
   },
   admin_voice: {
@@ -5877,22 +5875,21 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Voice Channel Control",
     description: "Kontrol member di voice channel.",
     commands: [
-      "`c move voice <user> <channel>` — Pindahkan member ke VC lain.",
-      "`c disconnect voice <user>` — Putuskan member dari VC.",
-      "`c mute voice <user>` / `deafen` — Server mute / deafen member."
+      "• `c move voice <user> <channel>` — Pindahkan member ke VC lain",
+      "• `c disconnect voice <user>` — Putuskan member dari VC",
+      "• `c mute voice <user>` / `deafen` — Server mute / deafen member"
     ]
   },
   admin_panels: {
     emoji: "📋",
     label: "Panel Setup & Deploy",
-    description: "Pengiriman panel tiket, verifikasi, staff directory, sorting, & menfess.",
+    description: "Pengiriman panel tiket, verifikasi, staff directory, & leaderboard.",
     commands: [
-      "`cstaffpanel setup` — Deploy panel daftar staff & status kehadiran real-time.",
-      "`c leaderboard send [#channel]` — Pasang panel Live Leaderboard.",
-      "`c leaderboard lobby add/remove/list` — Kelola lobby channel leaderboard.",
-      "`c leaderboard blacklist add/remove/list` — Kelola blacklist user leaderboard.",
-      "`/ticketpanel` / `/setup-verif` / `/sortingpanel` — Deploy panel tiket, verif, & sorting.",
-      "`/menfesspanel` / `/selfrolespanel` / `/faq_panel` — Deploy panel menfess, selfroles, & FAQ."
+      "• `cstaffpanel setup` — Deploy panel status kehadiran staff real-time",
+      "• `c leaderboard send [#channel]` — Pasang panel Live Leaderboard",
+      "• `c leaderboard lobby add/remove` — Kelola lobby channel leaderboard",
+      "• `/ticketpanel` / `/setup-verif` / `/sortingpanel` — Deploy panel tiket, verif, & sorting",
+      "• `/menfesspanel` / `/selfrolespanel` / `/faq_panel` — Deploy panel menfess, selfroles, & FAQ"
     ]
   },
   admin_tools: {
@@ -5900,10 +5897,9 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Admin & Owner System Tools",
     description: "Backup database, export data, dan embed custom.",
     commands: [
-      "`/backup_now` — Backup instant database MongoDB/SQLite.",
-      "`/idcard_export` — Export database ID Card ke format JSON.",
-      "`/tod_add` — Tambah pertanyaan Truth or Dare.",
-      "`/sendembed` / `/sendembedv2` — Buat & kirim embed custom."
+      "• `/backup_now` — Instant backup database MongoDB/SQLite",
+      "• `/idcard_export` — Export database ID Card ke JSON",
+      "• `/sendembed` / `/sendembedv2` — Buat & kirim embed custom"
     ]
   }
 };
