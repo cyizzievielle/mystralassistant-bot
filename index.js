@@ -14580,15 +14580,27 @@ client.on(Events.MessageCreate, async (message) => {
         }
 
         let targetSched = null;
-
-        // Support specifying slot number: ctag done 1 or ctag done 2 (for admins or assigned staff)
+        const mentionedUser = message.mentions.users.first();
         const slotArg = parseInt(args[1], 10);
+
+        // 1. Support specifying slot number: ctag done 1 or ctag done 2 (for admins or assigned staff)
         if ((slotArg === 1 || slotArg === 2) && isAdminUser) {
           targetSched = schedules.find((s) => s.slot === slotArg && s.status !== "completed");
         }
 
+        // 2. Support specifying target user: ctag done @user or ctag done 1 @user (for admins)
+        if (!targetSched && mentionedUser && isAdminUser) {
+          targetSched = schedules.find((s) => s.assigned_user_id === mentionedUser.id && s.status !== "completed");
+        }
+
+        // 3. Check if current user is the assigned staff member for their slot
         if (!targetSched) {
           targetSched = schedules.find((s) => s.assigned_user_id === message.author.id && s.status !== "completed");
+        }
+
+        // 4. Admin fallback: pick active pending schedule if admin types `ctag done`
+        if (!targetSched && isAdminUser) {
+          targetSched = schedules.find((s) => s.status !== "completed");
         }
 
         if (!targetSched) {
@@ -14600,22 +14612,28 @@ client.on(Events.MessageCreate, async (message) => {
             });
           }
           return message.reply({
-            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Akses Ditolak").setDescription(`Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai tugas ini selesai (atau Admin dapat menggunakan \`ctag done 1\` / \`ctag done 2\`).`)],
+            embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle("❌ Akses Ditolak").setDescription(`Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai tugas ini selesai (atau Admin dapat menggunakan \`ctag done 1\` / \`ctag done 2\` atau \`ctag done 1 @user\`).`)],
             allowedMentions: { parse: [] },
           });
         }
 
+        // Determine user ID to credit as active officer who completed the task
+        let effectiveUserId = targetSched.assigned_user_id;
+        if (isAdminUser && mentionedUser) {
+          effectiveUserId = mentionedUser.id;
+        }
+
         const now = Date.now();
-        const isTakeover = targetSched.assigned_user_id !== targetSched.original_user_id;
+        const isTakeover = effectiveUserId !== targetSched.original_user_id;
 
         await StaffTagSchedule.updateOne(
           { _id: targetSched._id },
-          { $set: { status: "completed", completed_at: now } }
+          { $set: { status: "completed", assigned_user_id: effectiveUserId, completed_at: now } }
         ).catch(() => null);
 
         const config = await StaffTagConfig.findOne({ guild_id: message.guild.id }).lean().catch(() => null);
         const slotName = getStaffSlotName(targetSched.slot, config);
-        const payload = buildStaffTagCompletedContainer(message.author.id, slotName, now, isTakeover, targetSched.original_user_id);
+        const payload = buildStaffTagCompletedContainer(effectiveUserId, slotName, now, isTakeover, targetSched.original_user_id);
 
         const tagChannelId = config?.tag_channel_id || message.channel.id;
         const ch = message.guild.channels.cache.get(tagChannelId);
@@ -17536,14 +17554,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (btnType === "done") {
         // Query langsung ke DB (fresh) untuk menghindari stale cache setelah takeover
         const dateKey = getStaffTagDateKey();
-        const freshSched = await StaffTagSchedule.findOne({
+        let targetSched = await StaffTagSchedule.findOne({
           guild_id: guild.id,
           date_key: dateKey,
           assigned_user_id: interaction.user.id,
           status: { $ne: "completed" },
         }).lean().catch(() => null);
 
-        const targetSched = freshSched;
+        // Jika tombol diklik oleh Admin dan Admin bukan petugas terdaftar, ambil jadwal pending aktif
+        if (!targetSched && isAdmin) {
+          targetSched = await StaffTagSchedule.findOne({
+            guild_id: guild.id,
+            date_key: dateKey,
+            status: { $ne: "completed" },
+          }).sort({ slot: 1 }).lean().catch(() => null);
+        }
 
         if (!targetSched) {
           const activeSched = schedules.find((s) => s.status !== "completed");
@@ -17551,20 +17576,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return interaction.reply({ content: "✅ Semua tugas tag member hari ini sudah selesai!", flags: MessageFlags.Ephemeral });
           }
           return interaction.reply({
-            content: `❌ Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) yang dapat menandai tugas ini selesai.`,
+            content: `❌ Kamu bukan petugas staff yang ditugaskan untuk giliran ini!\n\nHanya petugas giliran (<@${activeSched.assigned_user_id}>) atau Admin yang dapat menandai tugas ini selesai.`,
             flags: MessageFlags.Ephemeral,
           });
         }
 
         const now = Date.now();
-        const isTakeover = targetSched.assigned_user_id !== targetSched.original_user_id;
+        const effectiveUserId = targetSched.assigned_user_id;
+        const isTakeover = effectiveUserId !== targetSched.original_user_id;
+
         await StaffTagSchedule.updateOne(
           { _id: targetSched._id },
           { $set: { status: "completed", completed_at: now } }
         ).catch(() => null);
 
         const slotName = getStaffSlotName(targetSched.slot, config);
-        const payload = buildStaffTagCompletedContainer(interaction.user.id, slotName, now, isTakeover, targetSched.original_user_id);
+        const payload = buildStaffTagCompletedContainer(effectiveUserId, slotName, now, isTakeover, targetSched.original_user_id);
         return interaction.update(payload);
       }
 
