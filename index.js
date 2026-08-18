@@ -14582,24 +14582,35 @@ client.on(Events.MessageCreate, async (message) => {
         let targetSched = null;
         const mentionedUser = message.mentions.users.first();
         const slotArg = parseInt(args[1], 10);
+        const hasSlotArg = (slotArg === 1 || slotArg === 2);
 
-        // 1. Support specifying slot number: ctag done 1 or ctag done 2 (for admins or assigned staff)
-        if ((slotArg === 1 || slotArg === 2) && isAdminUser) {
-          targetSched = schedules.find((s) => s.slot === slotArg && s.status !== "completed");
+        // 1. If slot number specified (e.g. ctag done 1 or ctag done 2)
+        if (hasSlotArg) {
+          const matchingSlot = schedules.find((s) => Number(s.slot) === slotArg);
+          if (matchingSlot && matchingSlot.status === "completed") {
+            return message.reply({
+              embeds: [new EmbedBuilder().setColor(0x3498db).setTitle("ℹ️ Tugas Sudah Selesai").setDescription(`Slot ${slotArg} sudah diselesaikan sebelumnya!`)],
+              allowedMentions: { parse: [] },
+            });
+          }
+
+          if (matchingSlot && (isAdminUser || matchingSlot.assigned_user_id === message.author.id)) {
+            targetSched = matchingSlot;
+          }
         }
 
         // 2. Support specifying target user: ctag done @user or ctag done 1 @user (for admins)
-        if (!targetSched && mentionedUser && isAdminUser) {
+        if (!targetSched && !hasSlotArg && mentionedUser && isAdminUser) {
           targetSched = schedules.find((s) => s.assigned_user_id === mentionedUser.id && s.status !== "completed");
         }
 
-        // 3. Check if current user is the assigned staff member for their slot
-        if (!targetSched) {
+        // 3. Check if current user is the assigned staff member for their pending slot
+        if (!targetSched && !hasSlotArg) {
           targetSched = schedules.find((s) => s.assigned_user_id === message.author.id && s.status !== "completed");
         }
 
-        // 4. Admin fallback: pick active pending schedule if admin types `ctag done`
-        if (!targetSched && isAdminUser) {
+        // 4. Admin fallback: only if no slot specified and no mentioned user, pick first active pending schedule
+        if (!targetSched && !hasSlotArg && !mentionedUser && isAdminUser) {
           targetSched = schedules.find((s) => s.status !== "completed");
         }
 
