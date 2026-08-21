@@ -8,7 +8,10 @@ async function connectMongo() {
     throw new Error("MONGODB_URI belum di-set dengan password yang benar di file .env");
   }
   try {
-    await mongoose.connect(uri);
+    await mongoose.connect(uri, {
+      family: 4,
+      serverSelectionTimeoutMS: 10000,
+    });
     console.log(" ├── [DB] MongoDB Atlas Connected Successfully! ✅");
   } catch (err) {
     console.error(" ❌ [DB] MongoDB Connection Error:", err.message);
@@ -261,6 +264,15 @@ staffTagScheduleSchema.index({ guild_id: 1, date_key: 1, slot: 1 }, { unique: tr
 const StaffTagSchedule = mongoose.models.StaffTagSchedule || mongoose.model("StaffTagSchedule", staffTagScheduleSchema);
 
 
+// Music Control Center System Schema
+const musicControlCenterSchema = new mongoose.Schema({
+  guild_id: { type: String, unique: true, required: true },
+  channel_id: String,
+  message_id: String,
+  updated_at: { type: Number, default: () => Date.now() },
+}, { strict: false, collection: "music_control_center" });
+const MusicControlCenter = mongoose.models.MusicControlCenter || mongoose.model("MusicControlCenter", musicControlCenterSchema);
+
 module.exports = {
   mongoose,
   connectMongo,
@@ -316,5 +328,6 @@ module.exports = {
   StaffTagConfig,
   StaffTagExempt,
   StaffTagSchedule,
+  MusicControlCenter,
 };
 
