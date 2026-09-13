@@ -517,6 +517,7 @@ const {
   StaffTagExempt,
   StaffTagSchedule,
   MusicControlCenter,
+  WordleUser,
 } = require("./db");
 
 let db = null;
@@ -557,6 +558,7 @@ function getMongoModel(tableName) {
   if (cleanName === "streak_freeze_inventory") return StreakFreezeInventory;
   if (cleanName === "tarot_users") return TarotUser;
   if (cleanName === "tarot_category_stats") return TarotCategoryStat;
+  if (cleanName === "wordle_users") return WordleUser;
   if (cleanName === "mod_warnings") return ModWarning;
 
   if (!genericMongoModels.has(cleanName)) {
@@ -889,9 +891,11 @@ async function mongoAll(sql, params = []) {
       let query = {};
       if (gId) query.guild_id = gId;
       if (s.includes("is_enabled=1") || s.includes("is_enabled = 1")) {
-        query.$or = [{ is_enabled: 1 }, { is_enabled: "1" }, { is_enabled: true }, { is_enabled: { $exists: false } }];
+        // Hanya ambil yang benar-benar aktif (is_enabled=1/true/"1")
+        // Dokumen lama yang belum punya field is_enabled akan dianggap NONAKTIF setelah fix ini
+        query.$or = [{ is_enabled: 1 }, { is_enabled: "1" }, { is_enabled: true }];
       } else if (s.includes("is_enabled=0") || s.includes("is_enabled = 0")) {
-        query.$or = [{ is_enabled: 0 }, { is_enabled: "0" }, { is_enabled: false }];
+        query.$or = [{ is_enabled: 0 }, { is_enabled: "0" }, { is_enabled: false }, { is_enabled: { $exists: false } }];
       }
       const AR = getMongoModel("autoresponses");
       const docs = await AR.find(query);
@@ -1258,6 +1262,17 @@ async function syncToMongo(sql, params = []) {
               }
             }
           );
+        } else if (s.includes("streak_recovery_left = 3")) {
+          await TarotUser.updateMany({}, { $set: { streak_recovery_left: 3 } });
+        } else if (s.includes("streak_recovery_left = ? WHERE user_id = ?")) {
+          const [nextRec, uId] = params;
+          await TarotUser.updateOne({ user_id: String(uId) }, { $set: { streak_recovery_left: Number(nextRec) } });
+        } else if (s.includes("streak = ? WHERE user_id = ?")) {
+          const [newStreak, uId] = params;
+          await TarotUser.updateOne({ user_id: String(uId) }, { $set: { streak: Number(newStreak) } });
+        } else if (s.includes("last_streak_before_break = 0 WHERE user_id = ?")) {
+          const uId = params[0];
+          await TarotUser.updateOne({ user_id: String(uId) }, { $set: { last_streak_before_break: 0 } });
         }
       }
     }
@@ -1324,6 +1339,8 @@ async function syncToMongo(sql, params = []) {
           fields.forEach((f, idx) => { if (idx < params.length) docObj[f] = params[idx]; });
           const count = await AR.countDocuments({ guild_id: String(docObj.guild_id || "") });
           docObj.id = count + 1;
+          if (docObj.is_enabled === undefined || docObj.is_enabled === null) docObj.is_enabled = 1;
+          if (!docObj.created_by) docObj.created_by = "2cyi";
           await AR.create(docObj);
         }
       }
@@ -2273,131 +2290,52 @@ function todDisplayCode(question) {
   return `C-${hash.toString(36).toUpperCase().slice(-3).padStart(3, "0")}`;
 }
 
-// ── Component v2 colour accents (hex string for Container accent)
-const TOD_COLOR_PENDING = 0x5865f2; // blurple
-const TOD_COLOR_DONE = 0x57f287; // green
-const TOD_COLOR_FAIL = 0xed4245; // red
-const TOD_COLOR_PANEL = 0x9b59b6; // purple
-
-/**
- * Build a Component v2 Container for an active / resolved TOD question.
- * Returns { components, flags } ready to spread into channel.send() / interaction.update().
- */
-function todCard(question, challengerId, targetId, status = "pending") {
+function buildTodEmbed(question, user, guild) {
   const isDare = question.type === "dare";
   const typeIcon = isDare ? "🎲" : "🕯️";
   const typeName = isDare ? "Dare" : "Truth";
-  const isDuel = targetId && targetId !== challengerId && targetId !== "self";
+  const typeCode = isDare ? "DARE" : "TRUTH";
+  const categoryFormatted = question.category
+    ? question.category.charAt(0).toUpperCase() + question.category.slice(1)
+    : "General";
+  const code = todDisplayCode(question);
 
-  let accentColor, headerLine, resultLine = null;
+  const guildName = guild?.name || "Mystral Academy";
+  const now = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  const footerDate = `${pad(now.getUTCDate())}/${pad(now.getUTCMonth() + 1)}/${now.getUTCFullYear()} ${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}`;
 
-  if (status === "pending") {
-    accentColor = TOD_COLOR_PENDING;
-    headerLine = `## ${typeIcon} ${typeName}`;
-  } else if (status === "done") {
-    accentColor = TOD_COLOR_DONE;
-    headerLine = `## 🟢 TOD Selesai — ${typeName}`;
-    resultLine = `✅ <@${targetId}> berhasil menyelesaikan tantangan ini!`;
-  } else {
-    accentColor = TOD_COLOR_FAIL;
-    headerLine = `## 🔴 TOD Gagal — ${typeName}`;
-    resultLine = `❌ <@${targetId}> menyerah/gagal menyelesaikan tantangan ini!`;
-  }
+  const description = [
+    `**${question.question}**`,
+    "",
+    "**Info**",
+    `Requested by <@${user?.id || user}>`,
+    `\`${typeCode} • ${categoryFormatted} • ${code}\``
+  ].join("\n");
 
-  const container = new ContainerBuilder().setAccentColor(accentColor);
+  const embed = new EmbedBuilder()
+    .setTitle(`${typeIcon} ${typeName}`)
+    .setDescription(description)
+    .setColor(0x2b2d31)
+    .setFooter({ text: `${guildName} • Truth or Dare • ${footerDate}` });
 
-  // Header
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(headerLine)
-  );
-
-  // Separator
-  container.addSeparatorComponents(
-    new SeparatorBuilder().setSpacing(1)
-  );
-
-  // Question body
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`> ${question.question}`)
-  );
-
-  // Result line (done / pass only)
-  if (resultLine) {
-    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(resultLine));
-  }
-
-  // Player info + meta (pending only)
-  if (status === "pending") {
-    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
-    const meta = isDuel
-      ? `👤 **Challenger:** <@${challengerId}>  •  🎯 **Target:** <@${targetId}>`
-      : `👤 **Player:** <@${challengerId}>`;
-    const info = `\`${String(question.type).toUpperCase()}\` • \`${question.rating}\` • \`${todDisplayCode(question)}\``;
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`${meta}\n${info}`)
-    );
-  }
-
-  // Footer
-  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`-# Mystral • Truth or Dare`)
-  );
-
-  return container;
-}
-
-/**
- * Build a Component v2 Container for the category-select panel.
- * Returns the ContainerBuilder (callers add buttons in ActionRow).
- */
-function todPanelCard(challengerId, targetId) {
-  const isDuel = targetId && targetId !== challengerId && targetId !== "self";
-
-  const desc = isDuel
-    ? `<@${challengerId}> menantang <@${targetId}> untuk bermain Truth or Dare!\nSilakan pilih kategori di bawah.`
-    : `Silakan pilih kategori di bawah untuk memulai permainan Truth or Dare! 🎲🕯️`;
-
-  const container = new ContainerBuilder().setAccentColor(TOD_COLOR_PANEL);
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## ⚔️ Truth or Dare`)
-  );
-  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(desc)
-  );
-  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(1));
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`-# Mystral • Truth or Dare`)
-  );
-  return container;
+  return embed;
 }
 
 /** Row of Truth / Dare / Random buttons */
-function todRow(challengerId, targetId) {
-  const target = targetId || "self";
+function todRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`tod:truth:${challengerId}:${target}`).setLabel("Truth").setStyle(ButtonStyle.Secondary).setEmoji("🕯️"),
-    new ButtonBuilder().setCustomId(`tod:dare:${challengerId}:${target}`).setLabel("Dare").setStyle(ButtonStyle.Secondary).setEmoji("🎲"),
-    new ButtonBuilder().setCustomId(`tod:random:${challengerId}:${target}`).setLabel("Random").setStyle(ButtonStyle.Primary).setEmoji("✨")
+    new ButtonBuilder().setCustomId(`tod:truth`).setLabel("Truth").setStyle(ButtonStyle.Secondary).setEmoji("🕯️"),
+    new ButtonBuilder().setCustomId(`tod:dare`).setLabel("Dare").setStyle(ButtonStyle.Secondary).setEmoji("🎲"),
+    new ButtonBuilder().setCustomId(`tod:random`).setLabel("Random").setStyle(ButtonStyle.Primary).setEmoji("✨")
   );
 }
 
-/** Row of Done / Pass buttons */
-function todResponseRow(targetId, questionId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`tod:done:${targetId}:${questionId}`).setLabel("Selesai (Done)").setStyle(ButtonStyle.Success).setEmoji("🟢"),
-    new ButtonBuilder().setCustomId(`tod:pass:${targetId}:${questionId}`).setLabel("Menyerah (Pass)").setStyle(ButtonStyle.Danger).setEmoji("🔴")
-  );
-}
-
-/** Helper: send a TOD question card (Component v2) */
-async function sendTodQuestion(channel, question, challengerId, targetId) {
-  const target = targetId || challengerId;
+/** Helper: send a clean TOD embed question */
+async function sendTodQuestion(channel, question, user, guild) {
   return channel.send({
-    components: [todCard(question, challengerId, target), todResponseRow(target, question.id)],
-    flags: MessageFlags.IsComponentsV2,
+    embeds: [buildTodEmbed(question, user, guild)],
+    components: [todRow()],
     allowedMentions: { parse: [] },
   });
 }
@@ -3131,7 +3069,8 @@ async function initDb() {
       attachment_url TEXT,
       button_label TEXT,
       button_url TEXT,
-      select_menu_options TEXT
+      select_menu_options TEXT,
+      created_by TEXT
     );
 
     CREATE TABLE IF NOT EXISTS timed_roles (
@@ -3412,8 +3351,24 @@ async function recoverTarotStreak(userId, username) {
   if (user.last_streak_before_break <= 0) {
     return { error: "Kamu tidak memiliki streak tarot yang padam untuk dipulihkan!" };
   }
+
+  if (user.last_reading_date) {
+    const todayKey = wibDayKey();
+    const lastDate = new Date(`${user.last_reading_date}T00:00:00+07:00`);
+    const todayDate = new Date(`${todayKey}T00:00:00+07:00`);
+    const diffMs = todayDate.getTime() - lastDate.getTime();
+    const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+    if (diffDays > 3) {
+      await safeRun(
+        `UPDATE tarot_users SET last_streak_before_break = 0 WHERE user_id = ?`,
+        [userId]
+      );
+      return { error: "Masa pemulihan streak tarot kamu telah kedaluwarsa (lebih dari 3 hari). Streak yang padam tidak dapat dipulihkan lagi!" };
+    }
+  }
+
   if (user.streak_recovery_left <= 0) {
-    return { error: "Batas token pemulihan (recovery token) kamu telah habis! (Maksimal 3)" };
+    return { error: "Batas token pemulihan (recovery token) kamu telah habis! (Maksimal 3 per bulan)" };
   }
 
   const newStreak = user.last_streak_before_break;
@@ -3429,6 +3384,340 @@ async function recoverTarotStreak(userId, username) {
   );
 
   return { success: true, newStreak, recoveryLeft: nextRec };
+}
+
+async function resetTarotMonthlyRecovery() {
+  try {
+    await TarotUser.updateMany({}, { $set: { streak_recovery_left: 3 } }).catch(() => null);
+    await safeRun("UPDATE tarot_users SET streak_recovery_left = 3").catch(() => null);
+    console.log("[TAROT] Monthly recovery tokens successfully reset to 3 for all users.");
+  } catch (err) {
+    console.error("[TAROT RESET ERROR]", err);
+  }
+}
+
+async function setTarotUserRecovery(userId, username, amount = 3) {
+  try {
+    const user = await getOrInitTarotUser(userId, username);
+    if (!user) return false;
+    await safeRun(
+      `UPDATE tarot_users SET streak_recovery_left = ? WHERE user_id = ?`,
+      [amount, userId]
+    );
+    if (useMongo) {
+      await TarotUser.updateOne({ user_id: String(userId) }, { $set: { streak_recovery_left: Number(amount) } }).catch(() => null);
+    }
+    return true;
+  } catch (err) {
+    console.error("[SET TAROT RECOVERY ERROR]", err);
+    return false;
+  }
+}
+
+async function setTarotUserStreak(userId, username, amount = 0) {
+  try {
+    const user = await getOrInitTarotUser(userId, username);
+    if (!user) return false;
+    await safeRun(
+      `UPDATE tarot_users SET streak = ? WHERE user_id = ?`,
+      [amount, userId]
+    );
+    if (useMongo) {
+      await TarotUser.updateOne({ user_id: String(userId) }, { $set: { streak: Number(amount) } }).catch(() => null);
+    }
+    return true;
+  } catch (err) {
+    console.error("[SET TAROT STREAK ERROR]", err);
+    return false;
+  }
+}
+
+// ===================== DAILY WORDLE / TEBAK KATA ENGINE =====================
+const WORDLE_WORD_POOL = [
+  "ABADI", "ACARA", "AGAMA", "AKBAR", "AKHIR", "AKRAB", "AKTOR", "ALAMI", "ALBUM", "ANGIN",
+  "ANGKA", "ANIME", "ANTIK", "ARENA", "AROMA", "ARSIP", "ASING", "ASRAM", "ASYIK", "ATLAS",
+  "BAGUS", "BAHAN", "BAKSO", "BAKAT", "BALAP", "BALAS", "BALON", "BAMBU", "BANTU", "BARIS",
+  "BASAH", "BASIS", "BATIK", "BATUK", "BEBAN", "BEBAS", "BEBEK", "BEKAL", "BEKAS", "BELIA",
+  "BENAR", "BENCI", "BENDA", "BENIH", "BENUA", "BERAS", "BERAT", "BERES", "BESAR", "BESOK",
+  "BETON", "BIAYA", "BIKIN", "BINAR", "BISIK", "BOCAH", "BOGOR", "BOLEH", "BONUS", "BOROS",
+  "BOTOL", "BUAYA", "BUBAR", "BUKIT", "BUKTI", "BULAN", "BULAT", "BUMBU", "BUNGA", "BUNYI",
+  "BURUK", "BURUN", "BUSUR", "BUTUH",
+  "CABAI", "CABUT", "CADAR", "CALON", "CANDI", "CAPAI", "CATAT", "CEPAT", "CERAH", "CERIA",
+  "CINTA", "COCOK", "CUKUP", "CUMAN", "CHESS", "CROWN",
+  "DADAR", "DANAU", "DARAH", "DARAT", "DASAR", "DEBAT", "DEKAT", "DEMAM", "DENDA", "DEPAN",
+  "DERAS", "DERET", "DESAK", "DINAS", "DOMBA", "DRAMA", "DUNIA", "DUDUK", "DREAM",
+  "ELANG", "EMBUN", "EMOSI", "FAKTA", "FLAME", "FOKUS", "FORUM",
+  "GAGAL", "GAJAH", "GELAP", "GELAR", "GELUT", "GEMPA", "GERAK", "GETAR", "GIGIH", "GITAR",
+  "GURIK", "GURUH", "GURUR",
+  "HABIS", "HADAP", "HADIR", "HAJAR", "HAKIM", "HALAL", "HALUS", "HANTU", "HAPUS", "HARGA",
+  "HARAP", "HARUM", "HASIL", "HEBAT", "HELAN", "HEMAT", "HERAN", "HIDUP", "HIJAU", "HITAM",
+  "HOROR", "HUJAN", "HUKUM", "HURUF", "HUTAN", "HEART",
+  "IKHLAS", "IKLAN", "IKLIM", "ILHAM", "INDAH", "INDUK", "INFRA", "INGIN", "INSAN", "INTAN",
+  "INTIM", "IRAMA", "ISLAM", "ISTRI", "JAKET", "JALAN", "JAMAN", "JAMUR", "JANJI", "JARAK",
+  "JARUM", "JATUH", "JAWAB", "JEJAK", "JELEK", "JENIS", "JERUK", "JODOH", "JUARA", "JUJUR",
+  "JUMAT",
+  "KABAR", "KABEL", "KABUT", "KACAU", "KADAR", "KAGUM", "KAKAK", "KALAM", "KALAU", "KAMAR",
+  "KAMIS", "KANAL", "KAPAL", "KAPAS", "KAPUK", "KARET", "KARIR", "KARTU", "KARYA", "KASAR",
+  "KASIH", "KASTA", "KASUS", "KAWAN", "KAWAT", "KECIL", "KEDAI", "KEJAM", "KEJAR", "KEJUT",
+  "KELAS", "KELIR", "KELOR", "KELUH", "KEMAH", "KEMAS", "KENAL", "KERAS", "KERJA", "KERUH",
+  "KESAL", "KETAT", "KETIK", "KILAS", "KILAT", "KIMIA", "KIPAS", "KIRIM", "KISAH", "KITAB",
+  "KOBAR", "KOCAK", "KODOK", "KOKOH", "KOLAM", "KOMIK", "KORAN", "KOREK", "KOTAK", "KOTOR",
+  "KUASA", "KUBUR", "KUDIS", "KUKUH", "KULIT", "KUMAL", "KUMIS", "KUNCI", "KUPAS", "KURSI",
+  "KURUS", "KUTUB", "KUTUK", "KINGS",
+  "LABOR", "LAHAR", "LAHAN", "LAHIR", "LALAP", "LALAT", "LAMAN", "LAMPU", "LAPAR",
+  "LAPIS", "LAPOR", "LARIS", "LATAR", "LATIH", "LAYAK", "LAYAN", "LAYAR", "LEBAH", "LEBAR",
+  "LEBAT", "LEBIH", "LEBUR", "LEHER", "LELAH", "LEMAH", "LEMAK", "LEPAS", "LESAT", "LETAK",
+  "LETUP", "LEWAT", "LEZAT", "LIBUR", "LIDAH", "LILIN", "LIPAT", "LISAN", "LOGIS", "LOMBA",
+  "LUNAS", "LURUS",
+  "MABUK", "MACAN", "MADRA", "MAHAL", "MAHIR", "MAKAN", "MAKAM", "MAKIN", "MALAM", "MALAS",
+  "MAMPU", "MANDI", "MANIS", "MANJA", "MAPAN", "MARAH", "MARET", "MASAK", "MASAM", "MASIH",
+  "MASUK", "MAWAR", "MAYAT", "MEDAL", "MEDIA", "MEDIS", "MENIT", "MERAH", "MERDU", "MEREK",
+  "MESIN", "MESKI", "MEWAH", "MIMPI", "MINAT", "MINUM", "MIRIP", "MISAL", "MISUH", "MITRA",
+  "MODAL", "MODEL", "MOGOK", "MOHON", "MOMEN", "MOTIF", "MOTOR", "MUDAH", "MUDIK", "MUKIM",
+  "MULAI", "MULIA", "MULUS", "MULUT", "MURAH", "MURID", "MUSIK", "MUSIM", "MUSUH", "MAGIC",
+  "NAFAS", "NAFSU", "NAHAS", "NAJIS", "NAKAL", "NANAS", "NAPAS", "NASIB", "NATAL", "NEKAT",
+  "NENEK", "NETRA", "NILAI", "NOMOR", "NOVEL", "NYATA", "NYERI", "NIGHT", "OBRAL", "OMBAK",
+  "OMONG", "OPINI", "ORANG", "ORGAN", "ORBIT",
+  "PACAR", "PADAT", "PAGAR", "PAGIK", "PAHAM", "PAHIT", "PAJAK", "PAKAI", "PAKAN", "PAKAR",
+  "PAKSA", "PALSU", "PANAH", "PANAS", "PANDU", "PANEL", "PANIK", "PAPAN", "PARAH", "PARAS",
+  "PARUT", "PASAL", "PASAR", "PASIF", "PASIR", "PASTI", "PATUH", "PAWAI", "PEDAL", "PEDAS",
+  "PEDIH", "PELAK", "PELAN", "PELAT", "PELIT", "PELOR", "PELUK", "PERAH", "PERAK", "PERAN",
+  "PERGI", "PERIH", "PERLU", "PERUT", "PESAN", "PESAT", "PETAK", "PETIK", "PETIR", "PIALA",
+  "PIANO", "PIHAK", "PIKIR", "PILOT", "PINTU", "PIPET", "PISAH", "PISAU", "PLAZA", "POHON",
+  "POKOK", "POLIS", "POLOS", "POMPA", "PORSI", "PRIMA", "PROMO", "PROSA", "PUASA", "PUKUL",
+  "PULAU", "PULIH", "PULSA", "PUNYA", "PUPUK", "PUPUS", "PURBA", "PUSAT", "PUTAR", "PUTIH",
+  "PUTRA", "PUTRI", "PUTUS",
+  "QUEEN", "RACUN", "RADAR", "RADIO", "RAGAM", "RAHIM", "RAJIN", "RAKUS", "RAMAI", "RAMAL",
+  "RAMBU", "RAPAT", "RAPIH", "RAPUH", "RASIO", "RAWAN", "RAWAT", "REBAH", "REBUT", "REKAP",
+  "REKAT", "REKOR", "RETAK", "RETUR", "RIANG", "RIBET", "RIBUT", "RILIS", "RINCI", "RINDU",
+  "RISIK", "RITME", "ROBOT", "ROKET", "ROMAN", "RONDA", "RUKUN", "RUMAH", "RUMIT", "RUSAK",
+  "RUTIN",
+  "SABAR", "SABDA", "SABTU", "SABUN", "SADAR", "SAKIT", "SALAH", "SALAM", "SALJU", "SALON",
+  "SALUR", "SARAN", "SARAP", "SARAT", "SATIR", "SAYAP", "SAYUR", "SEBAB", "SEDAP", "SEDIA",
+  "SEDIH", "SEGAR", "SEHAT", "SEJAT", "SEJUK", "SELAM", "SEMUT", "SENAM", "SENAT", "SENIN",
+  "SENJA", "SEPAK", "SEPAT", "SERAM", "SERAP", "SERAT", "SERBU", "SERTA", "SESAT", "SETIA",
+  "SETIR", "SIANG", "SIAPA", "SIFAT", "SIKAP", "SIKSA", "SILAU", "SINAR", "SINGA", "SIPIL",
+  "SIRAM", "SIRIK", "SIRUP", "SISIR", "SISWA", "SITUS", "SKALA", "SOBAT", "SOLAR", "SOLID",
+  "SOPAN", "SOROT", "STEAK", "STUDI", "SUAMI", "SUARA", "SUBUH", "SUBUR", "SUDAH", "SUDUT",
+  "SUGAR", "SUKMA", "SULIT", "SUMBU", "SUNYI", "SUPIR", "SURAM", "SURAT", "SURGA", "SURYA",
+  "SUSAH", "SUSUK", "SUSUN", "SUSUR", "SYAIR", "STORY", "SMART", "SHINE",
+  "TABAH", "TABEL", "TABIR", "TABUR", "TAHAN", "TAHUN", "TAJAM", "TAJIR", "TAKUT", "TAMAN",
+  "TAMAT", "TANAH", "TANAM", "TANDA", "TANDU", "TANPA", "TANYA", "TARIF", "TARIK", "TAROT",
+  "TATAP", "TEBAL", "TEBAR", "TEBAS", "TEDUH", "TEGAK", "TEGAP", "TEGAR", "TEGAS", "TEGUR",
+  "TEKAD", "TEKAN", "TEKUN", "TELAN", "TELAT", "TEMAN", "TEMPO", "TENDA", "TENIS", "TENTU",
+  "TEPAT", "TERAS", "TERIK", "TEROR", "TETAP", "TETAS", "TETES", "TIANG", "TIDUR", "TIKUS",
+  "TIMUR", "TIPIS", "TIRAI", "TIRAM", "TITIK", "TOKOH", "TOLAK", "TOPIK", "TOTAL", "TUKAR",
+  "TULIS", "TULUS", "TUMIT", "TUNAI", "TUPAI", "TURUN", "TURUT", "TUTUP", "TUYUL",
+  "UDARA", "UJIAN", "ULTAH", "UNSRI", "UNSUR", "UNTUK", "UPAYA", "URBAN", "USAHA",
+  "UTAMA", "UTARA", "VIDEO", "VIRAL", "VIRUS", "VOKAL", "WADAH", "WAJAH", "WAJAR", "WAJIB",
+  "WAKIL", "WAKTU", "WALAU", "WANGI", "WARGA", "WARNA", "WARTA", "WASIT", "WATAK", "WINDU",
+  "YAKIN", "ZAMAN", "ZEBRA", "WORLD"
+].filter(w => /^[A-Z]{5}$/.test(w));
+
+function getDailyWordleTarget(dateStr) {
+  let hash = 0;
+  for (let i = 0; i < dateStr.length; i++) {
+    hash = ((hash << 5) - hash) + dateStr.charCodeAt(i);
+    hash |= 0;
+  }
+  const cleanWords = WORDLE_WORD_POOL.filter(w => w.length === 5);
+  const index = Math.abs(hash) % cleanWords.length;
+  return cleanWords[index].toUpperCase();
+}
+
+function getRandomWordleWord(exclude = null) {
+  let pool = WORDLE_WORD_POOL;
+  if (exclude) {
+    const filtered = WORDLE_WORD_POOL.filter(w => w !== String(exclude).toUpperCase());
+    if (filtered.length > 0) pool = filtered;
+  }
+  return pool[Math.floor(Math.random() * pool.length)].toUpperCase();
+}
+
+function evaluateWordleGuess(guess, target) {
+  guess = guess.toUpperCase();
+  target = target.toUpperCase();
+
+  const result = new Array(5).fill("⬛");
+  const targetChars = target.split("");
+  const guessChars = guess.split("");
+  const targetUsed = new Array(5).fill(false);
+
+  for (let i = 0; i < 5; i++) {
+    if (guessChars[i] === targetChars[i]) {
+      result[i] = "🟩";
+      targetUsed[i] = true;
+    }
+  }
+
+  for (let i = 0; i < 5; i++) {
+    if (result[i] === "🟩") continue;
+    const char = guessChars[i];
+    const matchIdx = targetChars.findIndex((tc, idx) => tc === char && !targetUsed[idx]);
+    if (matchIdx !== -1) {
+      result[i] = "🟨";
+      targetUsed[matchIdx] = true;
+    }
+  }
+
+  return result;
+}
+
+async function getOrInitWordleUser(userId, dateStr) {
+  try {
+    let doc = await WordleUser.findOne({ user_id: String(userId), date: String(dateStr) }).lean().catch(() => null);
+    if (!doc) {
+      const lastDoc = await WordleUser.findOne({ user_id: String(userId) }).sort({ _id: -1 }).lean().catch(() => null);
+      const wins = lastDoc?.wins || 0;
+      const totalPlayed = lastDoc?.total_played || 0;
+      const streak = lastDoc?.streak || 0;
+      const maxStreak = lastDoc?.max_streak || 0;
+      const targetWord = getDailyWordleTarget(dateStr);
+
+      doc = await WordleUser.create({
+        user_id: String(userId),
+        date: String(dateStr),
+        target_word: targetWord,
+        guesses: [],
+        is_won: false,
+        is_completed: false,
+        wins,
+        total_played: totalPlayed,
+        streak,
+        max_streak: maxStreak
+      }).catch(() => null);
+    }
+    if (doc && !doc.target_word) {
+      doc.target_word = getDailyWordleTarget(dateStr);
+    }
+    return doc;
+  } catch (err) {
+    console.error("[WORDLE INIT ERROR]", err);
+    return null;
+  }
+}
+
+async function resetWordleUserGame(userId, dateStr, newTarget = null) {
+  try {
+    const wordleDoc = await getOrInitWordleUser(userId, dateStr);
+    const targetWord = newTarget || getRandomWordleWord(wordleDoc?.target_word);
+
+    await WordleUser.updateOne(
+      { user_id: String(userId), date: String(dateStr) },
+      {
+        $set: {
+          target_word: targetWord,
+          guesses: [],
+          is_won: false,
+          is_completed: false,
+        }
+      },
+      { upsert: true }
+    ).catch(() => null);
+
+    const updated = await WordleUser.findOne({ user_id: String(userId), date: String(dateStr) }).lean().catch(() => null);
+    return updated || {
+      user_id: String(userId),
+      date: String(dateStr),
+      target_word: targetWord,
+      guesses: [],
+      is_won: false,
+      is_completed: false,
+      wins: wordleDoc?.wins || 0,
+      total_played: wordleDoc?.total_played || 0,
+      streak: wordleDoc?.streak || 0,
+      max_streak: wordleDoc?.max_streak || 0
+    };
+  } catch (err) {
+    console.error("[WORDLE RESET ERROR]", err);
+    return null;
+  }
+}
+
+function buildWordleUIEmbed(user, wordleDoc, targetWord) {
+  const dateStr = wordleDoc?.date || wibDayKey();
+  const guesses = wordleDoc?.guesses || [];
+  const maxAttempts = 6;
+  const attemptsLeft = Math.max(0, maxAttempts - guesses.length);
+
+  const rowsText = [];
+  for (let i = 0; i < maxAttempts; i++) {
+    if (i < guesses.length) {
+      const g = guesses[i];
+      const evalRes = evaluateWordleGuess(g, targetWord);
+      const letterDisplay = g.split("").map(c => `\`${c}\``).join(" ");
+      const tileDisplay = evalRes.join(" ");
+      rowsText.push(`\`${i + 1}.\` ${letterDisplay}  ▸  ${tileDisplay}`);
+    } else {
+      rowsText.push(`\`${i + 1}.\` \`_\` \`_\` \`_\` \`_\` \`_\`  ▸  ⬛ ⬛ ⬛ ⬛ ⬛`);
+    }
+  }
+
+  let statusHeader = "🧩 **Sesi Tebak Kata (Wordle)**";
+  let embedColor = EMBED_COLOR;
+  if (wordleDoc?.is_won) {
+    statusHeader = "🎉 **SELAMAT! Kamu berhasil menebak kata rahasia!**";
+    embedColor = 0x57F287; // Green
+  } else if (wordleDoc?.is_completed) {
+    statusHeader = `💔 **Kesempatan habis! Kata rahasia tadi adalah: \`${targetWord}\`**`;
+    embedColor = 0xED4245; // Red
+  } else {
+    statusHeader = `✏️ **Kesempatan tersisa: ${attemptsLeft} / 6**`;
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("🧩 Mystral Daily Wordle")
+    .setColor(embedColor)
+    .setDescription(
+      [
+        statusHeader,
+        `*Pemain: <@${user.id}> • Tanggal: ${dateStr}*`,
+        "",
+        rowsText.join("\n"),
+        "",
+        `📊 **Statistik Kamu:**`,
+        `▸ Total Menang: **${wordleDoc?.wins || 0}** | Total Main: **${wordleDoc?.total_played || 0}** | Streak: **${wordleDoc?.streak || 0} 🔥** (Max: **${wordleDoc?.max_streak || 0}**)`
+      ].join("\n")
+    )
+    .setFooter({ text: "Ketik `cw <kata>` atau klik tombol di bawah • `cw new` untuk kata baru" })
+    .setTimestamp();
+
+  const components = [];
+  const step = guesses.length;
+
+  if (!wordleDoc?.is_completed && !wordleDoc?.is_won) {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle:open_modal:${user.id}:${step}`)
+        .setLabel("✍️ Tebak Kata")
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji("🧩"),
+      new ButtonBuilder()
+        .setCustomId(`wordle:play_again:${user.id}`)
+        .setLabel("🔄 Ganti Kata")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("wordle:how_to_play")
+        .setLabel("❓ Cara Main")
+        .setStyle(ButtonStyle.Secondary)
+    );
+    components.push(row);
+  } else {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle:play_again:${user.id}`)
+        .setLabel("🔄 Main Lagi (Kata Baru)")
+        .setStyle(ButtonStyle.Success)
+        .setEmoji("✨"),
+      new ButtonBuilder()
+        .setCustomId("wordle:how_to_play")
+        .setLabel("❓ Cara Main")
+        .setStyle(ButtonStyle.Secondary)
+    );
+    components.push(row);
+  }
+
+  return { embeds: [embed], components };
 }
 
 function buildTarotMainEmbed() {
@@ -4134,23 +4423,64 @@ async function getMenfessPostById(id) {
 async function handleMenfessButtonCleanup(client, sentMsg) {
   if (!sentMsg) return;
   try {
-    const lastMsgRow = await MetaText.findOne({ key: 'menfess_last_msg_id' });
-    const lastChRow = await MetaText.findOne({ key: 'menfess_last_channel_id' });
-
-    if (lastMsgRow?.value && lastChRow?.value) {
-      const oldCh = await client.channels.fetch(lastChRow.value).catch(() => null);
-      if (oldCh) {
-        const oldMsg = await oldCh.messages.fetch(lastMsgRow.value).catch(() => null);
-        if (oldMsg && oldMsg.components?.length > 0) {
-          await oldMsg.edit({ components: [] }).catch(() => null);
-        }
-      }
-    }
-
     await MetaText.updateOne({ key: 'menfess_last_msg_id' }, { $set: { value: String(sentMsg.id) } }, { upsert: true });
     await MetaText.updateOne({ key: 'menfess_last_channel_id' }, { $set: { value: String(sentMsg.channelId) } }, { upsert: true });
   } catch (err) {
     console.error("❌ handleMenfessButtonCleanup Error:", err);
+  }
+}
+
+async function restoreMenfessButtons(client) {
+  try {
+    const channelId = process.env.MENFESS_CHANNEL_ID;
+    if (!channelId) return;
+
+    const ch = await client.channels.fetch(channelId).catch(() => null);
+    if (!ch || !ch.isTextBased()) return;
+
+    const messages = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages) return;
+
+    for (const msg of messages.values()) {
+      if (msg.author.id !== client.user.id) continue;
+      if (!msg.embeds || msg.embeds.length === 0) continue;
+      if (msg.components && msg.components.length > 0) continue;
+
+      const embed = msg.embeds[0];
+      const title = embed.title || "";
+      const desc = embed.description || "";
+
+      let menfessId = null;
+      const titleMatch = title.match(/MENFESS #(\d+)/i) || title.match(/Balasan Anonim #(\d+)/i);
+      if (titleMatch) {
+        menfessId = titleMatch[1];
+      } else {
+        const descMatch = desc.match(/Reply to menfess #(\d+)/i);
+        if (descMatch) {
+          menfessId = descMatch[1];
+        }
+      }
+
+      if (menfessId) {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("menfess:new")
+            .setLabel("Kirim Baru")
+            .setStyle(ButtonStyle.Success)
+            .setEmoji("✉️"),
+          new ButtonBuilder()
+            .setCustomId(`menfess:reply:${menfessId}`)
+            .setLabel("Balas Anonim")
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji("💬")
+        );
+
+        await msg.edit({ components: [row] }).catch(() => null);
+      }
+    }
+    console.log("[MENFESS] Restored buttons to menfess messages.");
+  } catch (err) {
+    console.error("❌ restoreMenfessButtons Error:", err);
   }
 }
 
@@ -5781,7 +6111,9 @@ const HELP_CATEGORIES = {
       "`/serverinfo` — Tampilkan statistik & informasi server Mystral.",
       "`/lastseen [@user]` — Cek kapan member terakhir aktif berkirim pesan.",
       "`/topactive` — Lihat daftar member paling aktif di server.",
-      "`/check <platform> <username>` — Cek profil game (Roblox, GitHub, Steam, Chess)."
+      "`/check <platform> <username>` — Cek profil game (Roblox, GitHub, Steam, Chess).",
+      "`ccn <namabaru>` / `c cn <namabaru>` — Ganti nickname kamu sendiri (Izin CN / Staff / Booster).",
+      "`ccn reset` / `c cn reset` — Reset nickname kamu kembali ke nama default."
     ]
   },
   social: {
@@ -5789,8 +6121,8 @@ const HELP_CATEGORIES = {
     label: "Interaksi & Komunitas",
     description: "Fitur AFK, alarm pengingat, dan permainan Truth or Dare.",
     commands: [
-      "`/tod panel` — Buka panel Truth or Dare dengan tombol interaktif.",
-      "`/tod truth` / `/tod dare` / `/tod random` — Minta pertanyaan Truth / Dare.",
+      "`/tod` / `ctod` — Main Truth or Dare interaktif (tombol Truth, Dare, & Random).",
+      "`/tod truth` / `/tod dare` / `/tod random` — Minta pertanyaan Truth / Dare langsung.",
       "`/tod daily` — Ambil tantangan harian Truth or Dare.",
       "`/tod submit <tipe> <teks>` — Ajukan pertanyaan Truth or Dare buatanmu.",
       "`/afk [alasan]` / `cafk` — Aktifkan status AFK (notifikasi saat di-mention).",
@@ -5803,13 +6135,17 @@ const HELP_CATEGORIES = {
   games: {
     emoji: "🎮",
     label: "Game & Tarot",
-    description: "Mini-game tebak angka, peringkat pemenang, dan ramalan kartu tarot.",
+    description: "Mini-game tebak angka, Wordle tebak kata, dan ramalan kartu tarot.",
     commands: [
       "`/tebakangka` / `cta` — Mulai permainan tebak angka interaktif.",
       "`/hint` / `chint` — Minta petunjuk rentang tebakan angka aktif.",
       "`/stopgame` / `cstopgame` — Hentikan sesi permainan tebak angka.",
       "`/leaderboard tebakangka` / `clb angka` — Papan peringkat pemenang tebak angka.",
-      "`/tarot` / `ctarot` — Baca ramalan kartu tarot harianmu."
+      "`cwordle` / `cw` / `ctebakkata` — Game tebak kata 5 huruf (Wordle).",
+      "`cw <kata>` — Tebak kata 5 huruf langsung di chat (contoh: `cw SENJA`).",
+      "`cw new` / `cw play` — Mulai ronde baru / main sepuasnya dengan kata acak baru.",
+      "`/tarot` / `ctarot` — Baca ramalan kartu tarot harianmu.",
+      "`ctarot profile` / `ctarot lb` / `ctarot collection` — Profil, leaderboard, & koleksi tarot."
     ]
   },
   myrole: {
@@ -5825,7 +6161,10 @@ const HELP_CATEGORIES = {
       "`cmyrole removeicon` — Hapus icon gambar dari role.",
       "`cmyrole removebg #HEX1 #HEX2` — Hapus background gambar icon.",
       "`cmyrole rename nama_baru` — Ubah nama custom role milikmu.",
-      "`cmyrole info` — Lihat statistik & detail info role milikmu."
+      "`cmyrole info` — Lihat statistik & detail info role milikmu.",
+      "`cmyrole gift @user` — Berikan custom role ke teman.",
+      "`cmyrole ungift @user` — Tarik kembali custom role dari teman.",
+      "`cmyrole delete` — Hapus custom role milikmu."
     ]
   },
   general: {
@@ -5834,6 +6173,8 @@ const HELP_CATEGORIES = {
     description: "Papan peringkat, kalkulator, penerjemah, dan alat bantu umum.",
     commands: [
       "`cping` / `/ping` — Cek latensi & kecepatan respon bot.",
+      "`ccn <namabaru>` / `c cn <namabaru>` — Ganti nickname sendiri secara instan.",
+      "`ccn reset` / `c cn reset` — Kembalikan nickname ke nama asli.",
       "`c lb recap` / `/leaderboard recap` — Peringkat keaktifan Member of the Month.",
       "`c lb all` / `c lb full` / `/leaderboard all` — Peringkat keaktifan keseluruhan member.",
       "`cremovebg` / `crmbg` / `cnobg` — Hapus background gambar otomatis (PNG transparan).",
@@ -5876,7 +6217,7 @@ const ADMIN_HELP_CATEGORIES = {
       "`ctag config role|channel|timeout|time` — Atur role staff, channel tag, timeout, & jam slot.",
       "`ctag exempt add/remove/list` — Kelola daftar pengecualian staff dari rotasi.",
       "`ctag random` — Acak ulang rotasi petugas staff hari ini.",
-      "`cstaffprofile [@user]` — Lihat kartu profil identitas & statistik aktivitas staff.",
+      "`cprofilestaff` / `cpstaff` / `cstaffprofile [@user]` — Lihat kartu profil identitas & statistik aktivitas staff.",
       "`cstaff welcome @user` — Sambutan & onboarding pengumuman staff baru.",
       "`cstaff welcomesetup` — Setup channel log & role mention onboarding staff.",
       "`cstaff leave @user [alasan]` — Kartu apresiasi & pelepasan staff pensiun.",
@@ -5900,6 +6241,7 @@ const ADMIN_HELP_CATEGORIES = {
       "`ckick @user [alasan]` — Keluarkan member dari server.",
       "`cban @user [alasan]` — Blokir/ban member dari server secara permanen.",
       "`cunban <user_id>` — Cabut blokir/unban ID user dari server.",
+      "`ccn @user <namabaru>` / `ccn @user reset` — Ganti atau reset nickname member lain.",
       "`cpurge <jumlah>` / `clear` — Hapus pesan masal di channel (1-100 pesan).",
       "`cinvitelog` — Pengaturan detektor anti-invite link & whitelist manager.",
       "`cbotwl` / `cbotbl` — Whitelist & Blacklist bot manager (Anti-raid bot lock).",
@@ -5918,6 +6260,9 @@ const ADMIN_HELP_CATEGORIES = {
       "`crole add @role <@user|all|human|bot>` — Berikan role masal ke member/bot.",
       "`crole remove @role <@user|all|human|bot>` — Cabut role masal dari member/bot.",
       "`crole addall @role` / `removeall @role` — Perintah cepat role masal.",
+      "`ccn setrole @role` — Beri izin role tertentu untuk bisa ganti nickname (CN) sendiri.",
+      "`ccn removerole @role` — Hapus role dari daftar izin CN server.",
+      "`ccn roles` — Lihat daftar role khusus yang memiliki izin CN.",
       "`crole info @role` — Lihat detail statistik & permission role.",
       "`crole members @role` — Lihat daftar member pemilik role tertentu.",
       "`crole rename @role <nama_baru>` — Ubah nama role.",
@@ -5930,13 +6275,19 @@ const ADMIN_HELP_CATEGORIES = {
     description: "Pengumuman Server Boost & pengawasan custom role booster.",
     commands: [
       "`cbooster setup` — Setup 1-baris (log channel, custom role channel, base role).",
+      "`cbooster list` / `cbooster roles` — Lihat direktori daftar custom role booster, pemilik, tanggal & penerima.",
       "`cbooster send @user` — Kirim kartu apresiasi terima kasih booster secara manual.",
       "`cbooster toggle` — Aktifkan/nonaktifkan pengumuman boost otomatis.",
       "`cbooster setmsg <pesan>` / `settitle <judul>` — Atur pesan & judul kartu booster.",
       "`cbooster setlog <#channel>` — Atur channel log pengumuman booster.",
       "`cbooster setrolechannel <#channel>` — Atur channel klaim custom role booster.",
+      "`cbooster setdeleterolelog <#channel>` — Atur channel log khusus penghapusan custom role unboost.",
+      "`cbooster setbaserole <@role>` — Atur base anchor role (posisi custom role booster baru).",
       "`cbooster config` — Lihat ringkasan konfigurasi sistem booster.",
-      "`cbooster test` — Uji coba pratinjau kartu pengumuman booster."
+      "`cbooster test` — Uji coba pratinjau kartu pengumuman booster.",
+      "`cmyrole setrole @role` — Tambah role yang bisa klaim custom role (tanpa boost Discord).",
+      "`cmyrole removerole @role` — Hapus role dari daftar izin klaim custom role.",
+      "`cmyrole roles` — Lihat daftar role yang diizinkan klaim custom role."
     ]
   },
   admin_automation: {
@@ -5944,15 +6295,20 @@ const ADMIN_HELP_CATEGORIES = {
     label: "Autoresponse & Sticky Messages",
     description: "Pesan otomatis, pesan sticky per-channel, & media embed.",
     commands: [
-      "`cadd autoresponse <trigger> | <respon>` / `car` — Tambah respon otomatis baru.",
-      "`cedit autoresponse <id> <trigger> | <respon>` / `ear` — Edit respon otomatis.",
-      "`cdelete autoresponse <id>` / `dar` — Hapus respon otomatis.",
-      "`clist autoresponse` / `lar` — Lihat seluruh daftar respon otomatis.",
-      "`cenable autoresponse <id>` / `cdisable autoresponse <id>` — Aktifkan/nonaktifkan respon otomatis.",
-      "`c clean_autoresponse` / `cdedupe` — Bersihkan respon otomatis duplikat.",
-      "`c sticky set <pesan>` — Pasang pesan sticky di channel (otomatis di bawah pesan terbaru).",
+      "`car <trigger> | <respon>` — Tambah autoresponse teks baru.",
+      "`car <trigger>` + upload foto — Tambah autoresponse stiker/gambar dari galeri (otomatis compact).",
+      "`car setrole @role` — Izinkan role tertentu untuk menambah autoresponse.",
+      "`car removerole @role` — Hapus role dari daftar izin add autoresponse.",
+      "`car roles` — Lihat daftar role yang boleh menambah autoresponse.",
+      "`cear <id> <trigger> | <respon>` — Edit autoresponse teks atau foto berdasarkan ID.",
+      "`cdar <id>` — Hapus autoresponse (langsung, tanpa konfirmasi).",
+      "`cdar <id1> <id2> <id3>` — Hapus beberapa autoresponse sekaligus.",
+      "`clar` — Lihat seluruh daftar autoresponse dengan status & tipe.",
+      "`cenar <id>` / `disar <id>` — Aktifkan / nonaktifkan autoresponse.",
+      "`cdedupe` / `ccleanar` — Bersihkan autoresponse duplikat otomatis.",
+      "`c sticky set <pesan>` — Pasang pesan sticky di channel.",
       "`c sticky remove` — Hapus pesan sticky dari channel.",
-      "`c media enable/disable/status` — Pengaturan universal media embed converter."
+      "`c media enable/disable/status` — Pengaturan universal media embed."
     ]
   },
   admin_voice: {
@@ -5966,6 +6322,22 @@ const ADMIN_HELP_CATEGORIES = {
       "`c deafen voice @user` / `c df vc` — Server deafen pendengaran member di VC."
     ]
   },
+  admin_streak: {
+    emoji: "🔥",
+    label: "Flame, Couple, Tarot & Wordle System",
+    description: "Evaluasi harian, reset data streak, atur streak manual, & token recovery tarot.",
+    commands: [
+      "`cstreak eval` / `cstreak forceeval` — Jalankan evaluasi harian reset keaktifan streak manual.",
+      "`cstreak set @user1 @user2 <hari>` — Atur jumlah hari streak pasangan secara manual.",
+      "`cstreak reset all` / `cstreak reset @user` — Reset seluruh data streak server atau per member.",
+      "`cstreak resetbg @user` / `cremovebg` — Hapus background custom kartu streak.",
+      "`cstreak settings` — Lihat & ubah konfigurasi streak server (cooldown, recovery limit, channel).",
+      "`cresetrecovery` / `ctarotresetrecovery` — Reset/isi ulang token recovery tarot seluruh user menjadi 3/3.",
+      "`csetrecovery @user [jumlah]` / `ctarot setrecovery` — Set/isi token recovery tarot 1 user tertentu.",
+      "`csettarotstreak @user <jumlah>` / `ctarot setstreak` — Set jumlah hari streak tarot user secara manual.",
+      "`cwordle` / `cw new` — Game tebak kata 5 huruf interaktif & mode unlimited."
+    ]
+  },
   admin_panels: {
     emoji: "📋",
     label: "Panel Setup & Deploy",
@@ -5974,6 +6346,7 @@ const ADMIN_HELP_CATEGORIES = {
       "`cbmupdate` / `cupdatebm` — Update manual panel utama Music Control Center di channel musik.",
       "`cstaffpanel setup` — Deploy panel daftar staff & status kehadiran real-time.",
       "`cstaffpanel addrole <@role>` / `exclude <@role>` — Kelola divisi & pengecualian ID panel staff.",
+      "`cfixmenfess` / `cfixmenfessbuttons` — Pasang kembali tombol reply pada pesan menfess lama.",
       "`c leaderboard send [#channel]` — Pasang panel Live Leaderboard keaktifan chat/voice.",
       "`c leaderboard lobby add/remove/list` — Kelola daftar channel lobby leaderboard.",
       "`c leaderboard blacklist add/remove/list` — Kelola blacklist user dari leaderboard.",
@@ -5993,7 +6366,8 @@ const ADMIN_HELP_CATEGORIES = {
       "`/backup_now` — Backup instant database MongoDB & SQLite ke channel backup / DM owner.",
       "`/idcard_export` — Ekspor seluruh database ID Card member ke file JSON.",
       "`/tod_add` — Tambah pertanyaan Truth or Dare baru ke database.",
-      "`/sendembed` / `/sendembedv2` — Buat & kirim pesan embed custom yang indah."
+      "`/sendembed` / `/sendembedv2` — Buat & kirim pesan embed custom yang indah.",
+      "`cservers` — Lihat seluruh daftar server tempat bot beroperasi."
     ]
   }
 };
@@ -6023,21 +6397,18 @@ function buildHelpUI(selectedCategory = "home", userId = null) {
 
   const container = new ContainerBuilder();
   if (selectedCategory === "home" || !HELP_CATEGORIES[selectedCategory]) {
-    const categoriesDesc = Object.entries(HELP_CATEGORIES)
-      .map(([key, cat]) => `${cat.emoji} **${cat.label}**\n▸ *${cat.description}*`)
-      .join("\n\n");
+    const categoriesList = Object.entries(HELP_CATEGORIES)
+      .map(([key, cat]) => `▸ ${cat.emoji} **${cat.label}** — *${cat.description}*`)
+      .join("\n");
 
     container
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("# 📚 Mystral Assistant — Member Command Center"),
+        new TextDisplayBuilder().setContent("# 📚 Mystral Help Center"),
         new TextDisplayBuilder().setContent(
           [
-            "Selamat datang di pusat panduan perintah **Mystral**.",
-            "Gunakan perintah slash `/...` atau prefix `c...` untuk mengakses berbagai fitur keseruan server.",
+            "Pilih kategori perintah pada menu dropdown di bawah untuk melihat rincian panduan:",
             "",
-            "> **Pilih kategori fitur pada menu dropdown di bawah untuk melihat rincian perintah.**",
-            "",
-            categoriesDesc
+            categoriesList
           ].join("\n")
         )
       )
@@ -6045,7 +6416,7 @@ function buildHelpUI(selectedCategory = "home", userId = null) {
       .addActionRowComponents(row)
       .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("✨ Mystral Assistant • Community Grimoire & Help Center")
+        new TextDisplayBuilder().setContent("✨ Mystral Assistant • Community Help Center")
       );
   } else {
     const cat = HELP_CATEGORIES[selectedCategory];
@@ -6100,21 +6471,18 @@ function buildAdminHelpUI(selectedCategory = "home", userId = null) {
 
   const container = new ContainerBuilder();
   if (selectedCategory === "home" || !ADMIN_HELP_CATEGORIES[selectedCategory]) {
-    const categoriesDesc = Object.entries(ADMIN_HELP_CATEGORIES)
-      .map(([key, cat]) => `${cat.emoji} **${cat.label}**\n▸ *${cat.description}*`)
-      .join("\n\n");
+    const categoriesList = Object.entries(ADMIN_HELP_CATEGORIES)
+      .map(([key, cat]) => `▸ ${cat.emoji} **${cat.label}** — *${cat.description}*`)
+      .join("\n");
 
     container
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("# 🛡️ Mystral Assistant — Staff & Moderator Grimoire"),
+        new TextDisplayBuilder().setContent("# 🛡️ Mystral Staff Grimoire"),
         new TextDisplayBuilder().setContent(
           [
-            "Selamat datang di pusat bantuan **Staff & Moderator Server**.",
-            "Gunakan panduan perintah di bawah untuk kelola giliran tag staff, moderasi, role masal, autoresponse, dan panel setup.",
+            "Pilih kategori perintah staff/moderator pada menu dropdown di bawah untuk melihat rincian panduan:",
             "",
-            "> **Pilih kategori fitur pengelola pada menu dropdown di bawah untuk melihat rincian perintah.**",
-            "",
-            categoriesDesc
+            categoriesList
           ].join("\n")
         )
       )
@@ -6122,7 +6490,7 @@ function buildAdminHelpUI(selectedCategory = "home", userId = null) {
       .addActionRowComponents(row)
       .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
       .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("🛡️ Mystral Staff Shield • Khusus Administrator & Moderator")
+        new TextDisplayBuilder().setContent("🛡️ Mystral Staff Shield • Administrator & Moderator")
       );
   } else {
     const cat = ADMIN_HELP_CATEGORIES[selectedCategory];
@@ -6442,6 +6810,81 @@ function parseKeyValueArgs(text) {
   return args;
 }
 
+const AR_IMAGE_DIR = path.join(__dirname, 'data', 'autoresponses');
+if (!fs.existsSync(AR_IMAGE_DIR)) {
+  try { fs.mkdirSync(AR_IMAGE_DIR, { recursive: true }); } catch (_) { }
+}
+
+async function downloadAndStoreArImage(url, asSticker = true) {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+
+  try {
+    const res = await fetch(trimmed);
+    if (!res.ok) return null;
+    const arrayBuffer = await res.arrayBuffer();
+    let buffer = Buffer.from(arrayBuffer);
+    if (!buffer || buffer.length === 0) return null;
+
+    const contentType = res.headers.get("content-type") || "";
+    let ext = "png";
+    const isGif = contentType.includes("gif") || trimmed.split('?')[0].toLowerCase().endsWith(".gif");
+
+    if (contentType.includes("jpeg") || contentType.includes("jpg")) ext = "jpg";
+    else if (isGif) ext = "gif";
+    else if (contentType.includes("webp")) ext = "webp";
+    else {
+      const cleanUrl = trimmed.split('?')[0];
+      const match = cleanUrl.match(/\.(png|jpe?g|gif|webp)$/i);
+      if (match) ext = match[1].toLowerCase();
+    }
+
+    // Convert to compact sticker dimensions (max 180px) if asSticker is true and not an animated GIF
+    if (asSticker && !isGif) {
+      try {
+        const img = await loadImage(buffer);
+        let { width, height } = img;
+        const maxSize = 180;
+        if (width > maxSize || height > maxSize) {
+          if (width > height) {
+            height = Math.round((height * maxSize) / width);
+            width = maxSize;
+          } else {
+            width = Math.round((width * maxSize) / height);
+            height = maxSize;
+          }
+        }
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, width, height);
+        buffer = canvas.toBuffer("image/png");
+        ext = "png";
+      } catch (resizeErr) {
+        console.warn("[AR STICKER RESIZE WARN]", resizeErr.message);
+      }
+    }
+
+    const filename = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
+    const localFilePath = path.join(AR_IMAGE_DIR, filename);
+    fs.writeFileSync(localFilePath, buffer);
+
+    return {
+      localPath: localFilePath,
+      fileName: filename,
+      ext: ext,
+      base64: buffer.toString('base64'),
+      contentType: ext === "png" ? "image/png" : (contentType || `image/${ext}`),
+      isSticker: asSticker && !isGif
+    };
+  } catch (err) {
+    console.error("[AR IMAGE DOWNLOAD ERROR]", err);
+    return null;
+  }
+}
+
 async function checkAutoresponses(message) {
   const guildId = message.guild.id;
   const responses = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=? AND is_enabled=1`, [guildId]);
@@ -6483,18 +6926,71 @@ async function checkAutoresponses(message) {
         .replace(/{displayName}/g, message.member ? message.member.displayName : message.author.username)
         .replace(/{channel}/g, `<#${message.channel.id}>`);
 
+      // Resolve image attachment if available (base64 from MongoDB or local file)
+      let imgAttachment = null;
+      if (r.image_base64) {
+        try {
+          const buf = Buffer.from(r.image_base64, "base64");
+          const ext = r.image_ext || "png";
+          imgAttachment = new AttachmentBuilder(buf, { name: `image.${ext}` });
+        } catch (_) { }
+      }
+
+      if (!imgAttachment) {
+        const candidates = [finalResponse, r.attachment_url, r.response_text];
+        for (const cand of candidates) {
+          if (cand && typeof cand === "string") {
+            const trimmed = cand.trim();
+            if (fs.existsSync(trimmed)) {
+              imgAttachment = new AttachmentBuilder(trimmed);
+              break;
+            }
+          }
+        }
+      }
+
+      const isDirectImg = (u) => {
+        if (!u || typeof u !== "string") return false;
+        const trimmed = u.trim();
+        return /^https?:\/\//i.test(trimmed) && (!validateDirectImageUrl(trimmed) || /\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(trimmed));
+      };
+
       const payload = {};
       const embeds = [];
       const components = [];
-      if (r.embed_response) {
-        const embed = new EmbedBuilder().setColor(EMBED_COLOR).setDescription(finalResponse);
-        embeds.push(embed);
+      const isLocalFilePath = (s) => typeof s === "string" && (s.includes("autoresponses") || fs.existsSync(s.trim()));
+
+      if (imgAttachment) {
+        if (r.embed_response) {
+          const embed = new EmbedBuilder().setColor(EMBED_COLOR).setImage(`attachment://${imgAttachment.name}`);
+          if (finalResponse && !isLocalFilePath(finalResponse)) {
+            embed.setDescription(finalResponse);
+          }
+          embeds.push(embed);
+        } else {
+          if (finalResponse && !isLocalFilePath(finalResponse)) {
+            payload.content = finalResponse;
+          }
+        }
+        payload.files = [imgAttachment];
       } else {
-        payload.content = finalResponse;
-      }
-      if (r.attachment_url) {
-        const val = validateDirectImageUrl(r.attachment_url);
-        if (!val) payload.files = [r.attachment_url];
+        if (r.embed_response) {
+          const embed = new EmbedBuilder().setColor(EMBED_COLOR);
+          if (isDirectImg(finalResponse)) {
+            embed.setImage(finalResponse.trim());
+          } else {
+            embed.setDescription(finalResponse);
+          }
+          embeds.push(embed);
+        } else {
+          payload.content = finalResponse;
+        }
+
+        if (r.attachment_url && isDirectImg(r.attachment_url)) {
+          if (!payload.content || !payload.content.includes(r.attachment_url)) {
+            payload.content = payload.content ? `${payload.content}\n${r.attachment_url}` : r.attachment_url;
+          }
+        }
       }
       if (r.button_label && r.button_url) {
         const button = new ButtonBuilder().setLabel(r.button_label).setURL(r.button_url).setStyle(ButtonStyle.Link);
@@ -6511,13 +7007,34 @@ async function checkAutoresponses(message) {
       }
       if (embeds.length) payload.embeds = embeds;
       if (components.length) payload.components = components;
-      if (r.reply_mode === 'reply') {
-        payload.allowedMentions = { repliedUser: !!r.mention_user };
-        await message.reply(payload).catch(() => null);
-      } else {
-        payload.allowedMentions = { parse: r.mention_user ? ['users'] : [] };
-        await message.channel.send(payload).catch(() => null);
-      }
+
+      const sendResponsePayload = async (p) => {
+        try {
+          if (r.reply_mode === 'reply') {
+            p.allowedMentions = { repliedUser: !!r.mention_user };
+            return await message.reply(p);
+          } else {
+            p.allowedMentions = { parse: r.mention_user ? ['users'] : [] };
+            return await message.channel.send(p);
+          }
+        } catch (err) {
+          // If file upload failed (e.g. CDN download issue), fallback to sending content URL
+          if (p.files && p.files.length) {
+            const fallbackPayload = { ...p, content: finalResponse };
+            delete fallbackPayload.files;
+            if (r.reply_mode === 'reply') {
+              fallbackPayload.allowedMentions = { repliedUser: !!r.mention_user };
+              return await message.reply(fallbackPayload).catch(() => null);
+            } else {
+              fallbackPayload.allowedMentions = { parse: r.mention_user ? ['users'] : [] };
+              return await message.channel.send(fallbackPayload).catch(() => null);
+            }
+          }
+          return null;
+        }
+      };
+
+      await sendResponsePayload(payload);
       return true;
     }
   }
@@ -8735,6 +9252,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
 
     return list.find((r, idx) => {
       if (r.id !== undefined && r.id !== null && String(r.id).toLowerCase() === tid) return true;
+      if (String(r.trigger_text || "").trim().toLowerCase() === tid) return true;
       if (r._id) {
         const fullHex = String(r._id).toLowerCase();
         if (fullHex === tid || fullHex.slice(-6) === tid) return true;
@@ -8840,53 +9358,178 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
   }
 
   if (cmd === "add_autoresponse" || cmd === "create_autoresponse" || cmd === "ar" || cmd === "aar" || cmd === "arr" || cmd === "car" || cmd === "caar" || cmd === "carr" || cmd === "ccar" || ((cmd === "add" || cmd === "create") && (args[0] === "autoresponse" || args[0] === "ar"))) {
-    if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin `ManageGuild`.").setTimestamp();
+    const sub0 = (args[0] || "").toLowerCase();
+
+    // ─── Admin: konfigurasi role yang boleh tambah autoresponse ───
+    if (sub0 === "setrole" || sub0 === "addrole") {
+      const isAdmin = isBotOwner(authorId) || ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild);
+      if (!isAdmin) {
+        const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Hanya **Admin** yang bisa mengatur role izin autoresponse.").setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const roleTarget = ctx.message?.mentions?.roles?.first()
+        || (args[1] && ctx.guild.roles.cache.get(args[1].replace(/[<@&>]/g, "")))
+        || (args[1] && ctx.guild.roles.cache.find(r => r.name.toLowerCase() === args.slice(1).join(" ").toLowerCase()));
+      if (!roleTarget) {
+        const embed = new EmbedBuilder().setTitle("❌ Role Diperlukan").setColor(0xe74c3c).setDescription(`Format: \`car setrole @role\``).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const arRolesKey = `ar_allowed_roles_${ctx.guild.id}`;
+      const existingDoc = await MetaText.findOne({ key: arRolesKey }).lean().catch(() => null);
+      let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+      if (!roleIds.includes(roleTarget.id)) roleIds.push(roleTarget.id);
+      await MetaText.updateOne({ key: arRolesKey }, { $set: { value: roleIds } }, { upsert: true });
+      const embed = new EmbedBuilder().setTitle("✅ Role Izin AR Ditambahkan").setColor(0x2ecc71).setDescription(`Role <@&${roleTarget.id}> sekarang bisa menambahkan autoresponse.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
+
+    if (sub0 === "removerole" || sub0 === "delrole") {
+      const isAdmin = isBotOwner(authorId) || ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild);
+      if (!isAdmin) {
+        const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Hanya **Admin** yang bisa mengatur role izin autoresponse.").setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const roleTarget = ctx.message?.mentions?.roles?.first()
+        || (args[1] && ctx.guild.roles.cache.get(args[1].replace(/[<@&>]/g, "")));
+      if (!roleTarget) {
+        const embed = new EmbedBuilder().setTitle("❌ Role Diperlukan").setColor(0xe74c3c).setDescription(`Format: \`car removerole @role\``).setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const arRolesKey = `ar_allowed_roles_${ctx.guild.id}`;
+      const existingDoc = await MetaText.findOne({ key: arRolesKey }).lean().catch(() => null);
+      let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+      roleIds = roleIds.filter(id => id !== roleTarget.id);
+      await MetaText.updateOne({ key: arRolesKey }, { $set: { value: roleIds } }, { upsert: true });
+      const embed = new EmbedBuilder().setTitle("🗑️ Role Izin AR Dihapus").setColor(0xe67e22).setDescription(`Role <@&${roleTarget.id}> dihapus dari daftar izin autoresponse.`).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    if (sub0 === "roles" || sub0 === "listrole" || sub0 === "listroles") {
+      const arRolesKey = `ar_allowed_roles_${ctx.guild.id}`;
+      const existingDoc = await MetaText.findOne({ key: arRolesKey }).lean().catch(() => null);
+      const roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+      const roleMentions = roleIds.length
+        ? roleIds.map(id => ctx.guild.roles.cache.get(id) ? `• <@&${id}>` : `• ID \`${id}\` *(terhapus)*`).join("\n")
+        : "*Belum ada role yang didaftarkan.*";
+      const embed = new EmbedBuilder().setTitle("📋 Role Izin Add Autoresponse").setColor(0x3498db).setDescription(roleMentions + `\n\n💡 Admin: \`car setrole @role\` / \`car removerole @role\``).setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
+    // ─── Permission check: ManageGuild ATAU role yang dikonfigurasi ───
+    const arRolesDocPerm = await MetaText.findOne({ key: `ar_allowed_roles_${ctx.guild.id}` }).lean().catch(() => null);
+    const arAllowedRoleIds = Array.isArray(arRolesDocPerm?.value) ? arRolesDocPerm.value : [];
+    const hasArRole = arAllowedRoleIds.some(id => ctx.member.roles.cache.has(id));
+    const hasManageGuild = ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild);
+    if (!hasManageGuild && !hasArRole && !isBotOwner(authorId)) {
+      const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Anda tidak memiliki izin untuk menambah autoresponse.\n\n*Butuh: `ManageGuild` atau role yang diizinkan admin.*").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
+
     const startIdx = (cmd === "add" || cmd === "create") ? 1 : 0;
     const text = args.slice(startIdx).join(" ");
     const parsed = parseKeyValueArgs(text);
     let trigger = parsed.trigger;
     let response = parsed.response;
 
+    const rawText = text.trim();
+    const cleanTokens = args.slice(startIdx).filter(x => !x.includes("="));
+    const quoteMatches = [...rawText.matchAll(/"([^"]+)"|'([^']+)'/g)];
+
+    // Support image/file attachment from message or gallery upload (mobile / desktop)
+    let galleryImage = ctx.attachments?.first()?.url
+      || ctx.message?.attachments?.first()?.url
+      || null;
+
+    // Also support replying to a message that has an image attachment
+    if (!galleryImage && ctx.reference?.messageId) {
+      try {
+        const refMsg = await ctx.channel?.messages?.fetch(ctx.reference.messageId);
+        galleryImage = refMsg?.attachments?.first()?.url || null;
+      } catch (_) { }
+    }
+
+    const asSticker = !(parsed.full === "1" || parsed.size === "full" || parsed.sticker === "0");
+    let storedImage = null;
+    if (galleryImage) {
+      storedImage = await downloadAndStoreArImage(galleryImage, asSticker);
+    }
+
     if (!trigger || !response) {
-      const rawText = text.trim();
       if (rawText.includes("|")) {
         const parts = rawText.split("|");
         trigger = parts[0].trim();
-        response = parts.slice(1).join("|").trim();
-      } else {
-        const quoteMatches = [...rawText.matchAll(/"([^"]+)"|'([^']+)'/g)];
-        if (quoteMatches.length >= 2) {
+        response = parts.slice(1).join("|").trim() || null;
+      } else if (quoteMatches.length >= 2) {
+        trigger = quoteMatches[0][1] || quoteMatches[0][2];
+        response = quoteMatches[1][1] || quoteMatches[1][2];
+      } else if (galleryImage) {
+        // Jika ada lampiran gambar dan tanpa pemisah, seluruh teks adalah TRIGGER (misal: "bobo ah")!
+        if (quoteMatches.length === 1) {
           trigger = quoteMatches[0][1] || quoteMatches[0][2];
-          response = quoteMatches[1][1] || quoteMatches[1][2];
-        } else {
-          const cleanTokens = args.slice(startIdx).filter(x => !x.includes("="));
-          if (cleanTokens.length >= 2) {
-            trigger = cleanTokens[0];
-            response = cleanTokens.slice(1).join(" ");
+        } else if (cleanTokens.length >= 1) {
+          trigger = cleanTokens.join(" ").trim();
+        } else if (rawText) {
+          trigger = rawText.trim();
+        }
+        response = storedImage ? storedImage.localPath : galleryImage;
+      } else if (cleanTokens.length >= 2) {
+        trigger = cleanTokens[0];
+        response = cleanTokens.slice(1).join(" ");
+      }
+    }
+
+    if (galleryImage) {
+      const imgRef = storedImage ? storedImage.localPath : galleryImage;
+      if (!response) {
+        response = imgRef;
+        if (!trigger) {
+          if (quoteMatches.length >= 1) {
+            trigger = quoteMatches[0][1] || quoteMatches[0][2];
+          } else if (rawText.includes("|")) {
+            trigger = rawText.replace(/\|/g, "").trim();
+          } else if (cleanTokens.length >= 1) {
+            trigger = cleanTokens.join(" ").trim();
+          } else if (rawText) {
+            trigger = rawText;
           }
         }
+      } else if (!parsed.attachment) {
+        parsed.attachment = imgRef;
       }
     }
 
     if (!trigger || !response) {
+      const helpLines = [
+        "**Format yang Didukung:**",
+        `1. \`${PREFIX} car trigger="hai" response="Halo {mention}!"\``,
+        `2. \`${PREFIX} car hai | Halo {mention}!\` *(Pemisah tanda |)*`,
+        `3. \`${PREFIX} car "hai" "Halo {mention}!"\``,
+        `4. \`${PREFIX} car hai Halo {mention}!\``,
+        `5. \`${PREFIX} car bobo ah\` *(Upload foto/stiker dari galeri HP/PC — otomatis compact!)*`,
+        `6. Reply pesan foto/stiker lalu ketik \`${PREFIX} car bobo ah\``
+      ];
       const embed = new EmbedBuilder()
         .setTitle("💡 Cara Menambahkan Autoresponse")
         .setColor(EMBED_COLOR)
-        .setDescription(
-          `**Format yang Didukung:**\n` +
-          `1. \`${PREFIX} car trigger="hai" response="Halo {mention}!"\`\n` +
-          `2. \`${PREFIX} car hai | Halo {mention}!\` *(Menggunakan garis tegak ` | `)*\n` +
-          `3. \`${PREFIX} car "hai" "Halo {mention}!"\`\n` +
-          `4. \`${PREFIX} car hai Halo {mention}!\``
+        .setDescription(String(helpLines.join("\n")))
+        .addFields(
+          {
+            name: "🖼️ Autoresponse Gambar / Stiker",
+            value: "• Ketik `car <trigger>` (misal: `car bobo ah`) sambil melampirkan foto dari galeri.\n• Gambar otomatis di-resize menjadi **stiker compact (180x180 px)** agar rapi dan tidak memenuhi chat.\n• Tambahkan `full=1` jika ingin ukuran gambar asli/penuh."
+          },
+          {
+            name: "⚙️ Opsi Tambahan (Key-Value)",
+            value: "• `match=exact|contains|regex`\n• `ignore_case=1|0`\n• `cooldown=detik`\n• `embed=1|0`\n• `reply=1|0`\n• `mention=1|0`\n• `full=1|0` *(ukuran gambar penuh)*\n• `random=\"hai;halo\"`\n• `attachment=\"https://...\"`\n• `button=\"Label\" button_url=\"https://...\"`"
+          }
         )
-        .addFields({
-          name: "Opsi Tambahan (Key-Value)",
-          value: "• `match=exact|contains|regex`\n• `ignore_case=1|0`\n• `cooldown=detik`\n• `embed=1|0`\n• `reply=1|0`\n• `mention=1|0`\n• `random=\"hai;halo\"`\n• `attachment=\"https://...\"`\n• `button=\"Label\" button_url=\"https://...\"`"
-        })
         .setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
@@ -8896,6 +9539,30 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const existingList = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
     const existing = existingList.find(r => String(r.trigger_text || "").trim().toLowerCase() === trigger.trim().toLowerCase());
     if (existing) {
+      // If user provided a new image, update existing autoresponse directly!
+      if (storedImage || galleryImage) {
+        const AR = getMongoModel("autoresponses");
+        const updateFields = {
+          response_text: response,
+          attachment_url: parsed.attachment || null,
+          image_base64: storedImage ? storedImage.base64 : null,
+          image_ext: storedImage ? storedImage.ext : null,
+        };
+        if (AR && existing._id) {
+          await AR.updateOne({ _id: existing._id }, { $set: updateFields });
+        } else {
+          await safeRun(`UPDATE autoresponses SET response_text=?, attachment_url=? WHERE id=? AND guild_id=?`, [response, parsed.attachment || null, existing.id, ctx.guild.id]);
+        }
+        const exId = existing.id !== undefined && existing.id !== null ? existing.id : (existing._id ? String(existing._id).slice(-6) : "?");
+        const embedUpdate = new EmbedBuilder()
+          .setTitle("✅ Autoresponse Diperbarui")
+          .setColor(0x2ecc71)
+          .setDescription(`Gambar autoresponse untuk trigger \`${trigger}\` (ID \`${exId}\`) berhasil diperbarui dan disimpan secara permanen! 📸`)
+          .setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embedUpdate] });
+        return true;
+      }
+
       const exId = existing.id !== undefined && existing.id !== null ? existing.id : (existing._id ? String(existing._id).slice(-6) : "?");
       const embed = new EmbedBuilder()
         .setTitle("⚠️ Trigger Sudah Terdaftar")
@@ -8917,15 +9584,43 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const buttonLabel = parsed.button || null;
     const buttonUrl = parsed.button_url || null;
     const selectMenuOptions = parsed.select ? JSON.stringify(parsed.select.split(";")) : null;
-    await safeRun(
-      `INSERT INTO autoresponses (guild_id, trigger_text, response_text, match_type, ignore_case, cooldown, reply_mode, mention_user, embed_response, random_responses, attachment_url, button_label, button_url, select_menu_options)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ctx.guild.id, trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions]
-    );
+    const createdBy = (ctx.author ? (ctx.author.username || ctx.author.tag) : null) || "2cyi";
+
+    const AR = getMongoModel("autoresponses");
+    if (AR) {
+      const count = await AR.countDocuments({ guild_id: String(ctx.guild.id) });
+      await AR.create({
+        id: count + 1,
+        guild_id: String(ctx.guild.id),
+        trigger_text: trigger,
+        response_text: response,
+        match_type: matchType,
+        ignore_case: ignoreCase,
+        cooldown: cooldown,
+        reply_mode: replyMode,
+        mention_user: mentionUser,
+        embed_response: embedVal,
+        random_responses: randomResponses,
+        attachment_url: attachmentUrl,
+        button_label: buttonLabel,
+        button_url: buttonUrl,
+        select_menu_options: selectMenuOptions,
+        created_by: createdBy,
+        is_enabled: 1,
+        image_base64: storedImage ? storedImage.base64 : null,
+        image_ext: storedImage ? storedImage.ext : null
+      });
+    } else {
+      await safeRun(
+        `INSERT INTO autoresponses (guild_id, trigger_text, response_text, match_type, ignore_case, cooldown, reply_mode, mention_user, embed_response, random_responses, attachment_url, button_label, button_url, select_menu_options, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [ctx.guild.id, trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, createdBy]
+      );
+    }
     const embedSuccess = new EmbedBuilder()
       .setTitle("✅ Autoresponse Ditambahkan")
       .setColor(0x2ecc71)
-      .setDescription(`Autoresponse untuk trigger \`${trigger}\` berhasil disimpan.`)
+      .setDescription(`Autoresponse untuk trigger \`${trigger}\` berhasil disimpan secara permanen.${storedImage ? ' 📸 *(Gambar tersimpan)*' : ''}`)
       .setTimestamp();
     await safeCtxReply(ctx, { embeds: [embedSuccess] });
     return true;
@@ -8955,8 +9650,18 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       return true;
     }
 
+    let editGalleryImage = ctx.attachments?.first()?.url
+      || ctx.message?.attachments?.first()?.url
+      || null;
+    if (!editGalleryImage && ctx.reference?.messageId) {
+      try {
+        const refMsg = await ctx.channel?.messages?.fetch(ctx.reference.messageId);
+        editGalleryImage = refMsg?.attachments?.first()?.url || null;
+      } catch (_) { }
+    }
+
     const trigger = parsed.trigger !== undefined ? parsed.trigger : ar.trigger_text;
-    const response = parsed.response !== undefined ? parsed.response : ar.response_text;
+    let response = parsed.response !== undefined ? parsed.response : ar.response_text;
     const matchType = parsed.match !== undefined ? parsed.match : ar.match_type;
     const ignoreCase = parsed.ignore_case !== undefined ? parseInt(parsed.ignore_case) : ar.ignore_case;
     const cooldown = parsed.cooldown !== undefined ? parseInt(parsed.cooldown) : ar.cooldown;
@@ -8964,10 +9669,23 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const replyMode = parsed.reply !== undefined ? (parseInt(parsed.reply) === 0 ? 'send' : 'reply') : ar.reply_mode;
     const mentionUser = parsed.mention !== undefined ? parseInt(parsed.mention) : ar.mention_user;
     const randomResponses = parsed.random !== undefined ? JSON.stringify(parsed.random.split(";")) : ar.random_responses;
-    const attachmentUrl = parsed.attachment !== undefined ? parsed.attachment : ar.attachment_url;
+    let attachmentUrl = parsed.attachment !== undefined ? parsed.attachment : ar.attachment_url;
+    const asSticker = !(parsed.full === "1" || parsed.size === "full" || parsed.sticker === "0");
+    let editStoredImage = null;
+    if (editGalleryImage) {
+      editStoredImage = await downloadAndStoreArImage(editGalleryImage, asSticker);
+      const imgRef = editStoredImage ? editStoredImage.localPath : editGalleryImage;
+      if (parsed.response === undefined && (!attachmentUrl || parsed.attachment === undefined)) {
+        if (ar.attachment_url) attachmentUrl = imgRef;
+        else response = imgRef;
+      } else if (!attachmentUrl) {
+        attachmentUrl = imgRef;
+      }
+    }
     const buttonLabel = parsed.button !== undefined ? parsed.button : ar.button_label;
     const buttonUrl = parsed.button_url !== undefined ? parsed.button_url : ar.button_url;
     const selectMenuOptions = parsed.select !== undefined ? JSON.stringify(parsed.select.split(";")) : ar.select_menu_options;
+    const createdBy = parsed.created_by !== undefined ? parsed.created_by : (ar.created_by || "2cyi");
 
     const AR = getMongoModel("autoresponses");
     if (AR && ar._id) {
@@ -8985,13 +9703,18 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
           attachment_url: attachmentUrl,
           button_label: buttonLabel,
           button_url: buttonUrl,
-          select_menu_options: selectMenuOptions
+          select_menu_options: selectMenuOptions,
+          created_by: createdBy,
+          ...(editStoredImage ? {
+            image_base64: editStoredImage.base64,
+            image_ext: editStoredImage.ext
+          } : {})
         }
       });
     } else {
       await safeRun(
-        `UPDATE autoresponses SET trigger_text=?, response_text=?, match_type=?, ignore_case=?, cooldown=?, reply_mode=?, mention_user=?, embed_response=?, random_responses=?, attachment_url=?, button_label=?, button_url=?, select_menu_options=? WHERE id=? AND guild_id=?`,
-        [trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, ar.id, ctx.guild.id]
+        `UPDATE autoresponses SET trigger_text=?, response_text=?, match_type=?, ignore_case=?, cooldown=?, reply_mode=?, mention_user=?, embed_response=?, random_responses=?, attachment_url=?, button_label=?, button_url=?, select_menu_options=?, created_by=? WHERE id=? AND guild_id=?`,
+        [trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, createdBy, ar.id, ctx.guild.id]
       );
     }
 
@@ -9012,52 +9735,74 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       return true;
     }
     const startIdx = (cmd === "delete" || cmd === "del") ? 1 : 0;
-    const text = args.slice(startIdx).join(" ");
-    const parsed = parseKeyValueArgs(text);
+    const rawIds = args.slice(startIdx)
+      .join(" ")
+      .split(/[\s,]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
 
-    const idArg = getArIdArg(args, parsed);
-    if (!idArg) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse yang ingin dihapus.").setTimestamp();
+    if (!rawIds.length) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse yang ingin dihapus. Bisa lebih dari satu, atau ketik `dar all` untuk menghapus semua.\n\n**Contoh:** `dar 5` atau `dar 1 2 3` atau `dar all`").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
 
-    const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
-    if (!ar) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Autoresponse dengan ID \`${idArg}\` tidak ditemukan.`).setTimestamp();
+    // Support: dar all / dar semua → hapus semua autoresponse
+    if (rawIds[0] === "all" || rawIds[0] === "semua") {
+      const allAr = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+      let count = 0;
+      for (const ar of allAr) {
+        await deleteAutoResponseDoc(ctx.guild.id, ar);
+        count++;
+      }
+      const embed = new EmbedBuilder()
+        .setTitle("🗑️ Semua Autoresponse Dihapus")
+        .setColor(0x2ecc71)
+        .setDescription(`**${count}** autoresponse berhasil dihapus dari server ini.`)
+        .setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
 
-    const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
-    const action = async () => {
+    // Multi-ID support: hapus semua ID yang disebutkan langsung tanpa konfirmasi
+    const deleted = [];
+    const notFound = [];
+    for (const idArg of rawIds) {
+      const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
+      if (!ar) {
+        notFound.push(idArg);
+        continue;
+      }
       await deleteAutoResponseDoc(ctx.guild.id, ar);
-      const embedSuccess = new EmbedBuilder().setTitle("✅ Autoresponse Dihapus").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${displayId}\` berhasil dihapus.`).setTimestamp();
-      await safeCtxReply(ctx, { embeds: [embedSuccess] });
-    };
-    const embedConfirm = new EmbedBuilder()
-      .setTitle("⚠️ Konfirmasi Hapus Autoresponse")
-      .setColor(0xffaa00)
-      .setDescription(`Anda akan menghapus autoresponse ID \`${displayId}\` (Trigger: \`${ar.trigger_text}\`).`)
-      .addFields({ name: "Aksi Konfirmasi", value: "Ketik `confirm` untuk melanjutkan." })
-      .setFooter({ text: "Expired dalam 60 detik" })
+      const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
+      deleted.push(`\`${displayId}\` *(${ar.trigger_text})*`);
+    }
+
+    let desc = "";
+    if (deleted.length) desc += `**✅ Berhasil dihapus (${deleted.length}):**\n${deleted.join("\n")}`;
+    if (notFound.length) desc += `${deleted.length ? "\n\n" : ""}**❌ Tidak ditemukan:**\n${notFound.map(id => `\`${id}\``).join(", ")}`;
+
+    const embedResult = new EmbedBuilder()
+      .setTitle(deleted.length ? "🗑️ Autoresponse Dihapus" : "❌ Tidak Ada yang Dihapus")
+      .setColor(deleted.length ? 0x2ecc71 : 0xe74c3c)
+      .setDescription(desc || "Tidak ada autoresponse yang diproses.")
       .setTimestamp();
-    pendingConfirmations.set(authorId, { expires: Date.now() + 60000, action, message: { embeds: [embedConfirm] } });
-    await safeCtxReply(ctx, { embeds: [embedConfirm] });
+    await safeCtxReply(ctx, { embeds: [embedResult] });
     return true;
   }
 
   if (cmd === "list_autoresponse" || cmd === "lar" || cmd === "clar" || (cmd === "list" && (args[0] === "autoresponse" || args[0] === "ar"))) {
     const list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
     if (!list.length) {
-      const container = new ContainerBuilder().setAccentColor(0x3498db);
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`## 📋 Daftar Autoresponse\n\n_Belum ada autoresponse di server ini._`)
-      );
+      const container = new ContainerBuilder().setAccentColor(0x3498db)
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(`## 📋 Daftar Autoresponse\n\n> *Belum ada autoresponse di server ini.*\n\n💡 Tambah dengan: \`car <trigger> | <respon>\``)
+        );
       await safeCtxReply(ctx, { components: [container], flags: MessageFlags.IsComponentsV2 });
       return true;
     }
 
+    // Hitung duplikat
     const triggerCounts = new Map();
     list.forEach(r => {
       const key = String(r.trigger_text || "").trim().toLowerCase();
@@ -9066,27 +9811,70 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     let dupTotal = 0;
     triggerCounts.forEach(count => { if (count > 1) dupTotal += (count - 1); });
 
-    const lines = list.map((r, idx) => {
+    // Pisahkan aktif & nonaktif
+    const isArEnabled = (r) => r.is_enabled === 1 || r.is_enabled === true || r.is_enabled === "1" || (r.is_enabled !== 0 && r.is_enabled !== "0" && r.is_enabled !== false);
+    const activeList = list.filter(isArEnabled);
+    const inactiveList = list.filter(r => !isArEnabled(r));
+
+    const formatEntry = (r, idx) => {
       const arId = r.id !== undefined && r.id !== null ? r.id : (r._id ? String(r._id).slice(-6) : (idx + 1));
-      const statusText = r.is_enabled ? "Aktif" : "Nonaktif";
-      const responseSnippet = String(r.response_text || "").replace(/\n/g, " ").slice(0, 45);
-      return `\`[ID ${arId}]\` **${r.trigger_text}** ➔ \`${responseSnippet}\` (${statusText})`;
-    });
+      const trigger = String(r.trigger_text || "").slice(0, 30);
+      const response = String(r.response_text || "").replace(/\n/g, " ").slice(0, 40);
+      const matchIcon = r.match_type === "exact" ? "🎯" : r.match_type === "contains" ? "🔍" : r.match_type === "regex" ? "🔣" : "🎯";
+      const cooldownText = r.cooldown > 0 ? ` ⏱${r.cooldown}s` : "";
+      const creatorText = r.created_by ? ` • *by ${r.created_by}*` : "";
+      return `${matchIcon} \`#${arId}\` **${trigger}**${cooldownText}${creatorText}\n> ↳ ${response}`;
+    };
 
-    let contentStr = `## 📋 Daftar Autoresponse — ${ctx.guild.name}\n` +
-      `Total **${list.length}** autoresponse terdaftar di server ini.`;
+    // Header
+    const totalActive = activeList.length;
+    const totalInactive = inactiveList.length;
+    let headerStr = `## 📋 Daftar Autoresponse — ${ctx.guild.name}\n`;
+    headerStr += `🟢 **${totalActive} Aktif** ・ 🔴 **${totalInactive} Nonaktif** ・ 📦 **Total ${list.length}**`;
+    if (dupTotal > 0) headerStr += `\n⚠️ *${dupTotal} duplikat terdeteksi — ketik \`cdedupe\` untuk membersihkan.*`;
+    headerStr += `\n\n> 🎯 exact ・ 🔍 contains ・ 🔣 regex ・ ⏱ cooldown detik`;
 
-    if (dupTotal > 0) {
-      contentStr += `\n⚠️ *Terdeteksi **${dupTotal}** autoresponse duplikat. Ketik \`${PREFIX} cleanar\` untuk membersihkannya secara otomatis.*`;
+    const container = new ContainerBuilder().setAccentColor(0x5865f2);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(headerStr));
+
+    // Seksi Aktif
+    if (activeList.length > 0) {
+      const activeChunks = [];
+      let chunk = "";
+      for (let i = 0; i < activeList.length; i++) {
+        const entry = formatEntry(activeList[i], i) + "\n";
+        if ((chunk + entry).length > 1800) {
+          activeChunks.push(chunk.trim());
+          chunk = entry;
+        } else {
+          chunk += entry;
+        }
+      }
+      if (chunk.trim()) activeChunks.push(chunk.trim());
+
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🟢 Autoresponse Aktif (${activeList.length})`));
+      for (const c of activeChunks) {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(c));
+      }
     }
-    contentStr += `\n\n` + lines.join("\n");
 
-    const container = new ContainerBuilder().setAccentColor(0x3498db);
+    // Seksi Nonaktif
+    if (inactiveList.length > 0) {
+      const inactiveLines = inactiveList.map((r, i) => {
+        const arId = r.id !== undefined && r.id !== null ? r.id : (r._id ? String(r._id).slice(-6) : (i + 1));
+        const trigger = String(r.trigger_text || "").slice(0, 30);
+        return `🔴 \`#${arId}\` ~~${trigger}~~`;
+      });
+      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(`### 🔴 Nonaktif (${inactiveList.length})\n${inactiveLines.join(" ・ ")}`)
+      );
+    }
+
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
     container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(contentStr)
-    );
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`*Requested by ${authorTag}*`)
+      new TextDisplayBuilder().setContent(`📌 \`dar <id>\` hapus ・ \`enar/disar <id>\` toggle ・ \`ear <id>\` edit  •  *by ${authorTag}*`)
     );
 
     await safeCtxReply(ctx, { components: [container], flags: MessageFlags.IsComponentsV2 });
@@ -9099,21 +9887,44 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const idArg = getArIdArg(args, parseKeyValueArgs(args.join(" ")));
-    if (!idArg) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse.").setTimestamp();
+    const startArgIdx = (cmd === "enable") ? 1 : 0;
+    const rawIds = args.slice(startArgIdx).map(s => s.trim()).filter(Boolean);
+
+    // Support: enar all → aktifkan semua
+    if (rawIds[0] === "all" || rawIds[0] === "semua") {
+      const allAr = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+      let count = 0;
+      for (const ar of allAr) {
+        if (!ar.is_enabled) {
+          await setAutoResponseStatusDoc(ctx.guild.id, ar, true);
+          count++;
+        }
+      }
+      const embed = new EmbedBuilder().setTitle("✅ Semua Autoresponse Diaktifkan").setColor(0x2ecc71)
+        .setDescription(`**${count}** autoresponse berhasil diaktifkan${count === 0 ? " (semua sudah aktif)" : ""}.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
-    if (!ar) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Autoresponse dengan ID \`${idArg}\` tidak ditemukan.`).setTimestamp();
+
+    // Support: enar 1 2 3 → aktifkan multi-ID
+    const enabled = [];
+    const notFound = [];
+    for (const idArg of rawIds) {
+      const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
+      if (!ar) { notFound.push(idArg); continue; }
+      await setAutoResponseStatusDoc(ctx.guild.id, ar, true);
+      const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
+      enabled.push(`\`${displayId}\` *(${ar.trigger_text})*`);
+    }
+    if (!rawIds.length) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse atau ketik `enar all` untuk aktifkan semua.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    await setAutoResponseStatusDoc(ctx.guild.id, ar, true);
-    const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
-    const embed = new EmbedBuilder().setTitle("✅ Autoresponse Diaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${displayId}\` berhasil diaktifkan.`).setTimestamp();
+    let desc = "";
+    if (enabled.length) desc += `**✅ Diaktifkan (${enabled.length}):**\n${enabled.join("\n")}`;
+    if (notFound.length) desc += `${enabled.length ? "\n\n" : ""}**❌ Tidak ditemukan:** ${notFound.map(i => `\`${i}\``).join(", ")}`;
+    const embed = new EmbedBuilder().setTitle("🟢 Autoresponse Diaktifkan").setColor(0x2ecc71).setDescription(desc).setTimestamp();
     await safeCtxReply(ctx, { embeds: [embed] });
     return true;
   }
@@ -9124,21 +9935,44 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const idArg = getArIdArg(args, parseKeyValueArgs(args.join(" ")));
-    if (!idArg) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse.").setTimestamp();
+    const startArgIdx = (cmd === "disable") ? 1 : 0;
+    const rawIds = args.slice(startArgIdx).map(s => s.trim()).filter(Boolean);
+
+    // Support: disar all → nonaktifkan semua
+    if (rawIds[0] === "all" || rawIds[0] === "semua") {
+      const allAr = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+      let count = 0;
+      for (const ar of allAr) {
+        if (ar.is_enabled !== 0) {
+          await setAutoResponseStatusDoc(ctx.guild.id, ar, false);
+          count++;
+        }
+      }
+      const embed = new EmbedBuilder().setTitle("🔴 Semua Autoresponse Dinonaktifkan").setColor(0xe67e22)
+        .setDescription(`**${count}** autoresponse berhasil dinonaktifkan${count === 0 ? " (semua sudah nonaktif)" : ""}.`).setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
-    if (!ar) {
-      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription(`Autoresponse dengan ID \`${idArg}\` tidak ditemukan.`).setTimestamp();
+
+    // Support: disar 1 2 3 → nonaktifkan multi-ID
+    const disabled = [];
+    const notFound = [];
+    for (const idArg of rawIds) {
+      const ar = await findAutoResponseDoc(ctx.guild.id, idArg);
+      if (!ar) { notFound.push(idArg); continue; }
+      await setAutoResponseStatusDoc(ctx.guild.id, ar, false);
+      const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
+      disabled.push(`\`${displayId}\` *(${ar.trigger_text})*`);
+    }
+    if (!rawIds.length) {
+      const embed = new EmbedBuilder().setTitle("❌ Tindakan Gagal").setColor(0xe74c3c).setDescription("Sebutkan ID autoresponse atau ketik `disar all` untuk nonaktifkan semua.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
-    await setAutoResponseStatusDoc(ctx.guild.id, ar, false);
-    const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
-    const embed = new EmbedBuilder().setTitle("✅ Autoresponse Dinonaktifkan").setColor(0x2ecc71).setDescription(`Autoresponse ID \`${displayId}\` berhasil dinonaktifkan.`).setTimestamp();
+    let desc = "";
+    if (disabled.length) desc += `**🔴 Dinonaktifkan (${disabled.length}):**\n${disabled.join("\n")}`;
+    if (notFound.length) desc += `${disabled.length ? "\n\n" : ""}**❌ Tidak ditemukan:** ${notFound.map(i => `\`${i}\``).join(", ")}`;
+    const embed = new EmbedBuilder().setTitle("🔴 Autoresponse Dinonaktifkan").setColor(0xe67e22).setDescription(desc).setTimestamp();
     await safeCtxReply(ctx, { embeds: [embed] });
     return true;
   }
@@ -10138,9 +10972,37 @@ async function updateLiveLeaderboards(client) {
   }
 }
 
+async function ensureAutoresponsesNormalized() {
+  try {
+    const AR = getMongoModel("autoresponses");
+    if (!AR) return;
+    const docs = await AR.find({}).sort({ _id: 1 });
+    if (!docs || !docs.length) return;
+    const guildMap = new Map();
+    for (const doc of docs) {
+      const gId = String(doc.guild_id || "");
+      const currentMax = guildMap.get(gId) || 0;
+      const nextId = (doc.id && Number.isInteger(doc.id)) ? Math.max(currentMax, doc.id) : currentMax + 1;
+      guildMap.set(gId, nextId);
+
+      const updateFields = {};
+      if (doc.is_enabled === undefined || doc.is_enabled === null) updateFields.is_enabled = 1;
+      if (doc.id === undefined || doc.id === null) updateFields.id = nextId;
+      if (!doc.created_by) updateFields.created_by = "2cyi";
+
+      if (Object.keys(updateFields).length > 0) {
+        await AR.updateOne({ _id: doc._id }, { $set: updateFields });
+      }
+    }
+  } catch (err) {
+    console.error("[AUTO-RESPONSE NORMALIZE ERROR]", err.message);
+  }
+}
+
 // ===================== READY =====================
 client.once(Events.ClientReady, async (c) => {
   await initVoiceTracking(c);
+  await ensureAutoresponsesNormalized().catch(() => null);
 
   // Load sticky messages
   const stickies = await safeAll("SELECT * FROM sticky_messages").catch(() => []);
@@ -10171,6 +11033,7 @@ client.once(Events.ClientReady, async (c) => {
 
   startGiveawayLoop(c); // ✅ sekarang pasti kebaca (global)
   startTimedRolesLoop(c);
+  await restoreMenfessButtons(c);
 
 
   // ===================== AUTO BACKUP =====================
@@ -10619,11 +11482,14 @@ async function handleTebakAngkaLeaderboard(client, guildId, interactionOrMessage
 }
 
 async function handleGuessNumberAttempt(message) {
-  if (!message || !message.guild || !message.channel || !message.author) return false;
+  if (!message || !message.guild || !message.channel || !message.author || message.author.bot) return false;
   const game = getGuessNumberGame(message.guild.id, message.channel.id);
   if (!game) return false;
 
-  const raw = message.content.trim();
+  let raw = message.content.trim();
+  if (typeof PREFIX === "string" && PREFIX && raw.startsWith(PREFIX)) {
+    raw = raw.slice(PREFIX.length).trim();
+  }
   if (!/^\d{1,4}$/.test(raw)) return false;
 
   const guess = Number(raw);
@@ -10636,7 +11502,7 @@ async function handleGuessNumberAttempt(message) {
     stopGuessNumberGame(message.guild.id, message.channel.id);
     await addGuessNumberWin(message.guild.id, message.author.id, attempts);
     await message.reply({
-      content: `🎉 **${guess} benar!**\n<@${message.author.id}> menang dengan total **${attempts} percobaan**.\n+1 win masuk ke leaderboard.`,
+      content: `🎉 **${guess} benar!**\n<@${message.author.id}> berhasil menebak dengan total **${attempts} percobaan**.\n🏆 +1 win telah ditambahkan ke leaderboard!`,
       allowedMentions: { users: [message.author.id], repliedUser: false },
     }).catch(() => null);
     return true;
@@ -10644,14 +11510,14 @@ async function handleGuessNumberAttempt(message) {
 
   if (guess < game.answer) {
     await message.reply({
-      content: `📉 **${guess} terlalu kecil!** coba angka yang lebih besar.`,
+      content: `📉 **${guess} terlalu kecil!** Coba angka yang lebih besar.`,
       allowedMentions: { repliedUser: false },
     }).catch(() => null);
     return true;
   }
 
   await message.reply({
-    content: `📈 **${guess} terlalu besar!** coba angka yang lebih kecil.`,
+    content: `📈 **${guess} terlalu besar!** Coba angka yang lebih kecil.`,
     allowedMentions: { repliedUser: false },
   }).catch(() => null);
   return true;
@@ -11308,7 +12174,7 @@ async function handleBoosterJoin(member) {
       }
     }
 
-    console.log(`[BOOSTER ROLE] Created role '${roleName}' for ${member.user.tag}`);
+    console.log(`[BOOSTER REWARD] Processed booster join event for ${member.user.tag}`);
   } catch (err) {
     console.error("[BOOSTER ROLE JOIN ERROR]", err);
   }
@@ -11331,14 +12197,35 @@ async function handleBoosterLeave(member) {
     // Remove from DB
     await BoosterCustomRole.deleteOne({ user_id: member.id, guild_id: guild.id }).catch(() => null);
 
-    // Log
-    const logChId = await MetaText.findOne({ key: `booster_log_channel_${guild.id}` }).lean().catch(() => null);
-    if (logChId?.value) {
-      const logCh = guild.channels.cache.get(logChId.value);
+    // Log deletion event using ContainerBuilder V2
+    const delLogChId = await MetaText.findOne({ key: `customrole_deletion_log_channel_${guild.id}` }).lean().catch(() => null);
+    const boosterLogChId = delLogChId?.value ? delLogChId : await MetaText.findOne({ key: `booster_log_channel_${guild.id}` }).lean().catch(() => null);
+
+    if (boosterLogChId?.value) {
+      const logCh = guild.channels.cache.get(boosterLogChId.value);
       if (logCh?.isTextBased()) {
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("# 🗑️ Custom Role Dihapus"),
+            new TextDisplayBuilder().setContent(
+              [
+                `Custom role milik <@${member.id}> telah dihapus oleh sistem.`,
+                "",
+                `👤 **User:** <@${member.id}> (\`${member.id}\`)`,
+                `📌 **Alasan:** User tidak lagi melakukan Server Boost.`,
+                `🏷️ **Role ID:** \`${doc.role_id}\``
+              ].join("\n")
+            )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent("✨ Mystral Assistant • Custom Role Logger")
+          );
+
         logCh.send({
-          content: `🗑️ Custom role <@${member.id}> telah dihapus karena tidak lagi boost server.`,
-          allowedMentions: { parse: [] },
+          components: [container],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] }
         }).catch(() => null);
       }
     }
@@ -11347,6 +12234,85 @@ async function handleBoosterLeave(member) {
   } catch (err) {
     console.error("[BOOSTER ROLE LEAVE ERROR]", err);
   }
+}
+
+async function buildBoosterListContainer(guild, page = 0) {
+  const allBoosterDocs = await BoosterCustomRole.find({ guild_id: guild.id }).lean().catch(() => []) || [];
+  const boostersList = guild.members.cache.filter(m => m.premiumSince !== null);
+
+  const totalBoosts = guild.premiumSubscriptionCount || 0;
+  const boostLevel = guild.premiumTier;
+
+  const perPage = 8;
+  const maxPage = Math.max(1, Math.ceil(allBoosterDocs.length / perPage));
+  const currentPage = Math.min(Math.max(0, page), maxPage - 1);
+
+  const pageDocs = allBoosterDocs.slice(currentPage * perPage, (currentPage + 1) * perPage);
+
+  const roleEntriesText = [];
+  for (const doc of pageDocs) {
+    const role = guild.roles.cache.get(doc.role_id);
+    const ownerMember = guild.members.cache.get(doc.user_id) || await guild.members.fetch(doc.user_id).catch(() => null);
+    const ownerTag = ownerMember ? `<@${ownerMember.id}>` : `<@${doc.user_id}>`;
+
+    let roleDisplay = role ? `<@&${role.id}> (\`${role.name}\`)` : `\`Role Deleted (${doc.role_id})\``;
+
+    roleEntriesText.push(`▸ 🎭 ${roleDisplay}  •  👑 Pemilik: ${ownerTag}`);
+  }
+
+  const createdUserIds = new Set(allBoosterDocs.map(d => d.user_id));
+  const uncreatedBoosters = Array.from(boostersList.values()).filter(m => !createdUserIds.has(m.id));
+  const uncreatedText = uncreatedBoosters.length > 0
+    ? uncreatedBoosters.map(m => `<@${m.id}>`).slice(0, 8).join(", ") + (uncreatedBoosters.length > 8 ? ` *+${uncreatedBoosters.length - 8} lainnya*` : "")
+    : "*Semua booster telah membuat custom role!* 🎉";
+
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# 💖 Server Booster & Custom Role Directory`),
+      new TextDisplayBuilder().setContent(
+        [
+          `✨ **Statistik Booster Server:**`,
+          `▸ Total Server Boosts: **${totalBoosts} Boosts** (Level ${boostLevel})`,
+          `▸ Member Boosting: **${boostersList.size} Member**`,
+          `▸ Custom Role Terdaftar: **${allBoosterDocs.length} Role**`,
+          "",
+          `📌 **Daftar Custom Role Booster (Halaman ${currentPage + 1}/${maxPage}):**`,
+          "*Ketik `cmyrole info @user` atau `cbooster info @user` untuk melihat detail lengkap per role.*",
+          "",
+          roleEntriesText.length > 0 ? roleEntriesText.join("\n") : "*Belum ada custom role booster yang dibuat.*",
+          "",
+          `⏳ **Booster Tanpa Custom Role (${uncreatedBoosters.length}):**`,
+          uncreatedText,
+        ].join("\n")
+      )
+    );
+
+  if (maxPage > 1) {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`boosterlist:page:${currentPage - 1}`)
+        .setLabel("◀️ Prev")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === 0),
+      new ButtonBuilder()
+        .setCustomId(`boosterlist:page:${currentPage + 1}`)
+        .setLabel("Next ▶️")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage >= maxPage - 1)
+    );
+
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addActionRowComponents(row);
+  }
+
+  container
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`✨ ${guild.name} • Server Booster Directory`)
+    );
+
+  return container;
 }
 
 // ===================== STAFF PANEL & STAFF PROFILE SYSTEM =====================
@@ -11663,16 +12629,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
     const customId = interaction.customId || "";
 
+    if (customId.startsWith("ar_credit_")) {
+      return interaction.deferUpdate().catch(() => null);
+    }
+
     if (customId === "staffpanel:filter_division") {
-      await interaction.deferReply({ ephemeral: true }).catch(() => null);
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
       const selectedValue = interaction.values?.[0] || "all";
       const container = await buildStaffDirectoryContainer(interaction.guild, selectedValue);
-      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: { parse: [] } }).catch(() => null);
     } else if (customId === "staffpanel:myprofile") {
       const container = await buildStaffProfileContainer(interaction.member);
-      await interaction.reply({ components: [container], flags: MessageFlags.IsComponentsV2, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => null);
+      await interaction.reply({ components: [container], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: { parse: [] } }).catch(() => null);
     } else if (customId === "myrole:apply_palette") {
-      await interaction.deferReply({ ephemeral: true }).catch(() => null);
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
       const selectedHex = interaction.values?.[0] || "3498DB";
       const member = interaction.member;
       const boostRoleDoc = await BoosterCustomRole.findOne({ guild_id: interaction.guild.id, user_id: member.id }).lean().catch(() => null);
@@ -11980,45 +12950,63 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     // Universal Media Embed Handler using local/global yt-dlp
+    let ytDlpUpdateChecked = false;
     async function ensureYtDlp() {
       const isWin = process.platform === "win32";
       const binaryName = isWin ? "yt-dlp.exe" : "yt-dlp";
       const localPath = path.join(__dirname, binaryName);
+      const { execFile, execSync } = require("child_process");
 
+      let resolvedPath = null;
       if (fs.existsSync(localPath)) {
-        return localPath;
-      }
-
-      // Check if installed globally
-      const { execSync } = require("child_process");
-      try {
-        execSync(isWin ? "where yt-dlp" : "which yt-dlp", { stdio: "ignore" });
-        return "yt-dlp";
-      } catch {
-        // Auto-download binary appropriate for the hosting platform
-        console.log(`[YT-DLP] Binary not found. Downloading for ${process.platform}...`);
-        const url = isWin
-          ? "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-          : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
-
+        resolvedPath = localPath;
+      } else {
+        // Check if installed globally
         try {
-          const res = await fetch(url);
-          if (!res.ok) throw new Error(`Failed to download: ${res.statusText}`);
-          const buffer = Buffer.from(await res.arrayBuffer());
-          fs.writeFileSync(localPath, buffer);
-          if (!isWin) {
-            fs.chmodSync(localPath, "755"); // Set executable permissions on Linux/Pterodactyl
+          execSync(isWin ? "where yt-dlp" : "which yt-dlp", { stdio: "ignore" });
+          resolvedPath = "yt-dlp";
+        } catch {
+          // Auto-download binary appropriate for the hosting platform
+          console.log(`[YT-DLP] Binary not found. Downloading for ${process.platform}...`);
+          const url = isWin
+            ? "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+            : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`Failed to download: ${res.statusText}`);
+            const buffer = Buffer.from(await res.arrayBuffer());
+            fs.writeFileSync(localPath, buffer);
+            if (!isWin) {
+              fs.chmodSync(localPath, "755"); // Set executable permissions on Linux/Pterodactyl
+            }
+            console.log(`[YT-DLP] Download complete: ${localPath}`);
+            resolvedPath = localPath;
+          } catch (err) {
+            console.error("[YT-DLP DOWNLOAD ERROR]", err);
+            return null;
           }
-          console.log(`[YT-DLP] Download complete: ${localPath}`);
-          return localPath;
-        } catch (err) {
-          console.error("[YT-DLP DOWNLOAD ERROR]", err);
-          return null;
         }
       }
+
+      // Periodically trigger -U (self-update) once per bot session to keep YouTube extractors fresh
+      if (resolvedPath && !ytDlpUpdateChecked) {
+        ytDlpUpdateChecked = true;
+        execFile(resolvedPath, ["-U"], { timeout: 30000 }, (err, stdout) => {
+          if (!err && stdout && stdout.includes("Updated yt-dlp")) {
+            console.log(`[YT-DLP AUTO-UPDATE] ${stdout.trim()}`);
+          }
+        });
+      }
+
+      return resolvedPath;
     }
 
     async function downloadMedia(url) {
+      if (url.includes("tiktok.com/@") && !url.includes("/video/")) {
+        return null; // Skip profile links
+      }
+
       // 1. Fast Tikwm API fallback for TikTok links
       if (url.includes("tiktok.com")) {
         try {
@@ -12049,7 +13037,15 @@ client.on(Events.MessageCreate, async (message) => {
         const filename = `temp_media_${Date.now()}.mp4`;
         const outputPath = path.join(__dirname, filename);
         const formatArg = "b/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
-        const ytArgs = ["--no-warnings", "--no-playlist", "-o", outputPath, "-f", formatArg, url];
+        const ytArgs = [
+          "--no-warnings",
+          "--no-playlist",
+          "--playlist-items", "1",
+          "--extractor-args", "youtube:player_client=android,web",
+          "-o", outputPath,
+          "-f", formatArg,
+          url
+        ];
 
         execFile(ytDlpPath, ytArgs, { maxBuffer: 50 * 1024 * 1024 }, (error) => {
           if (error) {
@@ -12096,9 +13092,11 @@ client.on(Events.MessageCreate, async (message) => {
 
           // Check platforms
           if (/tiktok\.com/i.test(rawUrl)) {
-            platform = "tiktok";
-            const cleaned = rawUrl.split('?')[0];
-            fixedUrl = cleaned.replace(/(?:www\.|vt\.|vm\.)?tiktok\.com/i, "d.tnktok.com");
+            if (/\/video\/\d+/i.test(rawUrl) || /vt\.tiktok\.com/i.test(rawUrl) || /vm\.tiktok\.com/i.test(rawUrl) || /\/t\/[a-zA-Z0-9]/i.test(rawUrl)) {
+              platform = "tiktok";
+              const cleaned = rawUrl.split('?')[0];
+              fixedUrl = cleaned.replace(/(?:www\.|vt\.|vm\.)?tiktok\.com/i, "d.tnktok.com");
+            }
           } else if (/instagram\.com\/(?:p|reel|tv|stories)/i.test(rawUrl)) {
             platform = "instagram";
             const cleaned = rawUrl.split('?')[0];
@@ -12378,7 +13376,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!isToxicOwner && !hasIgnoreRole && !isWhitelistedBot) {
       const toxicRaw =
         process.env.TOXIC_WORDS ||
-        "nigger,nigga,n1gger,n1gga,niggr,nigg3r,retard,anjing,babi,tolol,goblok,bangsat,ngentot,memek,kontol,jilmek,desah,pepek,kampang,memew,mmk,kntl,gblk,bengak,buyan,lolo,gelat";
+        "nigger,nigga,n1gger,n1gga,niggr,nigg3r,retard,anjing,babi,tolol,goblok,bangsat,ngentot,memek,kontol,jilmek,desah,pepek,kampang,memew,mmk,kntl,gblk,bengak,buyan,gelat";
       const toxicWords = toxicRaw
         .split(",")
         .map((s) => s.trim().toLowerCase())
@@ -12458,10 +13456,27 @@ client.on(Events.MessageCreate, async (message) => {
     // Stop further non-security processing (media embeds, AFK, leveling, commands) for 3rd-party bots
     if (message.author.bot) return;
 
-    // ✅ ACTIVITY LOGGER (taruh di sini)
+    // ✅ ACTIVITY LOGGER (Track chat activity per day)
     const now = Date.now();
     const wib = new Date(now + 7 * 60 * 60 * 1000);
     const day = wib.toISOString().slice(0, 10); // YYYY-MM-DD (WIB)
+
+    try {
+      await safeRun(
+        `INSERT INTO activity_daily (day, user_id, msg_count) VALUES (?, ?, 1)
+         ON CONFLICT(day, user_id) DO UPDATE SET msg_count = activity_daily.msg_count + 1`,
+        [day, message.author.id]
+      );
+      if (message.guild) {
+        await safeRun(
+          `INSERT INTO activity_daily_channel (day, guild_id, channel_id, user_id, msg_count) VALUES (?, ?, ?, ?, 1)
+           ON CONFLICT(day, guild_id, channel_id, user_id) DO UPDATE SET msg_count = activity_daily_channel.msg_count + 1`,
+          [day, message.guild.id, message.channel.id, message.author.id]
+        );
+      }
+    } catch (actErr) {
+      console.error("[ACTIVITY LOGGER ERROR]", actErr);
+    }
 
     // AFK auto clear on any message
     const wasAfk = await getAfk(message.author.id, message.guild?.id);
@@ -12569,6 +13584,10 @@ client.on(Events.MessageCreate, async (message) => {
     const handledByAR = await checkAutoresponses(message);
     if (handledByAR) return;
 
+    // Tebak Angka guess attempt (processes guesses both with and without prefix)
+    const handledByGuess = await handleGuessNumberAttempt(message);
+    if (handledByGuess) return;
+
     // Check for pending confirmation
     const textClean = message.content.trim().toLowerCase();
     if (textClean === "confirm" || textClean === `${PREFIX} confirm` || textClean === `${PREFIX}confirm`) {
@@ -12583,14 +13602,67 @@ client.on(Events.MessageCreate, async (message) => {
     // Prefix check
     if (!message.content.startsWith(PREFIX)) return;
 
-    // Log prefix command usage to thread
-    await sendCommandLogToThread(client, message.author, message.content, message.channel, false);
-
     // Cukup deklarasikan variabel ini SATU KALI di sini
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const cmd = args.shift()?.toLowerCase();
     const command = cmd; // alias biar blok bawah yang pakai "command" tetap jalan
     const isMod = message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+
+    // Daftar command prefix yang valid — log HANYA dipanggil kalau cmd ada di sini
+    // Ini mencegah kata biasa yang diawali 'c' (catat, ciki, catur, dll) ikut ke-log
+    const KNOWN_PREFIX_CMDS = new Set([
+      "help", "chelp", "helpmod", "helpadmin", "modhelp", "adminhelp", "chelpmod", "chelpadmin", "cmodhelp", "cadminhelp",
+      "profile", "cprofile", "cp", "cprofilestaff", "cpstaff", "staffprofile", "cstaffprofile",
+      "userinfo", "cuserinfo", "who", "cwho", "whorole", "cwhorole",
+      "ping", "cping", "latency",
+      "serverinfo", "servers",
+      "leaderboard", "lb",
+      "wordle", "cwordle", "tebakkata", "ctebakkata", "tebakangka", "ctebakangka", "ta", "cta", "hint", "chint", "stopgame", "cstopgame", "cstop", "stopta",
+      "tarot", "ctarot", "tarotprofile", "ctarotprofile", "tarotlb", "ctarotlb", "tarotcollection", "ctarotcollection", "tarotannounce",
+      "afk",
+      "warn", "clearwarn", "mute", "unmute", "kick", "ban", "unban", "timeout", "untimeout",
+      "myrole", "cmyrole", "myr", "customrole", "myrolehelp", "crole", "role", "rolelist", "crolelist", "listrole", "clistrole", "clist", "list",
+      "roleku", "roles",
+      "tag", "ctag", "tagping", "ctagping", "taghelp", "ctaghelp", "tagsend", "ctagsend", "tagnotify", "ctagnotify",
+      "tagremind", "ctagremind", "tagreminder", "ctagreminder", "tagtimeout", "ctagtimeout", "tagging", "ctagging",
+      "staff", "cstaff", "stafflist", "cstafflist", "staffpanel", "cstaffpanel", "stafflog", "cstafflog",
+      "staffnotes", "cstaffnotes", "staffwelcome", "cstaffwelcome", "staffleave", "cstaffleave", "staffresign", "cstaffresign",
+      "staffsotm", "csotm", "csponsor", "sponsor", "sotm", "staffofthemonth",
+      "donatur", "cdonatur", "booster", "cbooster", "boosterthank", "cboosterthank", "thankboost", "cthankboost",
+      "boostersend", "cboostersend", "boosterannounce", "cboosterannounce",
+      "rbg", "crbg", "rembg", "crembg", "removebg", "cremovebg", "nobg", "cnobg",
+      "ccr", "createrole",
+      "stealemoji", "cstealemoji", "stemoji",
+      "shorturl", "surl", "su",
+      "qr", "qrcode",
+      "calc", "calculator", "kalku", "alculator", "alcu",
+      "translate", "trans", "tl", "ts",
+      "weather", "cuaca",
+      "idcard",
+      "greroll", "cgreroll", "gwreroll", "gstart", "gend",
+      "welcometest", "leavetest", "welcomeconfig", "cwelcomeconfig", "welcomesetup", "cwelcomesetup",
+      "welcomeonboarding", "cwelcomeonboarding", "welcomestaff", "cwelcomestaff",
+      "sortingpanel", "embed", "menfesspanel",
+      "botstatus", "cbotstatus", "statbot", "statusbot",
+      "botblacklist", "cbotblacklist", "cbotbl", "botbl", "botwhitelist", "cbotwhitelist", "cbotwl", "botwl",
+      "antiinvite", "cinvite", "invitelog", "cinvitelog",
+      "fixmenfessbuttons", "cfixmenfess",
+      "halo", "hai",
+      "setrecovery", "csetrecovery", "resetrecovery", "cresetrecovery", "addrecovery", "caddrecovery",
+      "settarotstreak", "csettarotstreak", "addtarotstreak", "caddtarotstreak", "settarotrecovery", "tarotresetrecovery",
+      "streak", "cstreak", "sl", "csl", "sp", "csp", "srec", "csrec", "si", "csi",
+      "bm", "cbm", "updatebm", "cupdatebm", "cbmupdate",
+      "support", "csupport",
+      "se", "serverinfo",
+      "staffpensiun", "stafftag",
+      "cn", "ccn", "changename", "cchangename", "setnick", "csetnick", "setname", "csetname",
+      "ping",
+    ]);
+
+    // Log prefix command usage to thread — HANYA untuk command yang dikenali
+    if (cmd && KNOWN_PREFIX_CMDS.has(cmd)) {
+      await sendCommandLogToThread(client, message.author, message.content, message.channel, false);
+    }
 
     const cleanInput = message.content.slice(PREFIX.length).trim();
     const handledByDMA = await handleDiscordManagementAssistant(message, cleanInput, cmd, args);
@@ -12694,18 +13766,35 @@ client.on(Events.MessageCreate, async (message) => {
       });
     }
 
-    if (cmd === "ta" || cmd === "tebakangka") {
+    if (cmd === "ta" || cmd === "cta" || cmd === "tebakangka" || cmd === "ctebakangka") {
+      const sub = (args[0] || "").toLowerCase();
+      if (sub === "hint") {
+        const game = getGuessNumberGame(message.guild.id, message.channel.id);
+        if (!game) return message.reply("Belum ada game tebak angka di channel ini. Mulai dengan `cta` atau `/tebakangka`.");
+        return message.reply({ content: guessHintText(game), allowedMentions: { repliedUser: false } });
+      }
+      if (sub === "stop" || sub === "stopgame") {
+        const canStop =
+          hasPerm(message.member, PermissionsBitField.Flags.ManageMessages) ||
+          getGuessNumberGame(message.guild.id, message.channel.id)?.starterId === message.author.id;
+        if (!canStop) return message.reply("Kamu hanya bisa stop game yang kamu mulai, atau butuh izin `Manage Messages`.");
+        const stopped = stopGuessNumberGame(message.guild.id, message.channel.id);
+        return message.reply(stopped ? "🛑 Game tebak angka dihentikan." : "Tidak ada game tebak angka yang sedang berjalan di channel ini.");
+      }
+      if (sub === "lb" || sub === "leaderboard") {
+        return handleTebakAngkaLeaderboard(client, message.guild.id, message, message.author.id);
+      }
       startGuessNumberGame(message.guild.id, message.channel.id, message.author.id);
       return message.reply({ content: guessStartText(), allowedMentions: { repliedUser: false } });
     }
 
-    if (cmd === "hint") {
+    if (cmd === "hint" || cmd === "chint") {
       const game = getGuessNumberGame(message.guild.id, message.channel.id);
       if (!game) return message.reply("Belum ada game tebak angka di channel ini. Mulai dengan `cta` atau `/tebakangka`.");
       return message.reply({ content: guessHintText(game), allowedMentions: { repliedUser: false } });
     }
 
-    if (cmd === "stopgame") {
+    if (cmd === "stopgame" || cmd === "cstopgame" || cmd === "cstop" || cmd === "stopta") {
       const canStop =
         hasPerm(message.member, PermissionsBitField.Flags.ManageMessages) ||
         getGuessNumberGame(message.guild.id, message.channel.id)?.starterId === message.author.id;
@@ -13550,6 +14639,13 @@ client.on(Events.MessageCreate, async (message) => {
     if (cmd === "myrole" || cmd === "cmyrole" || cmd === "myr" || cmd === "roleku" || cmd === "myrolehelp" || cmd === "cbooster" || cmd === "booster") {
       const sub = (args[0] || "").toLowerCase();
 
+      // ─── ACTION: list / roles / members / boosterlist — Booster Custom Role Directory ───
+      if (sub === "list" || sub === "roles" || sub === "members" || sub === "boosterlist" || sub === "directory") {
+        await message.guild.members.fetch().catch(() => null);
+        const container = await buildBoosterListContainer(message.guild, 0);
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
+      }
+
       // ─── ACTION: palette / preset — Interactive HEX Color Palette Picker ───
       if (sub === "palette" || sub === "preset" || sub === "palet" || sub === "colors") {
         const container = new ContainerBuilder()
@@ -13667,6 +14763,24 @@ client.on(Events.MessageCreate, async (message) => {
           { upsert: true }
         ).catch(() => null);
         return message.reply(`✅ Channel info custom role di-set ke <#${targetCh.id}>.`);
+      }
+
+      // ─── ACTION: setdeleterolelog / setroledeleterole / setrolelog — Set Custom Role Deletion Log Channel ───
+      if (sub === "setdeleterolelog" || sub === "setrolelog" || sub === "setdeleterolechannel") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) {
+          return message.reply("❌ Kamu memerlukan izin Admin / Manage Roles.");
+        }
+        const targetCh = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
+        if (!targetCh) {
+          return message.reply("❌ Tag channel log penghapusan custom role (contoh: `cbooster setdeleterolelog #log-role-deleted`).");
+        }
+        await MetaText.updateOne(
+          { key: `customrole_deletion_log_channel_${message.guild.id}` },
+          { $set: { value: targetCh.id } },
+          { upsert: true }
+        ).catch(() => null);
+        return message.reply(`✅ Channel log khusus penghapusan custom role di-set ke <#${targetCh.id}>.`);
       }
 
       // ─── ACTION: toggle / on / off ───
@@ -13946,6 +15060,46 @@ client.on(Events.MessageCreate, async (message) => {
         };
       }
 
+      // ─── Admin: konfigurasi role yang boleh klaim custom role ───
+      if (sub === "setrole" || sub === "addrole") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) return message.reply("❌ Hanya **Admin / Manage Roles** yang bisa mengatur role izin custom role.");
+        const roleTarget = message.mentions.roles.first()
+          || (args[1] && message.guild.roles.cache.get(args[1].replace(/[<@&>]/g, "")))
+          || (args[1] && message.guild.roles.cache.find(r => r.name.toLowerCase() === args.slice(1).join(" ").toLowerCase()));
+        if (!roleTarget) return message.reply("❌ Format: `cmyrole setrole @role`");
+        const myRoleRolesKey = `myrole_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: myRoleRolesKey }).lean().catch(() => null);
+        let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+        if (!roleIds.includes(roleTarget.id)) roleIds.push(roleTarget.id);
+        await MetaText.updateOne({ key: myRoleRolesKey }, { $set: { value: roleIds } }, { upsert: true });
+        return message.reply({ embeds: [new EmbedBuilder().setTitle("✅ Role Izin Custom Role Ditambahkan").setColor(0x2ecc71).setDescription(`Role <@&${roleTarget.id}> sekarang bisa klaim custom role (tanpa perlu boost Discord).`).setTimestamp()], allowedMentions: { parse: [] } });
+      }
+
+      if (sub === "removerole" || sub === "delrole") {
+        const isAdminUser = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.ManageRoles);
+        if (!isAdminUser) return message.reply("❌ Hanya **Admin / Manage Roles** yang bisa mengatur role izin custom role.");
+        const roleTarget = message.mentions.roles.first()
+          || (args[1] && message.guild.roles.cache.get(args[1].replace(/[<@&>]/g, "")));
+        if (!roleTarget) return message.reply("❌ Format: `cmyrole removerole @role`");
+        const myRoleRolesKey = `myrole_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: myRoleRolesKey }).lean().catch(() => null);
+        let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+        roleIds = roleIds.filter(id => id !== roleTarget.id);
+        await MetaText.updateOne({ key: myRoleRolesKey }, { $set: { value: roleIds } }, { upsert: true });
+        return message.reply({ embeds: [new EmbedBuilder().setTitle("🗑️ Role Izin Custom Role Dihapus").setColor(0xe67e22).setDescription(`Role <@&${roleTarget.id}> dihapus dari daftar izin custom role.`).setTimestamp()], allowedMentions: { parse: [] } });
+      }
+
+      if (sub === "roles" || sub === "listrole" || sub === "listroles") {
+        const myRoleRolesKey = `myrole_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: myRoleRolesKey }).lean().catch(() => null);
+        const roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+        const roleMentions = roleIds.length
+          ? roleIds.map(id => message.guild.roles.cache.get(id) ? `• <@&${id}>` : `• ID \`${id}\` *(terhapus)*`).join("\n")
+          : "*Belum ada role khusus yang didaftarkan.*";
+        return message.reply({ embeds: [new EmbedBuilder().setTitle("📋 Role yang Boleh Klaim Custom Role").setColor(0x3498db).setDescription(roleMentions + "\n\n💡 Admin: `cmyrole setrole @role` / `cmyrole removerole @role`").setTimestamp()], allowedMentions: { parse: [] } });
+      }
+
       // ─── No subcommand / help → show panel ───
       if (!sub || sub === "help" || cmd === "myrolehelp") {
         return message.reply(buildMyRoleHelpPanel());
@@ -13957,7 +15111,16 @@ client.on(Events.MessageCreate, async (message) => {
         const claimMember = message.guild.members.cache.get(message.author.id) ||
           await message.guild.members.fetch(message.author.id).catch(() => null);
 
-        const isBooster = !!claimMember?.premiumSince;
+        // Cek native Discord boost (premiumSince)
+        const isNativeBooster = !!claimMember?.premiumSince;
+        // Cek role yang namanya mengandung "booster" (case-insensitive)
+        const hasBoosterRoleName = claimMember?.roles?.cache?.some(r => r.name.toLowerCase().includes("booster")) || false;
+        // Cek role ID yang dikonfigurasi admin via cmyrole setrole
+        const myRoleRolesDoc = await MetaText.findOne({ key: `myrole_allowed_roles_${message.guild.id}` }).lean().catch(() => null);
+        const myRoleAllowedIds = Array.isArray(myRoleRolesDoc?.value) ? myRoleRolesDoc.value : [];
+        const hasConfiguredBoosterRole = myRoleAllowedIds.some(id => claimMember?.roles?.cache?.has(id));
+
+        const isBooster = isNativeBooster || hasBoosterRoleName || hasConfiguredBoosterRole;
         const isAdmin = isBotOwner(message.author.id) || hasPerm(claimMember, PermissionsBitField.Flags.ManageRoles);
 
         if (!isBooster && !isAdmin) {
@@ -14095,7 +15258,10 @@ client.on(Events.MessageCreate, async (message) => {
       let targetRole = null;
       let targetUser = message.author;
 
-      if (isBotOwnerUser || hasManage) {
+      // For gift/ungift, the mention is always the RECIPIENT — skip admin override
+      const isGiftSub = sub === "gift" || sub === "beri" || sub === "give" || sub === "ungift" || sub === "removegift" || sub === "tarik" || sub === "revokegift";
+
+      if (!isGiftSub && (isBotOwnerUser || hasManage)) {
         const mentionedRole = message.mentions.roles.first();
         const mentionedMember = message.mentions.members.first();
 
@@ -14189,18 +15355,6 @@ client.on(Events.MessageCreate, async (message) => {
         try {
           await targetRole.setColor(roleHexToApply);
 
-          // If 2-color gradient is specified, attempt to auto-set a gradient role icon
-          let iconNote = "";
-          if (col2) {
-            const iconBuffer = generateGradientRoleIcon(col1, col2);
-            if (iconBuffer) {
-              const iconSet = await targetRole.setIcon(iconBuffer).then(() => true).catch(() => false);
-              if (iconSet) {
-                iconNote = "\n🌈 *Icon role bergradien 2 warna juga telah dipasang secara otomatis!*";
-              }
-            }
-          }
-
           // Save color metadata to BoosterCustomRole & custom_roles DB
           await BoosterCustomRole.updateOne(
             { role_id: targetRole.id, guild_id: message.guild.id },
@@ -14222,7 +15376,7 @@ client.on(Events.MessageCreate, async (message) => {
 
           return message.reply(successContainer("Warna Role Diperbarui", [
             `**Role:** <@&${targetRole.id}>`,
-            `**Warna:** ${colorDesc}${iconNote}`,
+            `**Warna:** ${colorDesc}`,
             "",
             `> Warna role **${targetRole.name}** berhasil diubah!`,
           ]));
@@ -14387,24 +15541,61 @@ client.on(Events.MessageCreate, async (message) => {
         }
 
         if (!iconUrl) {
-          return message.reply({
-            embeds: [new EmbedBuilder()
-              .setColor(0xe74c3c)
-              .setTitle("❌ URL / Gambar Diperlukan")
-              .setDescription("Sertakan URL gambar, lampirkan gambar, atau **reply pesan** yang berisi gambar.")
-              .addFields({ name: "Cara Penggunaan", value: "• `cmyrole icon https://i.imgur.com/abc.png`\n• Lampirkan gambar langsung di chat\n• Reply pesan yang berisi gambar dengan `cmyrole icon`" })
-            ],
-            allowedMentions: { repliedUser: false },
-          });
+          const c = new ContainerBuilder()
+            .addTextDisplayComponents(
+              new TextDisplayBuilder().setContent("## 🖼️ Cara Pasang Icon Role"),
+              new TextDisplayBuilder().setContent(
+                [
+                  "Sertakan URL gambar, lampirkan gambar di chat, atau **reply pesan** yang berisi gambar!",
+                  "",
+                  "📌 **Pilihan Cara Penggunaan:**",
+                  "▸ Lampirkan gambar langsung di chat dengan ketik `cmyrole icon`",
+                  "▸ Reply pesan member/bot lain yang ada gambarnya dengan `cmyrole icon`",
+                  "▸ Ketik `cmyrole icon https://i.imgur.com/contoh.png`",
+                  "",
+                  "💡 **Fitur Pendukung:**",
+                  "• **Hapus Background:** Gunakan `cremovebg` atau `cmyrole removebg` untuk membuat background transparan PNG.",
+                  "• **Kompres Otomatis:** Bot otomatis mengompres gambar jika ukurannya melebihi batas 256KB Discord."
+                ].join("\n")
+              )
+            );
+          return message.reply({ components: [c], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
         }
 
         try {
-          await targetRole.setIcon(iconUrl);
-          return message.reply(successContainer("Icon Role Dipasang", [
+          // Attempt to download and auto-compress if > 250KB
+          let iconBuffer = null;
+          try {
+            const res = await fetch(iconUrl);
+            if (res.ok) {
+              const rawBuf = Buffer.from(await res.arrayBuffer());
+              if (rawBuf.length > 250 * 1024) {
+                const img = await loadImage(rawBuf);
+                const canvas = createCanvas(64, 64);
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(img, 0, 0, 64, 64);
+                iconBuffer = canvas.toBuffer("image/png");
+              } else {
+                iconBuffer = rawBuf;
+              }
+            }
+          } catch (fetchErr) {
+            console.error("[ICON FETCH COMPRESS FAIL]", fetchErr);
+          }
+
+          if (iconBuffer) {
+            await targetRole.setIcon(iconBuffer);
+          } else {
+            await targetRole.setIcon(iconUrl);
+          }
+
+          return message.reply(successContainer("Icon Role Berhasil Dipasang", [
             `**Role:** <@&${targetRole.id}>`,
-            `**Icon:** [Lihat gambar](${iconUrl})`,
+            `**Icon:** [Lihat Gambar](${iconUrl})`,
             "",
             `> Icon untuk role **${targetRole.name}** berhasil dipasang!`,
+            "",
+            "💡 *Tips:* Gunakan `cremovebg` atau `cmyrole removebg` jika ingin menghapus background gambar otomatis."
           ]));
         } catch (err) {
           console.error("[MYROLE ICON FAIL]", err);
@@ -14482,53 +15673,42 @@ client.on(Events.MessageCreate, async (message) => {
       if (sub === "info" || sub === "cek" || sub === "lihat" || sub === "detail") {
         const hexCol1 = boosterDoc?.color_hex1 || targetRole.hexColor?.toUpperCase() || "#000000";
         const hexCol2 = boosterDoc?.color_hex2 || null;
-        const colorText = hexCol2 ? `\`${hexCol1}\` → \`${hexCol2}\` *(Gradient 🌈)*` : `\`${hexCol1}\``;
+        const colorText = hexCol2 ? `\`${hexCol1}\` ➔ \`${hexCol2}\` *(Gradient 🌈)*` : `\`${hexCol1}\``;
 
         const giftedUsers = boosterDoc?.gifted_users || [];
-        const quota = await getBoosterGiftQuota(message.member, message.guild.id);
         const giftedText = giftedUsers.length ? giftedUsers.map(id => `<@${id}>`).join(", ") : "*(belum ada)*";
 
-        const createdTs = Math.floor(targetRole.createdTimestamp / 1000);
+        const createdTs = boosterDoc?.created_at ? Math.floor(boosterDoc.created_at / 1000) : Math.floor(targetRole.createdTimestamp / 1000);
         const iconUrl = targetRole.iconURL({ size: 128 });
+
+        const membersHolding = Array.from(targetRole.members.values()).map(m => `<@${m.id}>`).join(", ");
 
         const container = new ContainerBuilder()
           .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`## 🎨 Custom Role Detail & Info`),
+            new TextDisplayBuilder().setContent(`## 💖 Custom Role Booster Detail`),
             new TextDisplayBuilder().setContent(
               [
-                `▸ **Role:** <@&${targetRole.id}>`,
-                `▸ **Nama:** \`${targetRole.name}\``,
-                `▸ **ID:** \`${targetRole.id}\``,
-                `▸ **Warna:** ${colorText}`,
-                `▸ **Posisi:** \`#${targetRole.position}\``,
-                `▸ **Pemilik:** <@${message.author.id}>`,
-                `▸ **Dibuat:** <t:${createdTs}:D> (<t:${createdTs}:R>)`,
-                ...(iconUrl ? [`▸ **Icon:** [Lihat gambar](${iconUrl})`] : ["▸ **Icon:** *(tidak ada)*"]),
-              ].join("\n")
-            )
-          )
-          .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-          .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              [
-                "### 🎁 Gift Role Status",
-                `▸ **Kuota Slot:** \`${giftedUsers.length} / ${quota}\` Terpakai *(1 Boost = 2 Slots, 2+ Boosts = 5 Slots)*`,
-                `▸ **Penerima Gift:** ${giftedText}`,
+                `▸ **Role:** <@&${targetRole.id}> (\`${targetRole.name}\`)`,
+                `▸ **ID Role:** \`${targetRole.id}\``,
+                `▸ **Pemilik / Owner:** <@${targetUser.id}> (\`${targetUser.tag}\`)`,
+                `▸ **Dibuat Pada:** <t:${createdTs}:f> (<t:${createdTs}:R>)`,
+                `▸ **Tema Warna:** ${colorText}`,
+                `▸ **Icon Role:** ${iconUrl ? `[Lihat Gambar Icon](${iconUrl})` : "*Belum dipasang*"}`,
+                `▸ **Posisi Role:** \`#${targetRole.position}\``,
                 "",
-                "> Ketik `cmyrole gift @User` untuk membagikan role-mu ke teman!",
+                `👥 **Diberikan Kepada (Members):**`,
+                membersHolding || giftedText || "*(Tidak ada)*",
+                "",
+                `💡 *Gunakan \`cmyrole color #hex\` atau \`cmyrole icon <url|attach>\` untuk mengubah.*`
               ].join("\n")
             )
           )
           .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
           .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`Mystral • My Custom Role • <t:${Math.floor(Date.now() / 1000)}:R>`)
+            new TextDisplayBuilder().setContent(`Mystral Booster • Custom Role Details`)
           );
 
-        return message.reply({
-          components: [container],
-          flags: MessageFlags.IsComponentsV2,
-          allowedMentions: { parse: [] },
-        });
+        return message.reply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
       }
 
       // ─── Unknown subcommand → show help ───
@@ -16794,8 +17974,8 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // ===================== STAFF PROFILE COMMAND ROUTER (CSTAFFPROFILE) =====================
-    if (cmd === "staffprofile" || cmd === "cstaffprofile" || cmd === "profile" || cmd === "cprofile") {
+    // ===================== STAFF PROFILE COMMAND ROUTER (CSTAFFPROFILE / CPSTAFF) =====================
+    if (cmd === "staffprofile" || cmd === "cstaffprofile" || cmd === "cprofilestaff" || cmd === "cpstaff") {
       const targetMember = message.mentions.members.first() ||
         (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null) ||
         message.member;
@@ -16965,6 +18145,280 @@ client.on(Events.MessageCreate, async (message) => {
       const reason = args.slice(1).join(" ") || "Unban";
       await message.guild.members.unban(userId, reason).catch(() => null);
       return message.reply(`✅ Unbanned \`${userId}\`. Reason: ${reason}`);
+    }
+
+    // ===================== CHANGE NICKNAME (CN / CCN / SELF-CN) =====================
+    if (cmd === "cn" || cmd === "ccn" || cmd === "changename" || cmd === "cchangename" || cmd === "setnick" || cmd === "csetnick" || cmd === "setname" || cmd === "csetname") {
+      const sub = args[0]?.toLowerCase();
+
+      // --- SUBCOMMAND: SETROLE (Admin configures allowed role for CN) ---
+      if (sub === "setrole" || sub === "addrole") {
+        const isAdmin = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+        if (!isAdmin) {
+          return message.reply("❌ Perintah konfigurasi role CN hanya dapat digunakan oleh **Administrator / Bot Owner**.");
+        }
+
+        const roleTarget = message.mentions.roles.first() || (args[1] && message.guild.roles.cache.get(args[1].replace(/[<@&>]/g, ""))) || (args[1] && message.guild.roles.cache.find(r => r.name.toLowerCase() === args.slice(1).join(" ").toLowerCase()));
+        if (!roleTarget) {
+          return message.reply(`❌ Format: \`${PREFIX} cn setrole @role\` atau \`${PREFIX} cn setrole <Role_ID / Nama_Role>\``);
+        }
+
+        const cnRolesKey = `cn_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+        if (!roleIds.includes(roleTarget.id)) {
+          roleIds.push(roleTarget.id);
+        }
+
+        await MetaText.updateOne(
+          { key: cnRolesKey },
+          { $set: { value: roleIds, updated_at: Date.now() } },
+          { upsert: true }
+        );
+
+        const embedSet = new EmbedBuilder()
+          .setTitle("✅ Role Izin CN Ditambahkan")
+          .setColor(0x2ecc71)
+          .setDescription(`Role <@&${roleTarget.id}> (\`${roleTarget.name}\`) sekarang memiliki izin untuk menggunakan perintah ganti nickname (\`${PREFIX} cn <namabaru>\` / \`ccn <namabaru>\`).`)
+          .setTimestamp();
+        return message.reply({ embeds: [embedSet] });
+      }
+
+      // --- SUBCOMMAND: REMOVEROLE ---
+      if (sub === "removerole" || sub === "delrole") {
+        const isAdmin = isBotOwner(message.author.id) || hasPerm(message.member, PermissionsBitField.Flags.Administrator);
+        if (!isAdmin) {
+          return message.reply("❌ Perintah konfigurasi role CN hanya dapat digunakan oleh **Administrator / Bot Owner**.");
+        }
+
+        const roleTarget = message.mentions.roles.first() || (args[1] && message.guild.roles.cache.get(args[1].replace(/[<@&>]/g, ""))) || (args[1] && message.guild.roles.cache.find(r => r.name.toLowerCase() === args.slice(1).join(" ").toLowerCase()));
+        if (!roleTarget) {
+          return message.reply(`❌ Format: \`${PREFIX} cn removerole @role\``);
+        }
+
+        const cnRolesKey = `cn_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+        roleIds = roleIds.filter(id => id !== roleTarget.id);
+
+        await MetaText.updateOne(
+          { key: cnRolesKey },
+          { $set: { value: roleIds, updated_at: Date.now() } },
+          { upsert: true }
+        );
+
+        const embedDel = new EmbedBuilder()
+          .setTitle("🗑️ Role Izin CN Dihapus")
+          .setColor(0xe67e22)
+          .setDescription(`Role <@&${roleTarget.id}> (\`${roleTarget.name}\`) telah dihapus dari daftar role izin CN.`)
+          .setTimestamp();
+        return message.reply({ embeds: [embedDel] });
+      }
+
+      // --- SUBCOMMAND: ROLES / LISTROLES ---
+      if (sub === "roles" || sub === "listrole" || sub === "listroles") {
+        const cnRolesKey = `cn_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        const roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+
+        const roleMentions = roleIds.length > 0
+          ? roleIds.map(id => message.guild.roles.cache.get(id) ? `• <@&${id}> (\`${id}\`)` : `• Role ID \`${id}\` *(Terhapus)*`).join("\n")
+          : "*Belum ada role khusus yang didaftarkan.*";
+
+        const embedList = new EmbedBuilder()
+          .setTitle("📋 Daftar Role Izin CN Server")
+          .setColor(0x3498db)
+          .setDescription(
+            `Berikut adalah role khusus yang memiliki izin menggunakan perintah \`ccn <namabaru>\`:\n\n${roleMentions}\n\n` +
+            `💡 *Gunakan \`${PREFIX} cn setrole @role\` untuk menambahkan role baru.*`
+          )
+          .setFooter({ text: "Mystral Assistant • Nickname Management" })
+          .setTimestamp();
+        return message.reply({ embeds: [embedList] });
+      }
+
+      // --- SUBCOMMAND: HELP OR NO ARGS ---
+      if (!args.length || sub === "help") {
+        // Cek apakah user punya akses
+        const cnRolesKey = `cn_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        const configuredRoleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+
+        const hasConfiguredRole = configuredRoleIds.some(id => message.member.roles.cache.has(id));
+        const envStaffIds = [process.env.STAFF_ROLE_ID, process.env.TICKET_STAFF_ROLE_ID].filter(Boolean);
+        const hasEnvStaffRole = envStaffIds.some(id => message.member.roles.cache.has(id));
+        const hasNameKeyword = message.member.roles.cache.some(r => {
+          const n = r.name.toLowerCase();
+          return n.includes("staff") || n.includes("admin") || n.includes("mod") || n.includes("booster") || n.includes("vip") || n.includes("cn") || n.includes("custom nick");
+        });
+
+        const hasChangeNickPerm = message.member.permissions.has(PermissionsBitField.Flags.ChangeNickname);
+        const hasManageNickPerm = message.member.permissions.has(PermissionsBitField.Flags.ManageNicknames);
+        const hasAdminPerm = message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+        const isOwner = isBotOwner(message.author.id);
+
+        const canChangeSelf = isOwner || hasAdminPerm || hasManageNickPerm || hasChangeNickPerm || hasConfiguredRole || hasEnvStaffRole || hasNameKeyword;
+
+        const embedHelp = new EmbedBuilder()
+          .setTitle("🔮 CHANGE NICKNAME (CN) ENGINE")
+          .setColor(0x8b5cf6)
+          .setDescription(
+            `Fitur untuk mengubah / mereset nickname di server secara instan.\n\n` +
+            `**Status Izin Kamu:** ${canChangeSelf ? "✅ **Diizinkan (Bisa Ganti CN)**" : "❌ **Tidak Memiliki Izin CN**"}\n\n` +
+            `**📖 Cara Penggunaan:**\n` +
+            `• \`ccn <namabaru>\` atau \`${PREFIX} cn <namabaru>\` — Mengubah nickname kamu sendiri.\n` +
+            `• \`ccn reset\` atau \`${PREFIX} cn reset\` — Mereset nickname kamu kembali ke nama asli/default.\n` +
+            (hasManageNickPerm || hasAdminPerm || isOwner ? `• \`ccn @user <namabaru>\` — *(Staff/Mod)* Mengubah nickname member lain.\n• \`ccn @user reset\` — *(Staff/Mod)* Mereset nickname member lain.\n` : "") +
+            `\n**⚙️ Pengaturan Admin:**\n` +
+            `• \`${PREFIX} cn setrole @role\` — Beri izin role tertentu untuk bisa CN sendiri.\n` +
+            `• \`${PREFIX} cn removerole @role\` — Hapus role dari daftar izin CN.\n` +
+            `• \`${PREFIX} cn roles\` — Lihat daftar role yang memiliki izin CN.`
+          )
+          .setFooter({ text: "Mystral Assistant • Self & Staff Nickname Management" })
+          .setTimestamp();
+        return message.reply({ embeds: [embedHelp] });
+      }
+
+      // --- CEK APAKAH TARGET ORANG LAIN (Hanya jika argumen pertama adalah mention/user ID) ---
+      let targetMember = message.member;
+      let newNick = "";
+      let isTargetingOther = false;
+
+      const firstArg = args[0];
+      const mentionMatch = firstArg.match(/^<@!?(\d{17,20})>$/);
+      const isIdMatch = /^\d{17,20}$/.test(firstArg);
+
+      if (mentionMatch || isIdMatch) {
+        const targetUserId = mentionMatch ? mentionMatch[1] : firstArg;
+        const fetchedMember = await message.guild.members.fetch(targetUserId).catch(() => null);
+
+        if (fetchedMember && fetchedMember.id !== message.author.id) {
+          isTargetingOther = true;
+          targetMember = fetchedMember;
+          newNick = args.slice(1).join(" ").trim();
+        } else if (fetchedMember && fetchedMember.id === message.author.id) {
+          targetMember = message.member;
+          newNick = args.slice(1).join(" ").trim();
+        } else {
+          newNick = args.join(" ").trim();
+        }
+      } else {
+        newNick = args.join(" ").trim();
+      }
+
+      // Validasi izin ganti nickname orang lain
+      if (isTargetingOther) {
+        const canManageOthers = isBotOwner(message.author.id) ||
+          hasPerm(message.member, PermissionsBitField.Flags.Administrator) ||
+          hasPerm(message.member, PermissionsBitField.Flags.ManageNicknames) ||
+          hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers);
+
+        if (!canManageOthers) {
+          return message.reply("❌ Kamu hanya memiliki izin untuk mengganti nickname **diri sendiri** (`ccn <namabaru>`). Untuk mengganti nickname member lain diperlukan izin `Manage Nicknames`.");
+        }
+      } else {
+        // Validasi izin ganti nickname diri sendiri (Self-CN)
+        const cnRolesKey = `cn_allowed_roles_${message.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        const configuredRoleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+
+        const hasConfiguredRole = configuredRoleIds.some(id => message.member.roles.cache.has(id));
+        const envStaffIds = [process.env.STAFF_ROLE_ID, process.env.TICKET_STAFF_ROLE_ID].filter(Boolean);
+        const hasEnvStaffRole = envStaffIds.some(id => message.member.roles.cache.has(id));
+        const hasNameKeyword = message.member.roles.cache.some(r => {
+          const n = r.name.toLowerCase();
+          return n.includes("staff") || n.includes("admin") || n.includes("mod") || n.includes("booster") || n.includes("vip") || n.includes("cn") || n.includes("custom nick") || n.includes("change nickname");
+        });
+
+        const hasChangeNickPerm = message.member.permissions.has(PermissionsBitField.Flags.ChangeNickname);
+        const hasManageNickPerm = message.member.permissions.has(PermissionsBitField.Flags.ManageNicknames);
+        const hasAdminPerm = message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+        const isOwner = isBotOwner(message.author.id);
+
+        const canChangeSelf = isOwner || hasAdminPerm || hasManageNickPerm || hasChangeNickPerm || hasConfiguredRole || hasEnvStaffRole || hasNameKeyword;
+
+        if (!canChangeSelf) {
+          const embedDenied = new EmbedBuilder()
+            .setTitle("❌ Akses Izin Ditolak")
+            .setColor(0xe74c3c)
+            .setDescription(
+              `Kamu tidak memiliki izin untuk mengganti nickname sendiri di server ini.\n\n` +
+              `**Syarat Izin CN:**\n` +
+              `• Memiliki izin Discord \`Change Nickname\` di role kamu\n` +
+              `• Memiliki Role Staff / Moderator / Admin\n` +
+              `• Memiliki Role Server Booster / VIP\n` +
+              `• Memiliki Role khusus CN yang didaftarkan Admin (\`${PREFIX} cn setrole @role\`)`
+            )
+            .setFooter({ text: "Mystral Assistant • Nickname Management" })
+            .setTimestamp();
+          return message.reply({ embeds: [embedDenied] });
+        }
+      }
+
+      if (!newNick) {
+        return message.reply(`❌ Masukkan nickname baru. Contoh: \`ccn ${message.author.username} Baru\` atau \`ccn reset\``);
+      }
+
+      // Deteksi reset nickname
+      const resetKeywords = ["reset", "clear", "default", "hapus", "normal", "delete"];
+      const isReset = resetKeywords.includes(newNick.toLowerCase());
+
+      let finalNick = null;
+      if (!isReset) {
+        finalNick = newNick.replace(/^["']|["']$/g, "").trim();
+        if (finalNick.length > 32) {
+          return message.reply(`❌ Nickname maksimal **32 karakter** (Nickname yang kamu masukkan: **${finalNick.length} karakter**).`);
+        }
+      }
+
+      // Validasi Permission Bot
+      const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+      if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+        return message.reply("❌ Bot tidak memiliki permission `Manage Nicknames` di server ini. Tolong berikan bot permission `Manage Nicknames` di Server Settings -> Roles.");
+      }
+
+      // Validasi Hirarki Role
+      if (targetMember.id === message.guild.ownerId) {
+        return message.reply("❌ Bot tidak dapat mengubah nickname **Server Owner** karena batasan sistem Discord.");
+      }
+
+      if (botMember.roles.highest.position <= targetMember.roles.highest.position) {
+        return message.reply(
+          `❌ Bot tidak dapat mengubah nickname ${targetMember.id === message.author.id ? "kamu" : `<@${targetMember.id}>`} karena posisi Role bot (\`${botMember.roles.highest.name}\`) berada di bawah atau setara dengan role target (\`${targetMember.roles.highest.name}\`).\n\n` +
+          `💡 *Pindahkan role bot ke posisi lebih tinggi di Server Settings -> Roles agar bot dapat mengatur nickname.*`
+        );
+      }
+
+      const oldNick = targetMember.displayName || targetMember.user.username;
+
+      try {
+        await targetMember.setNickname(finalNick, `CN by ${message.author.tag} (${message.author.id})`);
+
+        const embedSuccess = new EmbedBuilder()
+          .setTitle(isReset ? "🔄 Nickname Berhasil Direset" : "✨ Nickname Berhasil Diperbarui")
+          .setColor(0x2ecc71)
+          .setDescription(
+            isReset
+              ? `Nickname untuk <@${targetMember.id}> telah dikembalikan ke nama default (**${targetMember.user.username}**).`
+              : `Nickname untuk <@${targetMember.id}> berhasil diubah menjadi **${finalNick}**!`
+          )
+          .addFields(
+            { name: "👤 Member", value: `<@${targetMember.id}> (\`${targetMember.user.tag}\`)`, inline: true },
+            { name: "🏷️ Nick Sebelumnya", value: `\`${oldNick}\``, inline: true },
+            { name: isReset ? "🏷️ Nick Default" : "✨ Nick Baru", value: `\`${finalNick || targetMember.user.username}\``, inline: true }
+          )
+          .setFooter({ text: "Mystral Assistant • Self & Staff Nickname Engine", iconURL: client.user.displayAvatarURL() })
+          .setTimestamp();
+
+        if (targetMember.id !== message.author.id) {
+          embedSuccess.addFields({ name: "🛡️ Diubah Oleh", value: `<@${message.author.id}>`, inline: false });
+        }
+
+        return message.reply({ embeds: [embedSuccess] });
+      } catch (err) {
+        console.error("[CN ERROR]", err);
+        return message.reply(`❌ Gagal mengubah nickname: ${err.message}`);
+      }
     }
 
     // ===================== CALC (PREFIX) =====================
@@ -17287,6 +18741,7 @@ Enjoy your reward ✨`
       let subCategory = "home";
       const rawArg = (cmd === "help" || cmd === "chelp") ? (args[1] || "").toLowerCase() : (args[0] || "").toLowerCase();
       if (rawArg.includes("tag") || rawArg.includes("staff")) subCategory = "admin_staff_tagging";
+      else if (rawArg.includes("streak") || rawArg.includes("flame") || rawArg.includes("tarot") || rawArg.includes("recovery")) subCategory = "admin_streak";
       else if (rawArg.includes("boost")) subCategory = "admin_booster";
       else if (rawArg.includes("role")) subCategory = "admin_roles";
       else if (rawArg.includes("mod") || rawArg.includes("warn") || rawArg.includes("invite") || rawArg.includes("log") || rawArg.includes("bot")) subCategory = "admin_moderation";
@@ -17635,7 +19090,7 @@ Enjoy your reward ✨`
     }
 
     // cprofile (PREFIX)
-    if (cmd === "profile") {
+    if (cmd === "profile" || cmd === "cprofile" || cmd === "cp") {
       const mentioned = message.mentions.users.first();
       let user = mentioned || message.author;
 
@@ -17791,6 +19246,67 @@ Enjoy your reward ✨`
       return message.reply({ content: "✅ panel menfess terkirim.", allowedMentions: { repliedUser: false } });
     }
 
+    // Admin: cfixmenfess
+    if (cmd === "fixmenfessbuttons" || cmd === "cfixmenfess") {
+      if (!isBotOwner(message.author.id) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return message.reply("❌ Perintah ini khusus untuk Administrator.");
+      }
+      await message.reply("🔄 Memproses pengembalian tombol pada pesan menfess lama...");
+      await restoreMenfessButtons(client);
+      return message.reply("✅ Tombol reply berhasil dipasang kembali pada pesan menfess lama!");
+    }
+
+    // Admin: cresetrecovery
+    if (cmd === "resetrecovery" || cmd === "cresetrecovery" || cmd === "tarotresetrecovery") {
+      if (!isBotOwner(message.author.id) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return message.reply("❌ Perintah ini khusus untuk Administrator.");
+      }
+      await resetTarotMonthlyRecovery();
+      return message.reply("✅ **Token recovery tarot seluruh user telah di-reset menjadi 3/3!**");
+    }
+
+    // Admin: csetrecovery @user [jumlah]
+    if (cmd === "addrecovery" || cmd === "caddrecovery" || cmd === "setrecovery" || cmd === "csetrecovery" || cmd === "settarotrecovery") {
+      if (!isBotOwner(message.author.id) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return message.reply("❌ Perintah ini khusus untuk Administrator.");
+      }
+
+      const targetUser = message.mentions.users.first() ||
+        (args[0] && /^\d{15,25}$/.test(args[0]) ? await message.client.users.fetch(args[0]).catch(() => null) : null);
+
+      if (!targetUser) {
+        return message.reply("Format: `csetrecovery @user [jumlah]` (Contoh: `csetrecovery @User 3`)");
+      }
+
+      const amountArg = args[1] || args[0];
+      let amount = parseInt(amountArg, 10);
+      if (isNaN(amount) || amount < 0) amount = 3;
+
+      await setTarotUserRecovery(targetUser.id, targetUser.username, amount);
+      return message.reply(`✅ **Berhasil!** Token recovery tarot untuk **${targetUser.username}** telah di-set menjadi **${amount} / 3**! 🩹`);
+    }
+
+    // Admin: csettarotstreak @user <jumlah>
+    if (cmd === "settarotstreak" || cmd === "csettarotstreak" || cmd === "addtarotstreak" || cmd === "caddtarotstreak") {
+      if (!isBotOwner(message.author.id) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return message.reply("❌ Perintah ini khusus untuk Administrator.");
+      }
+
+      const targetUser = message.mentions.users.first() ||
+        (args[0] && /^\d{15,25}$/.test(args[0]) ? await message.client.users.fetch(args[0]).catch(() => null) : null);
+
+      if (!targetUser) {
+        return message.reply("Format: `csettarotstreak @user <jumlah>` (Contoh: `csettarotstreak @User 7`)");
+      }
+
+      const amountArg = args[1] || args[0];
+      let amount = parseInt(amountArg, 10);
+      if (isNaN(amount) || amount < 0) amount = 0;
+
+      await setTarotUserStreak(targetUser.id, targetUser.username, amount);
+      return message.reply(`✅ **Berhasil!** Streak tarot untuk **${targetUser.username}** telah di-set menjadi **${amount} hari**! 🔮`);
+    }
+
     // Owner-only: csortingpanel
     if (cmd === "sortingpanel") {
       const targetChannelId = requireEnv("SORTING_CHANNEL_ID") || message.channelId;
@@ -17894,6 +19410,104 @@ Enjoy your reward ✨`
         await targetChannel.send({ embeds: [embed] });
         return message.reply(`✅ Pengumuman tarot terkirim ke ${targetChannel}.`);
       }
+
+      if (sub === "setrecovery" || sub === "addrecovery") {
+        if (!isBotOwner(message.author.id) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+          return message.reply("❌ Perintah ini khusus untuk Administrator.");
+        }
+        const targetUser = message.mentions.users.first() ||
+          (args[1] && /^\d{15,25}$/.test(args[1]) ? await message.client.users.fetch(args[1]).catch(() => null) : null);
+        if (!targetUser) {
+          return message.reply("Format: `ctarot setrecovery @user [jumlah]`");
+        }
+        let amount = parseInt(args[2] || "3", 10);
+        if (isNaN(amount) || amount < 0) amount = 3;
+        await setTarotUserRecovery(targetUser.id, targetUser.username, amount);
+        return message.reply(`✅ **Berhasil!** Token recovery tarot untuk **${targetUser.username}** telah di-set menjadi **${amount} / 3**! 🩹`);
+      }
+
+      if (sub === "setstreak" || sub === "addstreak") {
+        if (!isBotOwner(message.author.id) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+          return message.reply("❌ Perintah ini khusus untuk Administrator.");
+        }
+        const targetUser = message.mentions.users.first() ||
+          (args[1] && /^\d{15,25}$/.test(args[1]) ? await message.client.users.fetch(args[1]).catch(() => null) : null);
+        if (!targetUser) {
+          return message.reply("Format: `ctarot setstreak @user <jumlah>`");
+        }
+        let amount = parseInt(args[2] || "0", 10);
+        if (isNaN(amount) || amount < 0) amount = 0;
+        await setTarotUserStreak(targetUser.id, targetUser.username, amount);
+        return message.reply(`✅ **Berhasil!** Streak tarot untuk **${targetUser.username}** telah di-set menjadi **${amount} hari**! 🔮`);
+      }
+    }
+
+    // ===================== TRUTH OR DARE (TOD) PREFIX COMMAND =====================
+    if (cmd === "tod" || cmd === "ctod" || cmd === "truthordare") {
+      const sub = (args[0] || "").toLowerCase();
+      let qType = null;
+      if (sub === "truth" || sub === "t") qType = "truth";
+      else if (sub === "dare" || sub === "d") qType = "dare";
+
+      const target = message.mentions.users.first() || message.author;
+      const q = qType
+        ? await getRandomTodQuestion({ type: qType })
+        : (sub === "daily" ? await getRandomTodQuestion({ category: todThemeForToday() }) : await getRandomTodQuestion());
+
+      if (!q) return message.reply("❌ Gagal mendapatkan pertanyaan TOD.");
+
+      const embed = buildTodEmbed(q, target, message.guild);
+      const row = todRow();
+      return message.channel.send({ embeds: [embed], components: [row] });
+    }
+
+    // ===================== DAILY WORDLE COMMAND ROUTER (CWORDLE / CW) =====================
+    if (cmd === "wordle" || cmd === "cwordle" || cmd === "cw" || cmd === "tebakkata" || cmd === "ctebakkata") {
+      const dateStr = wibDayKey();
+      const targetWord = getDailyWordleTarget(dateStr);
+      let wordleDoc = await getOrInitWordleUser(message.author.id, dateStr);
+
+      const guessArg = args[0] ? args[0].toUpperCase().trim() : "";
+
+      if (guessArg && /^[A-Z]{5}$/.test(guessArg)) {
+        if (wordleDoc.is_completed || wordleDoc.is_won) {
+          return message.reply(`⚠️ Kamu sudah menyelesaikan **Daily Wordle** hari ini. Coba lagi besok setelah reset!`);
+        }
+
+        const newGuesses = [...(wordleDoc.guesses || []), guessArg];
+        let isWon = guessArg === targetWord;
+        let isCompleted = isWon || newGuesses.length >= 6;
+        let newWins = wordleDoc.wins + (isWon ? 1 : 0);
+        let newTotal = wordleDoc.total_played + (isCompleted ? 1 : 0);
+        let newStreak = isWon ? wordleDoc.streak + 1 : (isCompleted ? 0 : wordleDoc.streak);
+        let newMaxStreak = Math.max(wordleDoc.max_streak || 0, newStreak);
+
+        await WordleUser.updateOne(
+          { user_id: String(message.author.id), date: String(dateStr) },
+          {
+            $set: {
+              guesses: newGuesses,
+              is_won: isWon,
+              is_completed: isCompleted,
+              wins: newWins,
+              total_played: newTotal,
+              streak: newStreak,
+              max_streak: newMaxStreak
+            }
+          }
+        ).catch(() => null);
+
+        wordleDoc.guesses = newGuesses;
+        wordleDoc.is_won = isWon;
+        wordleDoc.is_completed = isCompleted;
+        wordleDoc.wins = newWins;
+        wordleDoc.total_played = newTotal;
+        wordleDoc.streak = newStreak;
+        wordleDoc.max_streak = newMaxStreak;
+      }
+
+      const ui = buildWordleUIEmbed(message.author, wordleDoc, targetWord);
+      return message.reply({ ...ui, allowedMentions: { parse: [] } });
     }
 
     if (["tarotprofile", "tp", "tprofile", "tarotp"].includes(cmd)) {
@@ -18350,50 +19964,71 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
       // 1) Kirim menfess
       if (interaction.customId === "menfess:new") {
-        const modal = new ModalBuilder()
-          .setCustomId("menfess:modal:new")
-          .setTitle("✉️ Kirim Menfess (Anonim)");
-
-        const toInput = new TextInputBuilder()
-          .setCustomId("to")
-          .setLabel("Untuk (opsional)")
-          .setPlaceholder("misal: anak kelas A / seseorang / everyone")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(60);
-
-        const msgInput = new TextInputBuilder()
-          .setCustomId("msg")
-          .setLabel("Isi menfess")
-          .setPlaceholder("tulis pesan kamu di sini…")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-          .setMaxLength(900);
-
-        const imgInput = new TextInputBuilder()
-          .setCustomId("image")
-          .setLabel("Link Gambar/GIF (opsional)")
-          .setPlaceholder("https://... direct link png/jpg/gif")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(300);
-
-        const colorInput = new TextInputBuilder()
-          .setCustomId("warna")
-          .setLabel("Warna Embed Hex (opsional)")
-          .setPlaceholder("misal: #ff0000 atau #ffffff")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(7);
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(toInput),
-          new ActionRowBuilder().addComponents(msgInput),
-          new ActionRowBuilder().addComponents(imgInput),
-          new ActionRowBuilder().addComponents(colorInput)
-        );
-
-        return interaction.showModal(modal).catch((err) => {
+        return interaction.showModal({
+          title: "✉️ Kirim Menfess (Anonim)",
+          custom_id: "menfess:modal:new",
+          components: [
+            {
+              type: 18,
+              label: "Untuk (opsional)",
+              component: {
+                type: 4,
+                custom_id: "to",
+                style: 1,
+                placeholder: "misal: seseorang / crush / everyone",
+                required: false,
+                max_length: 60
+              }
+            },
+            {
+              type: 18,
+              label: "Isi Menfess *",
+              component: {
+                type: 4,
+                custom_id: "msg",
+                style: 2,
+                placeholder: "Tulis pesan kamu di sini…",
+                required: true,
+                max_length: 900
+              }
+            },
+            {
+              type: 18,
+              label: "Image Attachment (Galeri / File)",
+              description: "Pilih foto langsung dari galeri HP atau upload dari PC",
+              component: {
+                type: 19,
+                custom_id: "menfess_file",
+                max_values: 1,
+                required: false
+              }
+            },
+            {
+              type: 18,
+              label: "Link Gambar/GIF (opsional)",
+              component: {
+                type: 4,
+                custom_id: "image",
+                style: 1,
+                placeholder: "https://... direct link png/jpg/gif",
+                required: false,
+                max_length: 300
+              }
+            },
+            {
+              type: 18,
+              label: "Warna Embed Hex (opsional)",
+              component: {
+                type: 4,
+                custom_id: "warna",
+                style: 1,
+                placeholder: "misal: #ff0000 atau #ffffff",
+                required: false,
+                max_length: 7
+              }
+            }
+          ]
+        }).catch((err) => {
           console.error("[MENFESS SHOW NEW MODAL ERROR]", err);
         });
       }
@@ -18466,8 +20101,144 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
+    // ===================== BOOSTER LIST PAGINATION BUTTON =====================
+    if (interaction.isButton() && interaction.customId.startsWith("boosterlist:page:")) {
+      await interaction.deferUpdate().catch(() => { });
+      const page = Number(interaction.customId.split(":")[2]) || 0;
+      await interaction.guild.members.fetch().catch(() => null);
+      const container = await buildBoosterListContainer(interaction.guild, page);
+      await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } }).catch(() => { });
+      return;
+    }
+
+    // ===================== WORDLE: BUTTON & MODAL HANDLERS =====================
+    if (interaction.isButton() && interaction.customId === "wordle:how_to_play") {
+      return interaction.reply({
+        content: [
+          "🧩 **Cara Main Daily Wordle:**",
+          "• Tebak kata rahasia yang terdiri dari **5 huruf** dalam maksimal **6 kesempatan**.",
+          "• Arti warna ubin (tiles):",
+          "  🟩 **Hijau**: Huruf benar dan berada di posisi yang tepat.",
+          "  🟨 **Kuning**: Huruf ada di dalam kata rahasia, tapi posisinya belum tepat.",
+          "  ⬛ **Abu-abu / Hitam**: Huruf tidak ada di kata rahasia.",
+          "• Kamu bisa tekan tombol **✍️ Tebak Kata** atau ketik langsung `cw <kata>` (contoh: `cw SENJA`).",
+          "• Kata baru di-reset setiap hari pukul **00:00 WIB**!"
+        ].join("\n"),
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith("wordle:play_again:")) {
+      const targetUserId = interaction.customId.split(":")[2];
+      if (interaction.user.id !== targetUserId) {
+        return interaction.reply({
+          content: "❌ Sesi Wordle ini bukan milikmu. Gunakan `cwordle` atau `cw` sendiri!",
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
+      await interaction.deferUpdate().catch(() => { });
+
+      const dateStr = wibDayKey();
+      const newTarget = getRandomWordleWord();
+      const wordleDoc = await resetWordleUserGame(interaction.user.id, dateStr, newTarget);
+
+      const ui = buildWordleUIEmbed(interaction.user, wordleDoc, newTarget);
+      await interaction.editReply({ ...ui, allowedMentions: { parse: [] } }).catch(() => { });
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith("wordle:open_modal:")) {
+      const parts = interaction.customId.split(":");
+      const targetUserId = parts[2];
+      const step = parts[3] || "0";
+      if (interaction.user.id !== targetUserId) {
+        return interaction.reply({
+          content: "❌ Sesi Wordle ini bukan milikmu. Gunakan `cwordle` atau `cw` sendiri!",
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId(`wordle:guess_modal:${targetUserId}:${step}`)
+        .setTitle("🧩 Tebak Kata Wordle (5 Huruf)")
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("wordle_guess_input")
+              .setLabel("Masukkan Kata Tebakan (5 Huruf Alpha)")
+              .setStyle(TextInputStyle.Short)
+              .setMinLength(5)
+              .setMaxLength(5)
+              .setPlaceholder("Contoh: SURAT, TAROT, SENJA")
+              .setRequired(true)
+          )
+        );
+
+      return interaction.showModal(modal).catch(() => { });
+    }
+
     // MODAL SUBMIT
     if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith("wordle:guess_modal")) {
+        await interaction.deferUpdate().catch(() => { });
+
+        const rawInput = interaction.fields?.getTextInputValue?.("wordle_guess_input") || "";
+        const guessArg = rawInput.toUpperCase().trim();
+
+        if (!/^[A-Z]{5}$/.test(guessArg)) {
+          return interaction.followUp({
+            content: "❌ Tebakan kata harus berupa **5 huruf alfabet** (contoh: `SURAT`, `SENJA`).",
+            flags: MessageFlags.Ephemeral
+          }).catch(() => { });
+        }
+
+        const dateStr = wibDayKey();
+        let wordleDoc = await getOrInitWordleUser(interaction.user.id, dateStr);
+        const targetWord = wordleDoc?.target_word || getDailyWordleTarget(dateStr);
+
+        if (wordleDoc.is_completed || wordleDoc.is_won) {
+          return interaction.followUp({
+            content: `⚠️ Sesi tebakan kamu saat ini sudah selesai! Klik tombol **Main Lagi** untuk ronde baru! ✨`,
+            flags: MessageFlags.Ephemeral
+          }).catch(() => { });
+        }
+
+        const newGuesses = [...(wordleDoc.guesses || []), guessArg];
+        let isWon = guessArg === targetWord;
+        let isCompleted = isWon || newGuesses.length >= 6;
+        let newWins = (wordleDoc.wins || 0) + (isWon ? 1 : 0);
+        let newTotal = (wordleDoc.total_played || 0) + (isCompleted ? 1 : 0);
+        let newStreak = isWon ? (wordleDoc.streak || 0) + 1 : (isCompleted ? 0 : (wordleDoc.streak || 0));
+        let newMaxStreak = Math.max(wordleDoc.max_streak || 0, newStreak);
+
+        await WordleUser.updateOne(
+          { user_id: String(interaction.user.id), date: String(dateStr) },
+          {
+            $set: {
+              guesses: newGuesses,
+              is_won: isWon,
+              is_completed: isCompleted,
+              wins: newWins,
+              total_played: newTotal,
+              streak: newStreak,
+              max_streak: newMaxStreak
+            }
+          }
+        ).catch(() => null);
+
+        wordleDoc.guesses = newGuesses;
+        wordleDoc.is_won = isWon;
+        wordleDoc.is_completed = isCompleted;
+        wordleDoc.wins = newWins;
+        wordleDoc.total_played = newTotal;
+        wordleDoc.streak = newStreak;
+        wordleDoc.max_streak = newMaxStreak;
+
+        const ui = buildWordleUIEmbed(interaction.user, wordleDoc, targetWord);
+        await interaction.editReply({ ...ui, allowedMentions: { parse: [] } }).catch(() => { });
+        return;
+      }
       const cdKey = `${interaction.guildId}:${interaction.user.id}`;
       const now = Date.now();
       const last = menfessCooldown.get(cdKey) || 0;
@@ -18498,10 +20269,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return interaction.editReply("⚠️ MENFESS_CHANNEL_ID tidak ketemu / bot tidak punya akses.");
           }
 
-          const to = (interaction.fields.getTextInputValue("to") || "").trim().slice(0, 60);
-          const msg = (interaction.fields.getTextInputValue("msg") || "").trim().slice(0, 900);
-          const image = (interaction.fields.getTextInputValue("image") || "").trim().slice(0, 300);
-          const rawWarna = (interaction.fields.getTextInputValue("warna") || "").trim();
+          const to = (interaction.fields?.getTextInputValue?.("to") || "").trim().slice(0, 60);
+          const msg = (interaction.fields?.getTextInputValue?.("msg") || "").trim().slice(0, 900);
+          let image = (interaction.fields?.getTextInputValue?.("image") || "").trim().slice(0, 300);
+          const rawWarna = (interaction.fields?.getTextInputValue?.("warna") || "").trim();
+
+          // Ambil file yang diupload langsung dari galeri HP / PC melalui Modal File Upload
+          let isUploadedFile = false;
+          const uploadedFiles = interaction.fields?.getUploadedFiles?.("menfess_file") || null;
+          if (uploadedFiles && uploadedFiles.size > 0) {
+            const firstFile = uploadedFiles.first();
+            if (firstFile?.url) {
+              image = firstFile.url;
+              isUploadedFile = true;
+            }
+          } else if (interaction.data?.resolved?.attachments) {
+            const firstAttachmentId = Object.keys(interaction.data.resolved.attachments)[0];
+            if (firstAttachmentId && interaction.data.resolved.attachments[firstAttachmentId]?.url) {
+              image = interaction.data.resolved.attachments[firstAttachmentId].url;
+              isUploadedFile = true;
+            }
+          }
 
           if (!msg) {
             return interaction.editReply("⚠️ isi menfess tidak boleh kosong.");
@@ -18511,7 +20299,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return interaction.editReply("⚠️ kolom `Untuk` tidak boleh mengandung mention/role/staff impersonation.");
           }
 
-          if (image) {
+          if (image && !isUploadedFile) {
             const directImageErr = validateDirectImageUrl(image);
             if (directImageErr) {
               return interaction.editReply(directImageErr);
@@ -18558,7 +20346,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               .setCustomId(`menfess:reply:${id}`)
               .setLabel("Balas Anonim")
               .setStyle(ButtonStyle.Primary)
-              .setEmoji("🫧")
+              .setEmoji("💬")
           );
 
           const sent = await ch.send({
@@ -18668,7 +20456,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               .setCustomId(`menfess:reply:${targetId}`)
               .setLabel("Balas Anonim")
               .setStyle(ButtonStyle.Primary)
-              .setEmoji("🫧")
+              .setEmoji("💬")
           );
 
           const msgId = post.message_id || post.messageId;
@@ -18874,72 +20662,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const parts = interaction.customId.split(":");
-      const action = parts[1]; // truth, dare, random, done, pass
+      const action = parts[1]; // truth, dare, random
 
-      // If action is done/pass (resolution)
-      if (action === "done" || action === "pass") {
-        const targetId = parts[2];
-        const questionId = parts[3];
-
-        if (interaction.user.id !== targetId) {
-          return interaction.reply({
-            content: `❌ Hanya <@${targetId}> yang bisa menyelesaikan/melewati tantangan ini!`,
-            flags: MessageFlags.Ephemeral
-          }).catch(() => { });
-        }
-
-        // Fetch question details to render the completed card
-        const q = await safeGet("SELECT * FROM tod_questions WHERE id = ?", [questionId]).catch(() => null);
-        let questionText = "Tantangan/Pertanyaan TOD";
-        let questionType = "truth";
-        let rating = "PG";
-        if (q) {
-          questionText = q.question;
-          questionType = q.type;
-          rating = q.rating;
-        }
-        // (No embed fallback — messages are now Components v2)
-
-        const reconstructedQ = { id: questionId, question: questionText, type: questionType, rating };
-        const status = action === "done" ? "done" : "pass";
-
-        await interaction.update({
-          components: [todCard(reconstructedQ, null, targetId, status)],
-          flags: MessageFlags.IsComponentsV2,
-        }).catch(() => { });
-
-        // AUTOMATICALLY SEND A NEW PANEL CARD!
-        // The player who just completed/passed the challenge (targetId) is now the new challenger.
-        await interaction.channel.send({
-          components: [todPanelCard(targetId, "self"), todRow(targetId, "self")],
-          flags: MessageFlags.IsComponentsV2,
-          allowedMentions: { parse: [] }
-        }).catch(() => { });
-
-        return;
-      }
-
-      // If action is choosing Truth/Dare/Random from panel
-      const challengerId = parts[2] || interaction.user.id;
-      const targetId = parts[3] || "self";
-
-      const allowedUser = targetId === "self" ? challengerId : targetId;
-      if (interaction.user.id !== allowedUser) {
-        return interaction.reply({
-          content: `❌ Hanya <@${allowedUser}> yang bisa memilih kategori!`,
-          flags: MessageFlags.Ephemeral
-        }).catch(() => { });
-      }
-
-      // Apply cooldown
+      // Cooldown ringan agar tidak spam klik
       const cdKey = `${interaction.guildId}:${interaction.user.id}`;
       const now = Date.now();
       const last = todCooldown.get(cdKey) || 0;
-      const cooldownMs = Number(process.env.TOD_COOLDOWN_MS || 5000);
-
-      if (now - last < cooldownMs) {
+      if (now - last < 1500) {
         return interaction.reply({
-          content: `⏳ Tunggu sebentar sebelum ambil TOD lagi.`,
+          content: "⏳ Tunggu sebentar sebelum klik tombol lagi.",
           flags: MessageFlags.Ephemeral,
         }).catch(() => { });
       }
@@ -18959,27 +20690,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).catch(() => { });
       }
 
-      // Edit message to show the question card (Component v2)
-      await interaction.update({
-        components: [todCard(q, challengerId, allowedUser), todResponseRow(allowedUser, q.id)],
-        flags: MessageFlags.IsComponentsV2,
+      await interaction.deferUpdate().catch(() => { });
+
+      const embed = buildTodEmbed(q, interaction.user, interaction.guild);
+      const row = todRow();
+
+      // Kirim embed baru ke channel
+      await interaction.channel.send({
+        embeds: [embed],
+        components: [row]
       }).catch(() => { });
 
-      // Auto-create thread if text channel
-      if (interaction.channel.type === ChannelType.GuildText) {
-        const targetUser = await interaction.client.users.fetch(allowedUser).catch(() => null);
-        const nameTag = targetUser ? `@${targetUser.username}` : allowedUser;
-
-        const thread = await interaction.message.startThread({
-          name: `💬 TOD - ${nameTag}`,
-          autoArchiveDuration: 60,
-          reason: `Truth or Dare discussion`
-        }).catch(() => null);
-
-        if (thread) {
-          await thread.send(`Halo <@${allowedUser}>, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => { });
-        }
-      }
+      // Hapus embed lama
+      await interaction.message.delete().catch(() => { });
       return;
     }
 
@@ -19634,7 +21357,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const updatedContainer = new ContainerBuilder().setAccentColor(0x2ecc71);
       updatedContainer.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-          `${baseText}\n\n---\n### ✅ Verifikasi Berhasil!\nRole <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}> oleh <@${interaction.user.id}>.`
+          `${baseText}\n\n---\n### ✅ Verifikasi Berhasil!\nRole <@&${FEMALE_ROLE_ID}> telah berhasil disetujui dan diberikan oleh staff **${interaction.user.username}**.`
         )
       );
 
@@ -19683,20 +21406,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       })();
 
-      // Kirim pesan Embed Baru di channel tiket yang mencatat hasil approval & staff yang menyetujui (Style: Cute & Cool 🌸)
+      // Kirim pesan Embed Baru di channel tiket yang mencatat hasil approval (tag role saja tanpa mention user)
       (async () => {
         try {
           const verifNoticeContainer = new ContainerBuilder().setAccentColor(0xFFC0CB);
           verifNoticeContainer.addTextDisplayComponents(
             new TextDisplayBuilder().setContent("## 🌸 Verifikasi Disetujui • Role Granted! ✨"),
             new TextDisplayBuilder().setContent(
-              `Role verifikasi <@&${FEMALE_ROLE_ID}> telah berhasil ditambahkan ke <@${targetUserId}> oleh staff <@${interaction.user.id}> 🎀 (<t:${Math.floor(Date.now() / 1000)}:R>)`
+              `Role verifikasi <@&${FEMALE_ROLE_ID}> telah berhasil disetujui dan diberikan oleh staff **${interaction.user.username}** 🎀 (<t:${Math.floor(Date.now() / 1000)}:R>)`
             )
           );
 
           await interaction.channel.send({
             components: [verifNoticeContainer],
-            flags: MessageFlags.IsComponentsV2
+            flags: MessageFlags.IsComponentsV2,
+            allowedMentions: { parse: [] }
           });
         } catch (e) {
           console.error("[VERIF APPROVED IN-CHANNEL EMBED ERROR]", e);
@@ -19714,7 +21438,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).catch(() => { });
         if (!interaction.replied && !interaction.deferred) {
           return interaction.reply({
-            content: `<:emoji_31:1459573171916116124> Verifikasi Berhasil! Role <@&${FEMALE_ROLE_ID}> telah ditambahkan ke <@${targetUserId}> oleh <@${interaction.user.id}>.`,
+            content: `<:emoji_31:1459573171916116124> Verifikasi Berhasil! Role <@&${FEMALE_ROLE_ID}> telah diberikan oleh staff **${interaction.user.username}**.`,
             flags: MessageFlags.Ephemeral
           }).catch(() => { });
         }
@@ -19815,27 +21539,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         }
 
-        // Send cute & cool Container V2 claim notification card in channel (1 paragraph)
-        const claimNoticeContainer = new ContainerBuilder().setAccentColor(isVerifTicket ? 0xFFB6C1 : 0x3498db);
-        if (isVerifTicket) {
-          claimNoticeContainer.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent("## 🌸 Tiket Di-Claim • Under Hand ✨"),
-            new TextDisplayBuilder().setContent(
-              `Tiket verifikasi ini telah di-claim dan sedang ditangani oleh staff <@${interaction.user.id}> 🌷 \`[ ⏳ Sedang Ditangani ]\` (<t:${Math.floor(Date.now() / 1000)}:R>)`
-            )
-          );
-        } else {
-          claimNoticeContainer.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent("## ⚡ Tiket Berhasil Di-Claim"),
-            new TextDisplayBuilder().setContent(
-              `Tiket ini telah di-claim dan sedang ditangani oleh staff <@${interaction.user.id}> 🤝 \`[ ⏳ SEDANG DITANGANI ]\` (<t:${Math.floor(Date.now() / 1000)}:R>)`
-            )
-          );
-        }
+        // Send plain text claim notification in channel (no embed)
+        const claimNotice = isVerifTicket
+          ? `🌸 Tiket verifikasi ini telah di-claim dan sedang ditangani oleh staff <@${interaction.user.id}> 🌷 \`[ ⏳ Sedang Ditangani ]\` (<t:${Math.floor(Date.now() / 1000)}:R>)`
+          : `⚡ Tiket ini telah di-claim dan sedang ditangani oleh staff <@${interaction.user.id}> 🤝 \`[ ⏳ Sedang Ditangani ]\` (<t:${Math.floor(Date.now() / 1000)}:R>)`;
 
         await interaction.channel.send({
-          components: [claimNoticeContainer],
-          flags: MessageFlags.IsComponentsV2
+          content: claimNotice
         }).catch(() => { });
 
         // ===================== LOG TICKET: CLAIMED (ADD-ONLY) =====================
@@ -20126,7 +21836,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const e = buildfaqItemEmbed(interaction.guild, item); // <-- PASTIIN INI
-        return interaction.reply({ embeds: [e], ephemeral: false });
+        return interaction.reply({ embeds: [e] });
       }
 
       if (cmd === "faq_search") {
@@ -20207,6 +21917,265 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
+
+    // ===================== /cn (SLASH COMMAND) =====================
+    if (interaction.isChatInputCommand() && interaction.commandName === "cn") {
+      if (!interaction.guild) {
+        return interaction.reply({ content: "❌ Perintah ini hanya dapat digunakan di dalam server.", flags: MessageFlags.Ephemeral });
+      }
+
+      const sub = interaction.options.getSubcommand();
+
+      // --- SUBCOMMAND: SETROLE ---
+      if (sub === "setrole") {
+        const isAdmin = isBotOwner(interaction.user.id) || hasPerm(interaction.member, PermissionsBitField.Flags.Administrator);
+        if (!isAdmin) {
+          return interaction.reply({ content: "❌ Perintah konfigurasi role CN hanya dapat digunakan oleh **Administrator / Bot Owner**.", flags: MessageFlags.Ephemeral });
+        }
+
+        const roleTarget = interaction.options.getRole("role", true);
+        const cnRolesKey = `cn_allowed_roles_${interaction.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+        if (!roleIds.includes(roleTarget.id)) {
+          roleIds.push(roleTarget.id);
+        }
+
+        await MetaText.updateOne(
+          { key: cnRolesKey },
+          { $set: { value: roleIds, updated_at: Date.now() } },
+          { upsert: true }
+        );
+
+        const embedSet = new EmbedBuilder()
+          .setTitle("✅ Role Izin CN Ditambahkan")
+          .setColor(0x2ecc71)
+          .setDescription(`Role <@&${roleTarget.id}> (\`${roleTarget.name}\`) sekarang memiliki izin untuk menggunakan perintah ganti nickname (\`/cn set\` / \`ccn <namabaru>\`).`)
+          .setTimestamp();
+        return interaction.reply({ embeds: [embedSet] });
+      }
+
+      // --- SUBCOMMAND: REMOVEROLE ---
+      if (sub === "removerole") {
+        const isAdmin = isBotOwner(interaction.user.id) || hasPerm(interaction.member, PermissionsBitField.Flags.Administrator);
+        if (!isAdmin) {
+          return interaction.reply({ content: "❌ Perintah konfigurasi role CN hanya dapat digunakan oleh **Administrator / Bot Owner**.", flags: MessageFlags.Ephemeral });
+        }
+
+        const roleTarget = interaction.options.getRole("role", true);
+        const cnRolesKey = `cn_allowed_roles_${interaction.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        let roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+        roleIds = roleIds.filter(id => id !== roleTarget.id);
+
+        await MetaText.updateOne(
+          { key: cnRolesKey },
+          { $set: { value: roleIds, updated_at: Date.now() } },
+          { upsert: true }
+        );
+
+        const embedDel = new EmbedBuilder()
+          .setTitle("🗑️ Role Izin CN Dihapus")
+          .setColor(0xe67e22)
+          .setDescription(`Role <@&${roleTarget.id}> (\`${roleTarget.name}\`) telah dihapus dari daftar role izin CN.`)
+          .setTimestamp();
+        return interaction.reply({ embeds: [embedDel] });
+      }
+
+      // --- SUBCOMMAND: ROLES ---
+      if (sub === "roles") {
+        const cnRolesKey = `cn_allowed_roles_${interaction.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        const roleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+
+        const roleMentions = roleIds.length > 0
+          ? roleIds.map(id => interaction.guild.roles.cache.get(id) ? `• <@&${id}> (\`${id}\`)` : `• Role ID \`${id}\` *(Terhapus)*`).join("\n")
+          : "*Belum ada role khusus yang didaftarkan.*";
+
+        const embedList = new EmbedBuilder()
+          .setTitle("📋 Daftar Role Izin CN Server")
+          .setColor(0x3498db)
+          .setDescription(
+            `Berikut adalah role khusus yang memiliki izin menggunakan perintah \`/cn set\` / \`ccn <namabaru>\`:\n\n${roleMentions}\n\n` +
+            `💡 *Gunakan \`/cn setrole\` untuk menambahkan role baru.*`
+          )
+          .setFooter({ text: "Mystral Assistant • Nickname Management" })
+          .setTimestamp();
+        return interaction.reply({ embeds: [embedList] });
+      }
+
+      // --- SUBCOMMAND: HELP ---
+      if (sub === "help") {
+        const cnRolesKey = `cn_allowed_roles_${interaction.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        const configuredRoleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+
+        const hasConfiguredRole = configuredRoleIds.some(id => interaction.member.roles.cache.has(id));
+        const envStaffIds = [process.env.STAFF_ROLE_ID, process.env.TICKET_STAFF_ROLE_ID].filter(Boolean);
+        const hasEnvStaffRole = envStaffIds.some(id => interaction.member.roles.cache.has(id));
+        const hasNameKeyword = interaction.member.roles.cache.some(r => {
+          const n = r.name.toLowerCase();
+          return n.includes("staff") || n.includes("admin") || n.includes("mod") || n.includes("booster") || n.includes("vip") || n.includes("cn") || n.includes("custom nick");
+        });
+
+        const hasChangeNickPerm = interaction.member.permissions.has(PermissionsBitField.Flags.ChangeNickname);
+        const hasManageNickPerm = interaction.member.permissions.has(PermissionsBitField.Flags.ManageNicknames);
+        const hasAdminPerm = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+        const isOwner = isBotOwner(interaction.user.id);
+
+        const canChangeSelf = isOwner || hasAdminPerm || hasManageNickPerm || hasChangeNickPerm || hasConfiguredRole || hasEnvStaffRole || hasNameKeyword;
+
+        const embedHelp = new EmbedBuilder()
+          .setTitle("🔮 CHANGE NICKNAME (CN) ENGINE")
+          .setColor(0x8b5cf6)
+          .setDescription(
+            `Fitur untuk mengubah / mereset nickname di server secara instan.\n\n` +
+            `**Status Izin Kamu:** ${canChangeSelf ? "✅ **Diizinkan (Bisa Ganti CN)**" : "❌ **Tidak Memiliki Izin CN**"}\n\n` +
+            `**📖 Cara Penggunaan (Slash & Prefix):**\n` +
+            `• \`/cn set name:<namabaru>\` / \`ccn <namabaru>\` — Mengubah nickname kamu sendiri.\n` +
+            `• \`/cn reset\` / \`ccn reset\` — Mereset nickname kamu kembali ke nama asli/default.\n` +
+            (hasManageNickPerm || hasAdminPerm || isOwner ? `• \`/cn set name:<namabaru> user:@target\` — *(Staff/Mod)* Mengubah nickname member lain.\n• \`/cn reset user:@target\` — *(Staff/Mod)* Mereset nickname member lain.\n` : "") +
+            `\n**⚙️ Pengaturan Admin:**\n` +
+            `• \`/cn setrole role:@role\` — Beri izin role tertentu untuk bisa CN sendiri.\n` +
+            `• \`/cn removerole role:@role\` — Hapus role dari daftar izin CN.\n` +
+            `• \`/cn roles\` — Lihat daftar role yang memiliki izin CN.`
+          )
+          .setFooter({ text: "Mystral Assistant • Self & Staff Nickname Management" })
+          .setTimestamp();
+        return interaction.reply({ embeds: [embedHelp] });
+      }
+
+      // --- SUBCOMMAND: SET / RESET ---
+      await interaction.deferReply();
+
+      const targetUser = interaction.options.getUser("user", false);
+      let targetMember = interaction.member;
+      let isTargetingOther = false;
+
+      if (targetUser && targetUser.id !== interaction.user.id) {
+        const fetched = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+        if (!fetched) {
+          return interaction.editReply("❌ Member target tidak ditemukan di server ini.");
+        }
+        targetMember = fetched;
+        isTargetingOther = true;
+      }
+
+      // Validasi izin
+      if (isTargetingOther) {
+        const canManageOthers = isBotOwner(interaction.user.id) ||
+          hasPerm(interaction.member, PermissionsBitField.Flags.Administrator) ||
+          hasPerm(interaction.member, PermissionsBitField.Flags.ManageNicknames) ||
+          hasPerm(interaction.member, PermissionsBitField.Flags.ModerateMembers);
+
+        if (!canManageOthers) {
+          return interaction.editReply("❌ Kamu hanya memiliki izin untuk mengganti nickname **diri sendiri**. Untuk mengganti nickname member lain diperlukan izin `Manage Nicknames`.");
+        }
+      } else {
+        const cnRolesKey = `cn_allowed_roles_${interaction.guild.id}`;
+        const existingDoc = await MetaText.findOne({ key: cnRolesKey }).lean().catch(() => null);
+        const configuredRoleIds = Array.isArray(existingDoc?.value) ? existingDoc.value : [];
+
+        const hasConfiguredRole = configuredRoleIds.some(id => interaction.member.roles.cache.has(id));
+        const envStaffIds = [process.env.STAFF_ROLE_ID, process.env.TICKET_STAFF_ROLE_ID].filter(Boolean);
+        const hasEnvStaffRole = envStaffIds.some(id => interaction.member.roles.cache.has(id));
+        const hasNameKeyword = interaction.member.roles.cache.some(r => {
+          const n = r.name.toLowerCase();
+          return n.includes("staff") || n.includes("admin") || n.includes("mod") || n.includes("booster") || n.includes("vip") || n.includes("cn") || n.includes("custom nick") || n.includes("change nickname");
+        });
+
+        const hasChangeNickPerm = interaction.member.permissions.has(PermissionsBitField.Flags.ChangeNickname);
+        const hasManageNickPerm = interaction.member.permissions.has(PermissionsBitField.Flags.ManageNicknames);
+        const hasAdminPerm = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+        const isOwner = isBotOwner(interaction.user.id);
+
+        const canChangeSelf = isOwner || hasAdminPerm || hasManageNickPerm || hasChangeNickPerm || hasConfiguredRole || hasEnvStaffRole || hasNameKeyword;
+
+        if (!canChangeSelf) {
+          const embedDenied = new EmbedBuilder()
+            .setTitle("❌ Akses Izin Ditolak")
+            .setColor(0xe74c3c)
+            .setDescription(
+              `Kamu tidak memiliki izin untuk mengganti nickname sendiri di server ini.\n\n` +
+              `**Syarat Izin CN:**\n` +
+              `• Memiliki izin Discord \`Change Nickname\` di role kamu\n` +
+              `• Memiliki Role Staff / Moderator / Admin\n` +
+              `• Memiliki Role Server Booster / VIP\n` +
+              `• Memiliki Role khusus CN yang didaftarkan Admin (\`/cn setrole role:@role\`)`
+            )
+            .setFooter({ text: "Mystral Assistant • Nickname Management" })
+            .setTimestamp();
+          return interaction.editReply({ embeds: [embedDenied] });
+        }
+      }
+
+      let finalNick = null;
+      let isReset = false;
+
+      if (sub === "reset") {
+        isReset = true;
+      } else {
+        const rawNick = interaction.options.getString("name", true).trim();
+        const resetKeywords = ["reset", "clear", "default", "hapus", "normal", "delete"];
+        if (resetKeywords.includes(rawNick.toLowerCase())) {
+          isReset = true;
+        } else {
+          finalNick = rawNick.replace(/^["']|["']$/g, "").trim();
+          if (finalNick.length > 32) {
+            return interaction.editReply(`❌ Nickname maksimal **32 karakter** (Nickname yang kamu masukkan: **${finalNick.length} karakter**).`);
+          }
+        }
+      }
+
+      // Validasi Permission Bot
+      const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe().catch(() => null);
+      if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+        return interaction.editReply("❌ Bot tidak memiliki permission `Manage Nicknames` di server ini. Tolong berikan bot permission `Manage Nicknames` di Server Settings -> Roles.");
+      }
+
+      // Validasi Hirarki Role
+      if (targetMember.id === interaction.guild.ownerId) {
+        return interaction.editReply("❌ Bot tidak dapat mengubah nickname **Server Owner** karena batasan sistem Discord.");
+      }
+
+      if (botMember.roles.highest.position <= targetMember.roles.highest.position) {
+        return interaction.editReply(
+          `❌ Bot tidak dapat mengubah nickname ${targetMember.id === interaction.user.id ? "kamu" : `<@${targetMember.id}>`} karena posisi Role bot (\`${botMember.roles.highest.name}\`) berada di bawah atau setara dengan role target (\`${targetMember.roles.highest.name}\`).\n\n` +
+          `💡 *Pindahkan role bot ke posisi lebih tinggi di Server Settings -> Roles agar bot dapat mengatur nickname.*`
+        );
+      }
+
+      const oldNick = targetMember.displayName || targetMember.user.username;
+
+      try {
+        await targetMember.setNickname(finalNick, `Slash /cn by ${interaction.user.tag} (${interaction.user.id})`);
+
+        const embedSuccess = new EmbedBuilder()
+          .setTitle(isReset ? "🔄 Nickname Berhasil Direset" : "✨ Nickname Berhasil Diperbarui")
+          .setColor(0x2ecc71)
+          .setDescription(
+            isReset
+              ? `Nickname untuk <@${targetMember.id}> telah dikembalikan ke nama default (**${targetMember.user.username}**).`
+              : `Nickname untuk <@${targetMember.id}> berhasil diubah menjadi **${finalNick}**!`
+          )
+          .addFields(
+            { name: "👤 Member", value: `<@${targetMember.id}> (\`${targetMember.user.tag}\`)`, inline: true },
+            { name: "🏷️ Nick Sebelumnya", value: `\`${oldNick}\``, inline: true },
+            { name: isReset ? "🏷️ Nick Default" : "✨ Nick Baru", value: `\`${finalNick || targetMember.user.username}\``, inline: true }
+          )
+          .setFooter({ text: "Mystral Assistant • Self & Staff Nickname Engine", iconURL: client.user.displayAvatarURL() })
+          .setTimestamp();
+
+        if (targetMember.id !== interaction.user.id) {
+          embedSuccess.addFields({ name: "🛡️ Diubah Oleh", value: `<@${interaction.user.id}>`, inline: false });
+        }
+
+        return interaction.editReply({ embeds: [embedSuccess] });
+      } catch (err) {
+        console.error("[SLASH CN ERROR]", err);
+        return interaction.editReply(`❌ Gagal mengubah nickname: ${err.message}`);
+      }
+    }
 
     // ===================== /giveaway_reroll =====================
     if (interaction.isChatInputCommand() && interaction.commandName === "giveaway_end") {
@@ -21956,29 +23925,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return interaction.showModal(modal);
         }
 
-        // Mode: PANEL (Sends category buttons panel)
-        if (mode === "panel") {
-          await interaction.channel.send({
-            components: [todPanelCard(challengerId, targetId), todRow(challengerId, targetId)],
-            flags: MessageFlags.IsComponentsV2,
-            allowedMentions: { parse: [] }
-          });
+        // Mode: PANEL or TRUTH / DARE / RANDOM / DAILY
+        let qType = null;
+        if (mode === "truth") qType = "truth";
+        else if (mode === "dare") qType = "dare";
 
-          return safeReply(interaction, {
-            content: "✅ Panel Truth or Dare terkirim.",
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-
-        // Mode: TRUTH / DARE / RANDOM / DAILY (Immediately sends question)
-        const q =
-          mode === "truth"
-            ? await getRandomTodQuestion({ type: "truth" })
-            : mode === "dare"
-              ? await getRandomTodQuestion({ type: "dare" })
-              : mode === "daily"
-                ? await getRandomTodQuestion({ category: todThemeForToday() })
-                : await getRandomTodQuestion();
+        const q = qType
+          ? await getRandomTodQuestion({ type: qType })
+          : (mode === "daily" ? await getRandomTodQuestion({ category: todThemeForToday() }) : await getRandomTodQuestion());
 
         if (!q) {
           return safeReply(interaction, {
@@ -21987,30 +23941,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        // Send question with Selesai & Menyerah buttons (Component v2)
-        const msg = await interaction.channel.send({
-          components: [todCard(q, challengerId, targetId), todResponseRow(targetId, q.id)],
-          flags: MessageFlags.IsComponentsV2,
-          allowedMentions: { parse: [] }
+        const embed = buildTodEmbed(q, targetUser || interaction.user, interaction.guild);
+        const row = todRow();
+
+        await interaction.channel.send({
+          embeds: [embed],
+          components: [row]
         });
 
-        // Auto-create thread if text channel
-        if (interaction.channel.type === ChannelType.GuildText) {
-          const nameTag = targetUser ? `@${targetUser.username}` : `@${interaction.user.username}`;
-          const thread = await msg.startThread({
-            name: `💬 TOD - ${nameTag}`,
-            autoArchiveDuration: 60,
-            reason: `Truth or Dare discussion`
-          }).catch(() => null);
-
-          if (thread) {
-            const targetMention = targetUser ? `<@${targetId}>` : `<@${challengerId}>`;
-            await thread.send(`Halo ${targetMention}, silakan jawab pertanyaan/lakukan tantanganmu di thread ini!`).catch(() => { });
-          }
-        }
-
         return safeReply(interaction, {
-          content: mode === "daily" ? `✅ Tema hari ini: **${todThemeForToday()}**` : "✅ Truth or Dare terkirim.",
+          content: "✅ Truth or Dare terkirim.",
           flags: MessageFlags.Ephemeral,
         });
       }
@@ -23536,7 +25476,8 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
 
     // Init Mystral Flame Streak Subsystem
     const streakSubsystem = require("./streak");
-    await streakSubsystem.init(client, { dbGet, dbAll, dbRun, dbExec });
+    await streakSubsystem.init(client, { dbGet, dbAll, dbRun, dbExec, resetTarotMonthlyRecovery });
+    await resetTarotMonthlyRecovery();
 
     // Check SQLite DB size
     let dbSizeFormatted = "0 B";
@@ -23585,6 +25526,7 @@ async function sendTicketLogTranscriptTxt(guild, channel, filenameBase) {
     process.exit(1);
   }
 })();
+
 // ===================== BACKUP ON EXIT =====================
 process.on("SIGINT", async () => {
   process.exit(0);

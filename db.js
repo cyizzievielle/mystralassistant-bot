@@ -329,5 +329,16 @@ module.exports = {
   StaffTagExempt,
   StaffTagSchedule,
   MusicControlCenter,
+  WordleUser: mongoose.models.WordleUser || mongoose.model("WordleUser", new mongoose.Schema({
+    user_id: { type: String, required: true },
+    date: { type: String, required: true },
+    guesses: [String],
+    is_won: { type: Boolean, default: false },
+    is_completed: { type: Boolean, default: false },
+    wins: { type: Number, default: 0 },
+    total_played: { type: Number, default: 0 },
+    streak: { type: Number, default: 0 },
+    max_streak: { type: Number, default: 0 },
+  }, { strict: false, collection: "wordle_users" })),
 };
 

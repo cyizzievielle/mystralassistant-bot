@@ -48,6 +48,44 @@ const commands = [
     .setDescription("Kirim perintah teks ke asisten")
     .addStringOption(o => o.setName("query").setDescription("Perintah (contoh: add owner to cisa)").setRequired(true)),
   streakCommandBuilder,
+  new SlashCommandBuilder()
+    .setName("cn")
+    .setDescription("Ganti nickname (Change Nickname) untuk diri sendiri atau member lain")
+    .addSubcommand((sc) =>
+      sc
+        .setName("set")
+        .setDescription("Ganti nickname diri sendiri atau member lain")
+        .addStringOption((o) => o.setName("name").setDescription("Nickname baru (maksimal 32 karakter)").setRequired(true))
+        .addUserOption((o) => o.setName("user").setDescription("Target member (opsional, khusus Staff/Moderator)").setRequired(false))
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("reset")
+        .setDescription("Reset nickname ke default (username asli)")
+        .addUserOption((o) => o.setName("user").setDescription("Target member (opsional, khusus Staff/Moderator)").setRequired(false))
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("setrole")
+        .setDescription("Beri izin role tertentu untuk bisa ganti nickname sendiri (Admin)")
+        .addRoleOption((o) => o.setName("role").setDescription("Role yang akan diberi izin CN").setRequired(true))
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("removerole")
+        .setDescription("Hapus role dari daftar izin CN (Admin)")
+        .addRoleOption((o) => o.setName("role").setDescription("Role yang akan dihapus dari izin CN").setRequired(true))
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("roles")
+        .setDescription("Lihat daftar role yang memiliki izin ganti nickname")
+    )
+    .addSubcommand((sc) =>
+      sc
+        .setName("help")
+        .setDescription("Lihat panduan lengkap & status izin CN kamu")
+    ),
   // ===== BASIC =====
   new SlashCommandBuilder().setName("ping").setDescription("Cek ping bot"),
   new SlashCommandBuilder().setName("botstatus").setDescription("Health check bot: DB, ping, uptime, command count"),
@@ -706,8 +744,12 @@ const rest = new REST({ version: "10" }).setToken(token);
 
 (async () => {
   try {
-    if (process.env.CLEAR_GUILD_COMMANDS === "1" && guildId) {
-      console.log(`🧹 Clearing guild commands from guild ${guildId}...`);
+    console.log("🧹 Clearing old global application commands...");
+    await rest.put(Routes.applicationCommands(clientId), { body: [] });
+    console.log("✅ Global application commands cleared.");
+
+    if (guildId) {
+      console.log(`🧹 Clearing old guild commands from ${guildId}...`);
       await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: [] });
       console.log("✅ Guild commands cleared.");
     }
@@ -721,7 +763,7 @@ const rest = new REST({ version: "10" }).setToken(token);
 
     console.log(`🚀 Deploying ${commands.length} commands to ${targetLabel}...`);
     await rest.put(route, { body: commands });
-    console.log("✅ Done! Commands updated.");
+    console.log(`✅ Done! All ${commands.length} commands successfully deployed to ${targetLabel}.`);
   } catch (e) {
     console.error("❌ Deploy failed:", e);
     process.exit(1);

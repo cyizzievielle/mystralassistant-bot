@@ -125,12 +125,85 @@ async function getPairById(id) {
   const doc = await StreakPair.findOne(buildPairQuery(id)); return doc ? doc.toObject() : null;
 }
 
+function getWibDayNumber(ts = Date.now()) {
+  const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
+  return Math.floor((Number(ts) + WIB_OFFSET_MS) / (24 * 60 * 60 * 1000));
+}
+
+function isStreakOverdue(pair, now = Date.now()) {
+  if (!pair || pair.status === "forming" || pair.status === "broken") return false;
+  const lastRef = pair.last_streak_increment_at || pair.last_active_at || pair.created_at;
+  if (!lastRef) return false;
+
+  const currentWibDay = getWibDayNumber(now);
+  const lastWibDay = getWibDayNumber(lastRef);
+  const daysDiff = currentWibDay - lastWibDay;
+
+  // If last completed interaction was 2 or more calendar days ago in WIB,
+  // at least one full day has passed without any streak interaction -> EXPIRED/PADAM!
+  return daysDiff >= 2;
+}
+
+async function extinguishPair(client, pair, reason = "tidak ada interaksi") {
+  const pId = getPairId(pair);
+  const now = Date.now();
+  await updatePair(pId, {
+    status: "broken",
+    broken_at: now,
+    user_one_active_today: 0,
+    user_two_active_today: 0
+  });
+  await clearActivity(pId);
+
+  await addLog(pair.guild_id, pId, null, "streak_broken", `Streak padam (${pair.current_streak} Hari) karena terlewat sehari tanpa interaksi (${reason})`);
+  if (client) {
+    await sendStreakCardNotification(client, pair.guild_id, pId, "Broken").catch(() => {});
+    await logToGuild(
+      client,
+      pair.guild_id,
+      `💔 **Streak Padam!** Api streak antara <@${pair.user_one}> & <@${pair.user_two}> (**${pair.current_streak} Hari**) telah **padam** 🕯️ karena terlewat sehari tanpa interaksi.\nKalian memiliki waktu **3 hari** untuk memulihkannya menggunakan \`/streak recover\` atau \`cstreak recover\`!`
+    ).catch(() => {});
+  }
+
+  pair.status = "broken";
+  pair.broken_at = now;
+  return pair;
+}
+
+const brokenWarnCooldowns = new Map();
+
+async function checkAndExtinguishOverduePairs(client) {
+  try {
+    const activePairs = await StreakPair.find({ status: { $in: ["active", "warning"] } }).lean();
+    for (const pair of activePairs) {
+      if (isStreakOverdue(pair)) {
+        await extinguishPair(client, pair, "terlewat lebih dari sehari tanpa interaksi");
+      }
+    }
+  } catch (err) {
+    console.error("[CHECK OVERDUE PAIRS ERROR]", err);
+  }
+}
+
 async function getActivePairForUser(guildId, userId) {
   const doc = await StreakPair.findOne({ guild_id: String(guildId), $or: [{ user_one: String(userId) }, { user_two: String(userId) }], status: { $in: ["active", "warning"] } }).sort({ current_streak: -1 });
-  return doc ? doc.toObject() : null;
+  if (!doc) return null;
+  let pair = doc.toObject();
+  if (isStreakOverdue(pair)) {
+    pair = await extinguishPair(null, pair, "terlewat sehari");
+    return null;
+  }
+  return pair;
 }
 
 async function getBrokenPairForUser(guildId, userId) {
+  const activeDocs = await StreakPair.find({ guild_id: String(guildId), $or: [{ user_one: String(userId) }, { user_two: String(userId) }], status: { $in: ["active", "warning"] } });
+  for (const doc of activeDocs) {
+    const p = doc.toObject();
+    if (isStreakOverdue(p)) {
+      await extinguishPair(null, p, "terlewat sehari");
+    }
+  }
   const doc = await StreakPair.findOne({ guild_id: String(guildId), $or: [{ user_one: String(userId) }, { user_two: String(userId) }], status: "broken" }).sort({ current_streak: -1 });
   return doc ? doc.toObject() : null;
 }
@@ -141,7 +214,16 @@ async function getAllActivePairsForUser(guildId, userId) {
     $or: [{ user_one: String(userId) }, { user_two: String(userId) }],
     status: { $in: ["active", "warning"] }
   }).sort({ current_streak: -1 });
-  return docs.map(d => d.toObject());
+  const result = [];
+  for (const doc of docs) {
+    const p = doc.toObject();
+    if (isStreakOverdue(p)) {
+      await extinguishPair(null, p, "terlewat sehari");
+    } else {
+      result.push(p);
+    }
+  }
+  return result;
 }
 
 async function getActivePairCountForUser(guildId, userId) {
@@ -1086,6 +1168,24 @@ async function handleMessageActivity(client, message) {
     await addLog(guildId, getPairId(pair), userA, "create_forming_pair", `Forming pair created between ${userA} and ${userB}`);
   }
 
+  if (isStreakOverdue(pair, now)) {
+    pair = await extinguishPair(client, pair, "terlewat lebih dari sehari tanpa interaksi");
+  }
+
+  if (pair.status === "broken") {
+    const pId = getPairId(pair);
+    const lastWarn = brokenWarnCooldowns.get(pId) || 0;
+    if (now - lastWarn > 10 * 60 * 1000) {
+      brokenWarnCooldowns.set(pId, now);
+      await message.reply({
+        content: `🕯️ **Streak kalian saat ini sedang padam (${pair.current_streak} Hari)!**\n` +
+          `Karena terlewat lebih dari sehari tanpa interaksi, apinya padam.\n` +
+          `Kalian bisa memulihkannya menggunakan \`cstreak recover\` atau \`/streak recover\` (tersisa **${pair.recovery_left}** kesempatan bulan ini) sebelum batas 3 hari berakhir! 🔥`
+      }).catch(() => {});
+    }
+    return;
+  }
+
   const hash = crypto.createHash("md5").update(message.content.trim().toLowerCase()).digest("hex");
   const lastAct = await getLastActivity(getPairId(pair), userA);
 
@@ -1392,46 +1492,31 @@ async function runDailyEvaluation(client) {
       const settings = await getSettings(guildId);
       if (!settings || !settings.enabled) continue;
 
-      const pairs = await getLeaderboard(guildId, "top_active", 500);
+      const pairs = (await StreakPair.find({ guild_id: String(guildId), status: { $in: ["active", "warning"] } })).map(d => d.toObject());
 
       for (const pair of pairs) {
         if (pair.status === "forming" || pair.status === "broken") continue;
 
         const pId = getPairId(pair);
-        const u1Active = pair.user_one_active_today;
-        const u2Active = pair.user_two_active_today;
+        const completedYesterday = pair.user_one_active_today === 1 && pair.user_two_active_today === 1;
 
-        if (u1Active && u2Active) {
+        if (!completedYesterday) {
+          await extinguishPair(client, pair, "tidak aktif kemarin");
+        } else {
           await updatePair(pId, {
             user_one_active_today: 0,
             user_two_active_today: 0
           });
           await clearActivity(pId);
-        } else {
-          if (pair.status === "active" || pair.status === "warning") {
-            if (pair.recovery_left <= 0) {
-              await deletePair(pId);
-              await addLog(guildId, pId, null, "streak_dissolved", "Streak dissolved automatically because recovery tokens ran out");
-              await logToGuild(client, guildId, `💔 **Streak Dihapus!** Streak antara <@${pair.user_one}> & <@${pair.user_two}> telah **dihapus sepenuhnya** karena padam dan tidak memiliki sisa token pemulihan.`);
-            } else {
-              await updatePair(pId, {
-                status: "broken",
-                user_one_active_today: 0,
-                user_two_active_today: 0,
-                broken_at: Date.now()
-              });
-              await addLog(guildId, pId, null, "broken_status", "Streak set to broken status immediately");
-              await sendStreakCardNotification(client, guildId, pId, "Broken");
-            }
-          }
         }
       }
 
       // Clean up broken pairs that haven't been recovered in 3 days
       const brokenPairs = await StreakPair.find({ guild_id: String(guildId), status: "broken" }).lean();
       for (const brokenPair of brokenPairs) {
-        const brokenAt = brokenPair.broken_at || brokenPair.last_active_at || brokenPair.created_at || Date.now();
-        const diffMs = Date.now() - brokenAt;
+        const rawBrokenAt = brokenPair.broken_at || brokenPair.last_active_at || brokenPair.created_at || Date.now();
+        const brokenAtMs = typeof rawBrokenAt === "number" ? rawBrokenAt : new Date(rawBrokenAt).getTime();
+        const diffMs = Date.now() - (isNaN(brokenAtMs) ? Date.now() : brokenAtMs);
         const diffDays = diffMs / (24 * 60 * 60 * 1000);
         if (diffDays >= 3) {
           const bpId = getPairId(brokenPair);
@@ -1539,8 +1624,27 @@ async function sendPublicWarningReminders(client) {
   }
 }
 
-async function recoverStreak(guildId, userId, targetUserId = null) {
+async function recoverStreak(guildId, userId, targetUserId = null, client = null) {
   let pair;
+
+  // Pastikan jika ada streak yang overdue (terlewat > 1 hari) langsung dipadamkan agar bisa di-recover
+  if (targetUserId) {
+    const candidate = await getPair(guildId, userId, targetUserId);
+    if (candidate && isStreakOverdue(candidate)) {
+      await extinguishPair(client, candidate, "terlewat lebih dari sehari tanpa interaksi");
+    }
+  } else {
+    const activePairs = await StreakPair.find({
+      guild_id: String(guildId),
+      $or: [{ user_one: String(userId) }, { user_two: String(userId) }],
+      status: { $in: ["active", "warning"] }
+    }).lean();
+    for (const ap of activePairs) {
+      if (isStreakOverdue(ap)) {
+        await extinguishPair(client, ap, "terlewat lebih dari sehari tanpa interaksi");
+      }
+    }
+  }
 
   if (targetUserId) {
     pair = await getPair(guildId, userId, targetUserId);
@@ -1585,20 +1689,27 @@ async function recoverStreak(guildId, userId, targetUserId = null) {
   }
 
   const now = Date.now();
-
   const nextRec = pair.recovery_left - 1;
-
   const pId = getPairId(pair);
 
   await updatePair(pId, {
     status: "active",
     recovery_left: nextRec,
+    broken_at: null,
     last_active_at: now,
+    last_streak_increment_at: now,
     user_one_active_today: 1,
     user_two_active_today: 1
   });
 
   await addLog(guildId, pId, userId, "streak_recovered", `Streak recovered. Remaining: ${nextRec}`);
+  if (client) {
+    await logToGuild(
+      client,
+      guildId,
+      `✨ **Streak Dipulihkan!** <@${userId}> telah memulihkan api streak dengan <@${pair.user_one === userId ? pair.user_two : pair.user_one}> (**${pair.current_streak} Hari**)! Api kembali menyala 🔥.`
+    ).catch(() => {});
+  }
 
   return { success: true, partner: pair.user_one === userId ? pair.user_two : pair.user_one, newStreak: pair.current_streak, recoveryLeft: nextRec };
 }
@@ -1640,9 +1751,14 @@ async function breakStreak(guildId, userId, targetUserId = null) {
   return { success: true, partner: pair.user_one === userId ? pair.user_two : pair.user_one };
 }
 
+let resetTarotMonthlyCallback = null;
+
 async function resetMonthlyRecoveryTokens(client) {
   console.log("[STREAK] Running Monthly Recovery Tokens Reset...");
   try {
+    if (typeof resetTarotMonthlyCallback === "function") {
+      await resetTarotMonthlyCallback();
+    }
     // Reset default ke 5 untuk seluruh pasangan
     await StreakPair.updateMany({}, { $set: { recovery_left: 5 } });
 
@@ -1666,13 +1782,56 @@ async function resetMonthlyRecoveryTokens(client) {
   }
 }
 
+function getWibDateKey(ts = Date.now()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(ts));
+  const y = parts.find((p) => p.type === "year")?.value || "1970";
+  const m = parts.find((p) => p.type === "month")?.value || "01";
+  const d = parts.find((p) => p.type === "day")?.value || "01";
+  return `${y}-${m}-${d}`;
+}
+
+let lastEvaluatedWibDate = "";
+
+async function checkAndRunDailyEvaluation(client, force = false) {
+  const todayWibDate = getWibDateKey();
+  if (force || lastEvaluatedWibDate !== todayWibDate) {
+    const isFirstRun = !lastEvaluatedWibDate;
+    lastEvaluatedWibDate = todayWibDate;
+    console.log(`[STREAK] Running Daily Evaluation for WIB Date: ${todayWibDate}...`);
+    await runDailyEvaluation(client);
+
+    const now = new Date();
+    const dayFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Jakarta",
+      day: "numeric"
+    });
+    const dayOfMonth = parseInt(dayFormatter.format(now), 10);
+    if (dayOfMonth === 1 && !isFirstRun) {
+      await resetMonthlyRecoveryTokens(client);
+    }
+  }
+}
+
 let cronInterval = null;
 const initializedClients = new WeakSet();
 let lastCronExecutedKey = "";
 function startScheduler(client) {
   if (cronInterval) clearInterval(cronInterval);
+
+  // Catch-up check on scheduler start
+  checkAndRunDailyEvaluation(client).catch(err => console.error("[STREAK CATCHUP ERROR]", err));
+  checkAndExtinguishOverduePairs(client).catch(err => console.error("[STREAK OVERDUE CHECK ERROR]", err));
+
   cronInterval = setInterval(async () => {
     try {
+      await checkAndRunDailyEvaluation(client);
+      await checkAndExtinguishOverduePairs(client);
+
       const now = new Date();
       const formatter = new Intl.DateTimeFormat("en-US", {
         timeZone: "Asia/Jakarta",
@@ -1687,24 +1846,6 @@ function startScheduler(client) {
       if (hourPart && minutePart) {
         const hh = parseInt(hourPart.value, 10);
         const mm = parseInt(minutePart.value, 10);
-        const key = `${hh}:${mm}:${now.getDate()}`;
-
-        if ((hh === 0 || hh === 24) && mm === 0) {
-          if (lastCronExecutedKey === key) return;
-          lastCronExecutedKey = key;
-          console.log("[STREAK] Running 00:00 WIB Reset Evaluation...");
-          await runDailyEvaluation(client);
-
-          // Reset token recovery setiap tanggal 1
-          const dayFormatter = new Intl.DateTimeFormat("en-US", {
-            timeZone: "Asia/Jakarta",
-            day: "numeric"
-          });
-          const dayOfMonth = parseInt(dayFormatter.format(now), 10);
-          if (dayOfMonth === 1) {
-            await resetMonthlyRecoveryTokens(client);
-          }
-        }
 
         if (hh === 21 && mm === 0) {
           console.log("[STREAK] Running 21:00 WIB Public Warning Reminders...");
@@ -2288,7 +2429,7 @@ async function handlePrefixCommand(message, client) {
   // Subcommand: RECOVER
   if (subcommand === "recover") {
     const targetUser = message.mentions.users.first();
-    const res = await recoverStreak(guildId, runnerId, targetUser?.id);
+    const res = await recoverStreak(guildId, runnerId, targetUser?.id, client);
 
     if (res.error) {
       return message.reply(`⚠️ ${res.error}`);
@@ -2746,7 +2887,7 @@ async function handleInteraction(interaction, client) {
   if (subcommand === "recover") {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const targetUser = interaction.options.getUser("user");
-    const res = await recoverStreak(guildId, runnerId, targetUser?.id);
+    const res = await recoverStreak(guildId, runnerId, targetUser?.id, client);
 
     if (res.error) {
       return interaction.editReply({ content: `⚠️ ${res.error}` });
@@ -2939,6 +3080,10 @@ async function init(client, dbWrappers) {
     if (initializedClients.has(client)) {
       console.log("[STREAK] Init skipped: subsystem already initialized for this client.");
       return;
+    }
+
+    if (dbWrappers && typeof dbWrappers.resetTarotMonthlyRecovery === "function") {
+      resetTarotMonthlyCallback = dbWrappers.resetTarotMonthlyRecovery;
     }
 
     console.log("[STREAK] Initializing Mystral Flame Streak Subsystem (Single-file)...");
