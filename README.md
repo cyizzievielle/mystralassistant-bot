@@ -63,9 +63,13 @@
 * **FAQ Interaktif:** Menu bantuan informatif berbasis dropdown components.
 
 ### 9. 🎨 Multimedia & Creative Utilities
-* **Brat Meme Generator & Typing Video:**
-  * `cbrat <teks>` — Stiker gambar meme Brat Charli XCX berlatar hijau neon `#8ACE00` tajam 1:1.
-  * `cbratvid <teks>` — Video animasi MP4 ketikan teks meme Brat kata per kata berkecepatan tinggi.
+* **Brat Meme Generator & Typing Video (Identik `bratgenerator.com`):**
+  * `cbrat <teks>` — Generator stiker meme Charli XCX dengan tipografi otentik, perataan teks justified otomatis, font resmi, dan tombol ganti palet warna interaktif (🟢 Hijau / ⚪ Putih Deluxe / ⚫ Hitam Remix / 🔵 Biru Club).
+  * `cbrat -white <teks>` *(atau `cbrat -deluxe`)* — Langsung menghasilkan versi album Deluxe (latar putih bersih dengan teks hitam tegas).
+  * `cbrat -black <teks>` *(atau `cbrat -remix`)* — Menghasilkan versi Remix (latar hitam dengan teks putih).
+  * `cbrat -blue <teks>` — Menghasilkan versi Club Classics (latar biru).
+  * `cbratvid <teks>` — Video animasi MP4 ketikan teks meme Brat kata per kata berkecepatan tinggi (juga mendukung `-white`, `-black`, `-blue`).
+  * *Tip:* Mendukung pesan **multiline / baris baru** (tekan Shift + Enter pada Discord) untuk menentukan susunan baris teks sendiri.
 * **Enhancement & Media Conversion:**
   * `chd` / `chdimage` *(lampiran / reply foto)* — Upscale 2× resolusi gambar dengan penajaman detail (Unsharp Mask filter).
   * `ckompres` *(lampiran / reply foto)* — Kompresi cerdas ukuran file gambar (JPEG/WebP) hemat kuota hingga 50-80% tanpa merusak estetika.

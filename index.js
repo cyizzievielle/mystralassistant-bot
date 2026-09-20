@@ -374,6 +374,11 @@ let FONT_FAMILY_BOLD = "DejaVu Sans";
       GlobalFonts.registerFromPath(cinzelVarPath, "Cinzel");
     }
 
+    const bratFontPath = path.join(__dirname, "assets", "fonts", "arial_narrow.woff");
+    if (fs.existsSync(bratFontPath)) {
+      GlobalFonts.registerFromPath(bratFontPath, "BratOfficial");
+    }
+
     const famNames = (GlobalFonts.families || [])
       .map((f) => (typeof f === "string" ? f : f?.family))
       .filter(Boolean);
@@ -6387,6 +6392,132 @@ function parseKeyValueArgs(text) {
     args[key] = val;
   }
   return args;
+}
+
+// ============================================================
+// BRAT MEME ENGINE (CHARLI XCX AESTHETIC & BRATGENERATOR.COM)
+// ============================================================
+const bratSessions = global.__bratSessions || (global.__bratSessions = new Map());
+
+function renderBratCanvas(rawText, theme = "green", W = 500, H = 500) {
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext("2d");
+
+  let bg = "#8ACE00";
+  let fg = "#000000";
+  if (theme === "white" || theme === "deluxe") {
+    bg = "#FFFFFF";
+    fg = "#000000";
+  } else if (theme === "black" || theme === "dark" || theme === "remix") {
+    bg = "#000000";
+    fg = "#FFFFFF";
+  } else if (theme === "blue") {
+    bg = "#0015B8";
+    fg = "#FFFFFF";
+  }
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  let lines = [];
+  const rawLines = String(rawText).trim().toLowerCase().split(/\r?\n/);
+  const hasManualNewlines = rawLines.length > 1;
+
+  if (hasManualNewlines) {
+    lines = rawLines.map(l => l.trim()).filter(Boolean);
+  } else {
+    const words = String(rawText).trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let cur = "";
+    const maxCharsPerLine = words.length > 8 ? 14 : (words.length > 4 ? 17 : 24);
+    for (const w of words) {
+      if (cur && (cur + " " + w).length > maxCharsPerLine) {
+        lines.push(cur);
+        cur = w;
+      } else {
+        cur = cur ? cur + " " + w : w;
+      }
+    }
+    if (cur) lines.push(cur);
+  }
+
+  if (lines.length === 0) lines = ["brat"];
+
+  const maxAllowedW = Math.round(W * 0.84);
+  const maxTotalH = Math.round(H * 0.82);
+
+  let fontSize = 74;
+  while (fontSize > 16) {
+    ctx.font = `${fontSize}px Arial, "BratOfficial", sans-serif`;
+    const widestLine = Math.max(...lines.map(l => ctx.measureText(l).width));
+    const totalH = lines.length * (fontSize * 1.08);
+    if (widestLine <= maxAllowedW && totalH <= maxTotalH) break;
+    fontSize -= 2;
+  }
+
+  ctx.font = `${fontSize}px Arial, "BratOfficial", sans-serif`;
+  const lineHeight = fontSize * 1.08;
+  const totalH = lines.length * lineHeight;
+  let curY = (H - totalH) / 2 + (fontSize * 0.82);
+
+  const targetLineWidth = Math.max(...lines.map(l => ctx.measureText(l).width));
+  const startX = (W - targetLineWidth) / 2;
+
+  ctx.fillStyle = fg;
+  ctx.textBaseline = "alphabetic";
+
+  try {
+    ctx.filter = "blur(1.45px)";
+  } catch (e) { }
+
+  for (const line of lines) {
+    const words = line.split(/\s+/).filter(Boolean);
+    if (words.length <= 1 || lines.length === 1) {
+      ctx.textAlign = "center";
+      ctx.fillText(line, W / 2, curY);
+    } else {
+      ctx.textAlign = "left";
+      const wordsWidths = words.map(w => ctx.measureText(w).width);
+      const totalWordsW = wordsWidths.reduce((a, b) => a + b, 0);
+      const spaceToDistribute = targetLineWidth - totalWordsW;
+      const normalSpaceW = ctx.measureText(" ").width;
+
+      if (spaceToDistribute > 0 && (spaceToDistribute / (words.length - 1)) <= normalSpaceW * 4.5) {
+        const gap = spaceToDistribute / (words.length - 1);
+        let x = startX;
+        for (let i = 0; i < words.length; i++) {
+          ctx.fillText(words[i], x, curY);
+          x += wordsWidths[i] + gap;
+        }
+      } else {
+        ctx.textAlign = "center";
+        ctx.fillText(line, W / 2, curY);
+      }
+    }
+    curY += lineHeight;
+  }
+
+  return canvas;
+}
+
+function buildBratButtons(token, activeTheme = "green") {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`brat:theme:green:${token}`)
+      .setLabel("🟢 Hijau")
+      .setStyle(activeTheme === "green" ? ButtonStyle.Success : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`brat:theme:white:${token}`)
+      .setLabel("⚪ Putih (Deluxe)")
+      .setStyle(activeTheme === "white" ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`brat:theme:black:${token}`)
+      .setLabel("⚫ Hitam (Remix)")
+      .setStyle(activeTheme === "black" ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`brat:theme:blue:${token}`)
+      .setLabel("🔵 Biru (Club)")
+      .setStyle(activeTheme === "blue" ? ButtonStyle.Primary : ButtonStyle.Secondary)
+  );
 }
 
 // ============================================================
@@ -14089,110 +14220,16 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // ===================== BRAT MEME STICKER GENERATOR (CBRAT / BRAT) =====================
+    // CBRAT / BRAT
     if (cmd === "brat" || cmd === "cbrat") {
-      let rawText = args.join(" ").trim();
-
-      // Jika teks tidak diberikan di argumen, cek apakah user mereply/membalas pesan lain
-      if (!rawText && message.reference && message.reference.messageId) {
-        try {
-          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
-          if (refMsg && refMsg.content) {
-            rawText = refMsg.content.trim();
-          }
-        } catch (_) { }
+      let rawText = "";
+      const cmdIdx = message.content.toLowerCase().indexOf(cmd);
+      if (cmdIdx !== -1) {
+        rawText = message.content.slice(cmdIdx + cmd.length).trim();
+      } else {
+        rawText = args.join(" ").trim();
       }
 
-      if (!rawText) {
-        const embedHelp = new EmbedBuilder()
-          .setTitle("💚 Brat Meme Sticker Generator (`cbrat`)")
-          .setColor(0x8ACE00)
-          .setDescription(
-            `Buat gambar stiker teks meme estetik ala album **Charli XCX (Brat)** secara instan!\n\n` +
-            `**Cara Penggunaan:**\n` +
-            `1. Ketik: \`${PREFIX} cbrat <teks kamu>\`\n` +
-            `   *Contoh:* \`${PREFIX} cbrat i love my life\` atau \`${PREFIX} cbrat bobo ah\`\n` +
-            `2. Atau **reply (balas) pesan member lain** lalu ketik \`${PREFIX} cbrat\`!`
-          )
-          .setFooter({ text: "Mystral Brat Generator • Charli XCX Aesthetic" });
-        return message.reply({ embeds: [embedHelp] });
-      }
-
-      try {
-        const W = 400;
-        const H = 400;
-        const canvas = createCanvas(W, H);
-        const ctx = canvas.getContext("2d");
-
-        // Warna Hijau Ikonik Charli XCX Brat
-        ctx.fillStyle = "#8ACE00";
-        ctx.fillRect(0, 0, W, H);
-
-        // Format lowercase khas album brat
-        const content = String(rawText).trim().toLowerCase();
-
-        // Hitung ukuran font dinamis sesuai panjang teks
-        let fontSize = 72;
-        if (content.length > 60) fontSize = 26;
-        else if (content.length > 35) fontSize = 34;
-        else if (content.length > 20) fontSize = 44;
-        else if (content.length > 10) fontSize = 56;
-
-        ctx.fillStyle = "#000000";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-
-        const maxW = W - 60;
-        function calculateLines(sz) {
-          ctx.font = `${sz}px Arial, InterBold, sans-serif`;
-          const words = content.split(/\s+/);
-          let curLine = "";
-          const res = [];
-          for (const w of words) {
-            const testLine = curLine ? `${curLine} ${w}` : w;
-            if (ctx.measureText(testLine).width > maxW && curLine) {
-              res.push(curLine);
-              curLine = w;
-            } else {
-              curLine = testLine;
-            }
-          }
-          if (curLine) res.push(curLine);
-          return res;
-        }
-
-        let lines = calculateLines(fontSize);
-        while (lines.length * (fontSize * 1.15) > (H - 60) && fontSize > 16) {
-          fontSize -= 4;
-          lines = calculateLines(fontSize);
-        }
-
-        const lineHeight = fontSize * 1.14;
-        const totalH = lines.length * lineHeight;
-        let startY = (H - totalH) / 2 + (fontSize / 2);
-
-        ctx.font = `${fontSize}px Arial, InterBold, sans-serif`;
-        try {
-          ctx.filter = "blur(1.15px)";
-        } catch (_) { }
-
-        for (const line of lines) {
-          ctx.fillText(line, W / 2, startY);
-          startY += lineHeight;
-        }
-
-        const buffer = canvas.toBuffer("image/png");
-        const attachment = new AttachmentBuilder(buffer, { name: "brat.png" });
-        return message.reply({ files: [attachment], allowedMentions: { repliedUser: false } });
-      } catch (err) {
-        console.error("[BRAT GENERATOR ERROR]", err);
-        return message.reply("❌ Gagal membuat stiker brat. Silakan coba lagi dengan teks yang lebih pendek.");
-      }
-    }
-
-    // ===================== BRAT VIDEO GENERATOR (CBRATVID / BRATVID) =====================
-    if (cmd === "bratvid" || cmd === "cbratvid" || cmd === "bratgif" || cmd === "cbratgif") {
-      let rawText = args.join(" ").trim();
       if (!rawText && message.reference && message.reference.messageId) {
         try {
           const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
@@ -14200,65 +14237,102 @@ client.on(Events.MessageCreate, async (message) => {
         } catch (_) { }
       }
 
+      let theme = "green";
+      if (/\b(?:-(?:-)?(?:white|deluxe|putih|w))\b/i.test(rawText)) {
+        theme = "white";
+        rawText = rawText.replace(/\b-(?:-)?(?:white|deluxe|putih|w)\b/gi, "").trim();
+      } else if (/\b(?:-(?:-)?(?:black|dark|remix|hitam|b))\b/i.test(rawText)) {
+        theme = "black";
+        rawText = rawText.replace(/\b-(?:-)?(?:black|dark|remix|hitam|b)\b/gi, "").trim();
+      } else if (/\b(?:-(?:-)?(?:blue|biru))\b/i.test(rawText)) {
+        theme = "blue";
+        rawText = rawText.replace(/\b-(?:-)?(?:blue|biru)\b/gi, "").trim();
+      } else if (/\b(?:-(?:-)?(?:green|hijau|g))\b/i.test(rawText)) {
+        theme = "green";
+        rawText = rawText.replace(/\b-(?:-)?(?:green|hijau|g)\b/gi, "").trim();
+      }
+
       if (!rawText) {
-        return message.reply("💡 **Format:** `cbratvid <teks kamu>` atau balas (reply) pesan teman lalu ketik `cbratvid`!");
+        const embedHelp = new EmbedBuilder()
+          .setTitle("💚 Brat Meme Sticker Generator (`cbrat`)")
+          .setColor(0x8ACE00)
+          .setDescription(
+            `Buat gambar stiker teks meme estetik ala album **Charli XCX (Brat)** secara instan persis seperti di **bratgenerator.com**!\n\n` +
+            `**Cara Penggunaan:**\n` +
+            `1. \`${PREFIX} cbrat <teks kamu>\` *(Default: Hijau neon)*\n` +
+            `2. \`${PREFIX} cbrat -white <teks kamu>\` *(Tema Putih Deluxe Edition)*\n` +
+            `3. \`${PREFIX} cbrat -black <teks kamu>\` *(Tema Hitam Remix Edition)*\n` +
+            `4. \`${PREFIX} cbrat -blue <teks kamu>\` *(Tema Biru Club Classics)*\n` +
+            `5. Mendukung pesan **multiline / baris baru** (tekan Shift+Enter) dan tombol ganti warna instan!`
+          )
+          .setFooter({ text: "Mystral Brat Generator • Charli XCX Aesthetic" });
+        return message.reply({ embeds: [embedHelp] });
+      }
+
+      try {
+        const canvas = renderBratCanvas(rawText, theme, 500, 500);
+        const buffer = canvas.toBuffer("image/png");
+        const attachment = new AttachmentBuilder(buffer, { name: `brat_${theme}.png` });
+
+        const token = crypto.randomBytes(4).toString("hex");
+        bratSessions.set(token, { text: rawText, theme, at: Date.now() });
+        const row = buildBratButtons(token, theme);
+
+        return message.reply({
+          files: [attachment],
+          components: [row],
+          allowedMentions: { repliedUser: false },
+        });
+      } catch (err) {
+        console.error("[BRAT GENERATOR ERROR]", err);
+        return message.reply("❌ Gagal membuat stiker brat. Silakan coba lagi dengan teks yang lebih pendek.");
+      }
+    }
+
+    // CBRATVID / BRATVID
+    if (cmd === "bratvid" || cmd === "cbratvid" || cmd === "bratgif" || cmd === "cbratgif") {
+      let rawText = "";
+      const cmdIdx = message.content.toLowerCase().indexOf(cmd);
+      if (cmdIdx !== -1) {
+        rawText = message.content.slice(cmdIdx + cmd.length).trim();
+      } else {
+        rawText = args.join(" ").trim();
+      }
+
+      if (!rawText && message.reference && message.reference.messageId) {
+        try {
+          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+          if (refMsg && refMsg.content) rawText = refMsg.content.trim();
+        } catch (_) { }
+      }
+
+      let theme = "green";
+      if (/\b(?:-(?:-)?(?:white|deluxe|putih|w))\b/i.test(rawText)) {
+        theme = "white";
+        rawText = rawText.replace(/\b-(?:-)?(?:white|deluxe|putih|w)\b/gi, "").trim();
+      } else if (/\b(?:-(?:-)?(?:black|dark|remix|hitam|b))\b/i.test(rawText)) {
+        theme = "black";
+        rawText = rawText.replace(/\b-(?:-)?(?:black|dark|remix|hitam|b)\b/gi, "").trim();
+      } else if (/\b(?:-(?:-)?(?:blue|biru))\b/i.test(rawText)) {
+        theme = "blue";
+        rawText = rawText.replace(/\b-(?:-)?(?:blue|biru)\b/gi, "").trim();
+      }
+
+      if (!rawText) {
+        return message.reply("💡 **Format:** `cbratvid <teks kamu>` (opsi tema: `-white`, `-black`, `-blue`) atau balas pesan teman!");
       }
 
       const statusMsg = await message.reply("⏳ *Sedang merender video animasi brat...*").catch(() => null);
 
       try {
-        const W = 400, H = 400;
-        const content = String(rawText).trim().toLowerCase();
-        const words = content.split(/\s+/);
-
-        function renderBratVideoFrame(textToDraw) {
-          const canvas = createCanvas(W, H);
-          const ctx = canvas.getContext("2d");
-          ctx.fillStyle = "#8ACE00";
-          ctx.fillRect(0, 0, W, H);
-
-          let fontSize = 68;
-          if (content.length > 50) fontSize = 28;
-          else if (content.length > 30) fontSize = 36;
-          else if (content.length > 15) fontSize = 48;
-
-          ctx.fillStyle = "#000000";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-
-          const maxW = W - 60;
-          const fWords = textToDraw.split(/\s+/).filter(Boolean);
-          let curLine = "";
-          const lines = [];
-          ctx.font = `${fontSize}px Arial, InterBold, sans-serif`;
-          for (const w of fWords) {
-            const testLine = curLine ? `${curLine} ${w}` : w;
-            if (ctx.measureText(testLine).width > maxW && curLine) {
-              lines.push(curLine);
-              curLine = w;
-            } else {
-              curLine = testLine;
-            }
-          }
-          if (curLine) lines.push(curLine);
-
-          const lineHeight = fontSize * 1.15;
-          const totalH = lines.length * lineHeight;
-          let startY = (H - totalH) / 2 + (fontSize / 2);
-
-          try { ctx.filter = "blur(1.15px)"; } catch (_) { }
-          for (const l of lines) {
-            ctx.fillText(l, W / 2, startY);
-            startY += lineHeight;
-          }
-          return canvas.toBuffer("image/jpeg");
-        }
-
+        const words = rawText.split(/\s+/).filter(Boolean);
         const frames = [];
         let curWords = [];
+
         for (let i = 0; i < words.length; i++) {
           curWords.push(words[i]);
-          frames.push(renderBratVideoFrame(curWords.join(" ")));
+          const frameCanvas = renderBratCanvas(curWords.join(" "), theme, 500, 500);
+          frames.push(frameCanvas.toBuffer("image/jpeg"));
         }
         const lastFrame = frames[frames.length - 1];
         for (let i = 0; i < 4; i++) frames.push(lastFrame);
@@ -14276,15 +14350,15 @@ client.on(Events.MessageCreate, async (message) => {
             if (code === 0 && fs.existsSync(tempOut)) resolve();
             else reject(new Error(`ffmpeg exited code ${code}`));
           });
-          ffmpeg.stdin.on("error", () => {});
+          ffmpeg.stdin.on("error", () => { });
           for (const f of frames) ffmpeg.stdin.write(f);
           ffmpeg.stdin.end();
         });
 
         const videoBuf = fs.readFileSync(tempOut);
-        try { fs.unlinkSync(tempOut); } catch (_) {}
+        try { fs.unlinkSync(tempOut); } catch (_) { }
 
-        const att = new AttachmentBuilder(videoBuf, { name: "brat.mp4" });
+        const att = new AttachmentBuilder(videoBuf, { name: `brat_${theme}.mp4` });
         if (statusMsg) await statusMsg.delete().catch(() => null);
         return message.reply({ files: [att], allowedMentions: { repliedUser: false } });
       } catch (err) {
@@ -20254,6 +20328,37 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.deferred || interaction.replied) return;
 
   try {
+
+    // ===================== BRAT COLOR PALETTE SWITCHER BUTTONS =====================
+    if (interaction.isButton() && interaction.customId.startsWith("brat:theme:")) {
+      const parts = interaction.customId.split(":");
+      const targetTheme = parts[2] || "green";
+      const token = parts[3];
+      const session = bratSessions.get(token);
+
+      if (!session) {
+        return interaction.reply({
+          content: "⚠️ Sesi tombol warna stiker ini sudah kedaluwarsa. Silakan ketik `cbrat <teks>` kembali.",
+          flags: MessageFlags.Ephemeral,
+        }).catch(() => null);
+      }
+
+      session.theme = targetTheme;
+      const canvas = renderBratCanvas(session.text, targetTheme, 500, 500);
+      const buffer = canvas.toBuffer("image/png");
+      const attachment = new AttachmentBuilder(buffer, { name: `brat_${targetTheme}.png` });
+      const row = buildBratButtons(token, targetTheme);
+
+      return await interaction.update({
+        files: [attachment],
+        components: [row],
+      }).catch(async () => {
+        return await interaction.editReply({
+          files: [attachment],
+          components: [row],
+        }).catch(() => null);
+      });
+    }
 
     // ===================== STAFF TAGGING TEST BUTTON INTERACTIONS =====================
     if (interaction.isButton() && interaction.customId.startsWith("ctag_testbtn_")) {
