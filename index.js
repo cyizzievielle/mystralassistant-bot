@@ -4409,6 +4409,7 @@ async function trySetMemberNick(member, nickOrNull) {
 
 // ===================== AFK WITH IN-MEMORY CACHE =====================
 const afkCache = new Map();
+const afkNotifyCooldown = new Map();
 let afkCacheInitialized = false;
 
 async function initAfkCache() {
@@ -13504,6 +13505,46 @@ client.on(Events.MessageCreate, async (message) => {
         setTimeout(() => welcomeBackMsg.delete().catch(() => { }), 15000);
       }
     }
+
+    // AFK notify when someone mentions an AFK user
+    if (message.guild && !message.author.bot && message.mentions?.users?.size > 0) {
+      const afkMentions = [];
+      const now = Date.now();
+
+      for (const [targetId, targetUser] of message.mentions.users) {
+        if (targetUser.bot || targetId === message.author.id) continue;
+        const cdKey = `${message.channel.id}:${targetId}`;
+        if (now - (afkNotifyCooldown.get(cdKey) || 0) < 10000) continue;
+
+        const targetAfk = await getAfk(targetId, message.guild.id);
+        if (targetAfk) {
+          afkNotifyCooldown.set(cdKey, now);
+          const sinceUnix = Math.floor((Number(targetAfk.since) || now) / 1000);
+          afkMentions.push({
+            user: targetUser,
+            reason: targetAfk.reason || "AFK",
+            sinceUnix,
+          });
+          if (afkMentions.length >= 3) break;
+        }
+      }
+
+      if (afkMentions.length > 0) {
+        const lines = afkMentions.map(
+          (item) => `💤 **${item.user.username}** sedang AFK: **${item.reason}** (<t:${item.sinceUnix}:R>)`
+        );
+        const afkNoticeMsg = await message
+          .reply({
+            content: lines.join("\n"),
+            allowedMentions: { repliedUser: false, parse: [] },
+          })
+          .catch(() => null);
+        if (afkNoticeMsg) {
+          setTimeout(() => afkNoticeMsg.delete().catch(() => { }), 12000);
+        }
+      }
+    }
+
     if (message.content.startsWith("cs")) {
       if (!message.guild || message.author.bot) return;
 
