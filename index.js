@@ -9631,16 +9631,27 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const formatEntry = (r) => {
       const arId = getArId(r) ?? "?";
       const trigger = String(r.trigger_text || "").slice(0, 32);
-      const rawResp = String(r.response_text || "");
-      // Kalau response adalah URL gambar/attachment → tampilkan ikon aja
-      const isImageUrl = /^https?:\/\/.+\.(png|jpe?g|gif|webp)/i.test(rawResp.trim()) ||
-        rawResp.trim().startsWith("https://cdn.discordapp.com") ||
-        rawResp.trim().startsWith("https://media.discordapp");
-      const response = isImageUrl ? "📷 *[gambar]*" : rawResp.replace(/\n/g, " ").slice(0, 45);
+      const rawResp = String(r.response_text || "").trim();
+      const hasImg = Boolean(
+        r.image_ext ||
+        r.attachment_url ||
+        r.image_base64 ||
+        /^https?:\/\/.+\.(png|jpe?g|gif|webp)/i.test(rawResp) ||
+        rawResp.startsWith("https://cdn.discordapp.com") ||
+        rawResp.startsWith("https://media.discordapp")
+      );
+      let response = "";
+      if (hasImg) {
+        response = rawResp && !rawResp.startsWith("http") ? `${rawResp.slice(0, 20)} 📷 *[stiker]*` : "📷 *[stiker/gambar]*";
+      } else if (rawResp) {
+        response = rawResp.replace(/\n/g, " ").slice(0, 45);
+      } else {
+        response = "*(kosong)*";
+      }
       const matchIcon = r.match_type === "exact" ? "🎯" : r.match_type === "contains" ? "🔍" : r.match_type === "regex" ? "🔣" : "🎯";
       const idStr = typeof arId === "number" ? `#${arId}` : `#${arId}`;
       const cooldownText = r.cooldown > 0 ? ` ⏱${r.cooldown}s` : "";
-      const creatorText = r.created_by ? ` · *${r.created_by}*` : "";
+      const creatorText = r.created_by ? ` · *by ${r.created_by}*` : "";
       return `${matchIcon} \`${idStr}\` **${trigger}**${cooldownText}${creatorText}\n> ↳ ${response}`;
     };
 
@@ -9679,15 +9690,28 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       // Semua entry dalam 1 TextDisplay, tiap entry = 1 baris
       const lines = pageSlice.map(r => {
         const arId = getArId(r) ?? "?";
-        const trigger = String(r.trigger_text || "").slice(0, 28);
-        const rawResp = String(r.response_text || "");
-        const isImg = /^https?:\/\/.+\.(png|jpe?g|gif|webp)/i.test(rawResp.trim()) ||
-          rawResp.trim().startsWith("https://cdn.discordapp.com") ||
-          rawResp.trim().startsWith("https://media.discordapp");
-        const resp = isImg ? "📷 gambar" : rawResp.replace(/\n/g, " ").slice(0, 38);
+        const trigger = String(r.trigger_text || "").slice(0, 24);
+        const rawResp = String(r.response_text || "").trim();
+        const hasImg = Boolean(
+          r.image_ext ||
+          r.attachment_url ||
+          r.image_base64 ||
+          /^https?:\/\/.+\.(png|jpe?g|gif|webp)/i.test(rawResp) ||
+          rawResp.startsWith("https://cdn.discordapp.com") ||
+          rawResp.startsWith("https://media.discordapp")
+        );
+        let resp = "";
+        if (hasImg) {
+          resp = rawResp && !rawResp.startsWith("http") ? `${rawResp.slice(0, 16)} 📷 [stiker]` : "📷 [stiker/gambar]";
+        } else if (rawResp) {
+          resp = rawResp.replace(/\n/g, " ").slice(0, 32);
+        } else {
+          resp = "*(kosong)*";
+        }
         const matchIcon = r.match_type === "contains" ? "🔍" : r.match_type === "regex" ? "🔣" : "🎯";
         const cdText = r.cooldown > 0 ? ` ⏱${r.cooldown}s` : "";
-        return `${matchIcon} \`#${arId}\` **${trigger}**${cdText} — ${resp}`;
+        const creator = r.created_by ? ` · *by ${r.created_by}*` : "";
+        return `${matchIcon} \`#${arId}\` **${trigger}**${cdText} — ${resp}${creator}`;
       });
       listContainer.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(lines.join("\n"))
@@ -9696,7 +9720,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       listContainer.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(1));
       listContainer.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-          `-# \`cdar <id>\` hapus  ·  \`cenar/cdisar <id>\` toggle  ·  \`cear <id>\` edit  ·  *by ${authorTag}*`
+          `-# \`cdar <id>\` hapus  ·  \`cenar/cdisar <id>\` toggle  ·  \`cear <id>\` edit  ·  Dipanggil oleh *${authorTag}*`
         )
       );
 
@@ -9706,8 +9730,9 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
       if (page === 0 && inactiveList.length > 0) {
         const inactiveLines = inactiveList.map(r => {
           const arId = getArId(r) ?? "?";
-          const trigger = String(r.trigger_text || "").slice(0, 28);
-          return `\`#${arId}\` ~~${trigger}~~`;
+          const trigger = String(r.trigger_text || "").slice(0, 24);
+          const creator = r.created_by ? ` (*${r.created_by}*)` : "";
+          return `\`#${arId}\` ~~${trigger}~~${creator}`;
         });
         const inactContainer = new ContainerBuilder().setAccentColor(0xed4245)
           .addTextDisplayComponents(
