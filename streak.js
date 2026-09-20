@@ -156,7 +156,12 @@ async function extinguishPair(client, pair, reason = "tidak ada interaksi") {
   await clearActivity(pId);
 
   await addLog(pair.guild_id, pId, null, "streak_broken", `Streak padam (${pair.current_streak} Hari) karena terlewat sehari tanpa interaksi (${reason})`);
-  if (client) {
+  
+  // Hanya kirim notifikasi jika streak baru saja aktif belakangan (bukan streak lama yang sudah berhari-hari mati)
+  const lastActive = pair.last_active_at || pair.last_streak_increment_at || pair.created_at || now;
+  const isAncient = (now - Number(lastActive)) > 2 * 86400000;
+
+  if (client && !isAncient) {
     await sendStreakCardNotification(client, pair.guild_id, pId, "Broken").catch(() => {});
     await logToGuild(
       client,
@@ -1522,7 +1527,9 @@ async function runDailyEvaluation(client) {
           const bpId = getPairId(brokenPair);
           await deletePair(bpId);
           await addLog(guildId, bpId, null, "streak_dissolved_timeout", "Streak dissolved automatically because recovery window expired (3 days)");
-          await logToGuild(client, guildId, `💔 **Streak Dihapus!** Streak antara <@${brokenPair.user_one}> & <@${brokenPair.user_two}> telah **dihapus sepenuhnya** karena sudah padam lebih dari 3 hari dan tidak di-recovery.`);
+          if (diffDays <= 5) {
+            await logToGuild(client, guildId, `💔 **Streak Dihapus!** Streak antara <@${brokenPair.user_one}> & <@${brokenPair.user_two}> telah **dihapus sepenuhnya** karena sudah padam lebih dari 3 hari dan tidak di-recovery.`);
+          }
         }
       }
 
@@ -1795,15 +1802,15 @@ function getWibDateKey(ts = Date.now()) {
   return `${y}-${m}-${d}`;
 }
 
-let lastEvaluatedWibDate = "";
+let lastEvaluatedWibDate = getWibDateKey();
 
 async function checkAndRunDailyEvaluation(client, force = false) {
   const todayWibDate = getWibDateKey();
   if (force || lastEvaluatedWibDate !== todayWibDate) {
-    const isFirstRun = !lastEvaluatedWibDate;
     lastEvaluatedWibDate = todayWibDate;
     console.log(`[STREAK] Running Daily Evaluation for WIB Date: ${todayWibDate}...`);
     await runDailyEvaluation(client);
+    await checkAndExtinguishOverduePairs(client);
 
     const now = new Date();
     const dayFormatter = new Intl.DateTimeFormat("en-US", {
@@ -1811,7 +1818,7 @@ async function checkAndRunDailyEvaluation(client, force = false) {
       day: "numeric"
     });
     const dayOfMonth = parseInt(dayFormatter.format(now), 10);
-    if (dayOfMonth === 1 && !isFirstRun) {
+    if (dayOfMonth === 1) {
       await resetMonthlyRecoveryTokens(client);
     }
   }
@@ -1823,15 +1830,12 @@ let lastCronExecutedKey = "";
 function startScheduler(client) {
   if (cronInterval) clearInterval(cronInterval);
 
-  // Catch-up check on scheduler start
-  checkAndRunDailyEvaluation(client).catch(err => console.error("[STREAK CATCHUP ERROR]", err));
-  checkAndExtinguishOverduePairs(client).catch(err => console.error("[STREAK OVERDUE CHECK ERROR]", err));
+  // Initialize today's WIB date so boot-up in the middle of the day will NOT wipe streaks
+  lastEvaluatedWibDate = getWibDateKey();
+  console.log(`[STREAK] Scheduler started. Today WIB Date initialized: ${lastEvaluatedWibDate}. Daily evaluation scheduled strictly for 00:00 WIB.`);
 
   cronInterval = setInterval(async () => {
     try {
-      await checkAndRunDailyEvaluation(client);
-      await checkAndExtinguishOverduePairs(client);
-
       const now = new Date();
       const formatter = new Intl.DateTimeFormat("en-US", {
         timeZone: "Asia/Jakarta",
@@ -1846,6 +1850,14 @@ function startScheduler(client) {
       if (hourPart && minutePart) {
         const hh = parseInt(hourPart.value, 10);
         const mm = parseInt(minutePart.value, 10);
+
+        // Daily reset runs strictly at 00:00 WIB
+        if (hh === 0 && mm === 0) {
+          const todayWibDate = getWibDateKey();
+          if (lastEvaluatedWibDate !== todayWibDate) {
+            await checkAndRunDailyEvaluation(client);
+          }
+        }
 
         if (hh === 21 && mm === 0) {
           console.log("[STREAK] Running 21:00 WIB Public Warning Reminders...");

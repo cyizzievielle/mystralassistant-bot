@@ -1,151 +1,172 @@
-# 🔮 Mystral Assistant Bot (formerly 404assistant)
+# 🔮 Mystral Assistant Bot (V2)
 
-**Mystral Assistant** adalah Discord Bot serbaguna berbasis **discord.js v14** dan basis data **SQLite** (menggunakan driver `better-sqlite3` / `sqlite3`). Bot ini dirancang untuk menghadirkan fitur-fitur premium yang interaktif, dekoratif (berbasis Canvas), moderasi otomatis, sistem tiket bantuan, serta manajemen komunitas secara terintegrasi.
+**Mystral Assistant** adalah Discord Bot serbaguna generasi modern berbasis **Discord.js v14**, **MongoDB Atlas (Mongoose)**, dan rendering grafis mutakhir menggunakan **@napi-rs/canvas**. Bot ini dirancang dengan arsitektur berkecepatan tinggi (In-Memory RAM Caching), moderasi otomatis, sistem gamifikasi, tiket bantuan, serta manajemen staf dan komunitas secara menyeluruh.
 
 ---
 
-## 🌟 Fitur Utama
+## 🌟 Fitur Unggulan
 
-### 1. 🔥 Mystral Flame Streak Subsystem
-Sistem interaksi harian dua arah otomatis antar-member tanpa perlu pairing manual.
-* **Masa Inisiasi:** Mengobrol di channel khusus selama 3 hari berturut-turut untuk membentuk *Streak Pair*.
-* **Evaluasi Reset:** Mengevaluasi kegagalan interaksi setiap hari pukul **00:00 WIB** (Asia/Jakarta).
-* **Pengingat Otomatis:** Bot mengirim pengingat via DM pada pukul **21:00 WIB** jika salah satu pasangan belum melengkapi interaksi harian.
-* **Token Pemulihan (Recovery):** Dilengkapi kuota **5 token pemulihan per bulan** yang di-reset otomatis setiap tanggal 1.
-* **Canvas Premium:** Kartu status perkembangan streak beresolusi tinggi dengan tingkatan evolusi api (*Flame Tiers*) dinamis yang berubah secara otomatis mengikuti lama hari streak yang dipertahankan.
+### 1. 🛡️ Anti-Toxic & Auto-Moderation
+* **Penyaringan Kata Kasar & Slurs:** Mendeteksi dan menindak otomatis kata-kata kotor/kasar pada pesan teks.
+* **Dynamic Toggle On/Off:**
+  * **Perintah Chat Instan:** Admin/Moderator dapat mengaktifkan atau menonaktifkan filter langsung dari Discord tanpa restart:
+    * `ctoxic off` — Menonaktifkan filter anti-toxic.
+    * `ctoxic on` — Mengaktifkan kembali filter anti-toxic.
+    * `ctoxic status` — Mengecek status saat ini (Aktif/Nonaktif).
+  * **Default Environment (.env):** Konfigurasi awal dapat diatur melalui `TOXIC_ENABLED=0` (mati) atau `TOXIC_ENABLED=1` (aktif).
+* **Audit & Moderasi Lengkap:** `cwarn`, `cwarnings`, `ctimeout`, `ckick`, `cban`, `cpurge`, dan log moderasi otomatis.
 
-### 2. 🎴 Tarot Readings
-* Ambil kartu tarot harian Anda (`/tarot pull`) untuk memperoleh ramalan bermakna yang disajikan dengan detail tema, fokus, dan ilustrasi Canvas.
-* Lacak papan peringkat pengguna teraktif (`/tarot leaderboard`) dan lihat galeri kartu yang sudah Anda kumpulkan (`/tarot collection`).
+### 2. ⚡ High-Performance Architecture (Ultra-Low Latency)
+* **In-Memory RAM Caching:**
+  * **Autoresponse Cache:** Respons otomatis disimpan di memori RAM sehingga tidak membebani database pada setiap obrolan.
+  * **Bot Security Cache:** Pengecekan whitelist & blacklist bot berjalan tanpa latency query berulang.
+  * **AFK User Cache:** Pengecekan status AFK cepat tanpa query blocking MongoDB.
+  * **Sticky Message Cache:** Pengiriman pesan tempel per-channel instan.
+* **Instant `cping`:** Pengukuran latensi WebSocket dan round-trip bot sekali tembak tanpa double-edit message delay.
 
-### 3. 🎓 Sorting Hat & House System (Light & Dark)
-* Sistem pembagian faksi otomatis ke faksi **Light** atau **Dark** melalui tes kepribadian interaktif.
-* Kartu identitas faksi kustom untuk setiap faksi.
+### 3. 🔥 Mystral Flame Streak & Tarot Subsystem
+* **Interaksi Dua Arah Otomatis:** Pasangan streak terbentuk setelah interaksi 3 hari berturut-turut di channel khusus.
+* **Evaluasi Reset:** Pengecekan harian pada pukul **00:00 WIB**.
+* **Pengingat Otomatis:** Pengingat via DM pada pukul **21:00 WIB** jika pasangan belum melengkapi interaksi harian.
+* **Token Pemulihan (Recovery):** Kuota pemulihan bulanan yang di-reset otomatis setiap tanggal 1.
+* **Kartu Status Estetik (Canvas):** Tingkatan evolusi api (*Flame Tiers*) dinamis dengan grafis beresolusi tinggi.
+* **🎴 Tarot Readings:** Ramalan tarot harian (`/tarot pull`), galeri koleksi kartu (`/tarot collection`), dan leaderboard tarot.
 
-### 4. 📇 Identity Card (ID Card)
-* Member dapat meregistrasikan profil mereka (nama, gender, domisili, hobi, status, tema latar).
-* Menghasilkan gambar kartu identitas premium bernuansa estetik secara dinamis melalui Canvas.
+### 4. 📌 Staff Duty & Tagging System
+* **Jadwal Rotasi Otomatis:** Pembagian tugas giliran tag member 2x sehari (Slot 1 & Slot 2).
+* **Perintah Roster & Takeover:**
+  * `ctag duty` / `status` — Lihat giliran tugas hari ini.
+  * `ctag done` / `busy` / `takeover` — Lapor selesai, berhalangan, atau ambil alih giliran staff lain.
+  * `cprofilestaff` — Kartu profil identitas & statistik keaktifan staff.
+  * `cstaff lb` — Papan peringkat keaktifan tugas staff.
 
-### 5. 🛡️ Anti-Toxic & Auto-Moderation
-* Melacak dan menyaring kata-kata kasar otomatis dari daftar sensor di berkas konfigurasi.
-* Memberikan akumulasi peringatan (*warning strike*), penghapusan pesan instan, dan melakukan *timeout/mute* otomatis ketika melampaui ambang batas pelanggaran.
+### 5. 💖 Booster Management & Custom Roles
+* **Setup Otomatis:** Saluran klaim role booster, base role anchor, dan log pengumuman.
+* **Perintah Booster:**
+  * `cbooster setup` — Konfigurasi cepat sistem booster.
+  * `cbooster roles` — Direktori daftar role custom booster aktif.
+  * `cmyrole` — Izin custom role mandiri untuk role khusus server non-booster.
 
-### 6. 🎫 Ticket System (Tiket Bantuan)
-* Pembuatan panel tiket untuk aduan, bantuan, atau kemitraan.
-* Menyediakan log transkrip obrolan otomatis saat tiket ditutup oleh staf bantuan.
+### 6. 🤖 Autoresponse & Sticky Messages
+* `car <trigger> | <respon>` — Menambah autoresponse teks baru.
+* `car <trigger>` + lampiran foto — Menambah autoresponse berupa gambar.
+* `clar` / `cdar <id>` / `cear <id>` — Daftar, hapus, atau edit autoresponse.
+* `c sticky set <pesan>` / `remove` — Menempelkan pesan tetap di channel chat.
 
-### 7. 🔗 FAQ Manager & Self-Roles Panel
-* Menyajikan FAQ interaktif melalui menu select dinamis.
-* Panel *self-roles* sekali klik dengan pilihan: Generasi (Age), Minat (Interest), Wilayah (Region), Status, dan Notifikasi (Ping).
+### 7. 🎓 Sorting Hat, Identity Card, & Menfess
+* **Sorting Hat:** Penentuan faksi (Light / Dark) melalui kuis interaktif dengan kartu faksi Canvas.
+* **Identity Card (ID Card):** Registrasi profil member (`/idcard register`) dan pratinjau kartu grafis estetik (`/idcard view`).
+* **Menfess Anonim:** Pengiriman pesan rahasia dengan validasi moderasi dan tombol balasan interaktif.
 
-### 8. ✉️ Menfess System
-* Pengiriman pesan rahasia secara anonim ke channel menfess tujuan, lengkap dengan log peninjauan rahasia oleh admin/staf.
+### 8. 🎫 Ticket Support & FAQ Panels
+* **Sistem Tiket Bantuan:** Pembuatan kategori tiket privat (Support, Report, Donasi, Kemitraan, Verifikasi) dengan log transkrip obrolan otomatis saat tiket ditutup.
+* **FAQ Interaktif:** Menu bantuan informatif berbasis dropdown components.
 
-### 9. ⏰ Reminder System
-* Sistem pengingat waktu otomatis yang mendukung format durasi menit (`/remind`) maupun format jam/tanggal spesifik (`/remind_at`).
+---
 
-### 10. 🎁 Giveaway Manager
-* Pembuatan giveaway secara langsung lewat perintah slash dengan opsi durasi, nama hadiah, dan jumlah pemenang.
+## 📖 Panduan Bantuan & Prefix Commands
 
-### 11. 💬 Quote Generator
-* Membuat kutipan gambar estetik (Canvas) dari pesan member lain menggunakan aplikasi context menu klik-kanan atau prefix command.
+Prefix bot adalah **`c`** (atau slash commands `/`).
+
+| Perintah | Deskripsi |
+| :--- | :--- |
+| `chelp` | Membuka Pusat Bantuan & Direktori Panduan Perintah Umum |
+| `chelpmod` *(atau `chelp mod`)* | Membuka Grimoire Bantuan Khusus Admin / Moderator |
+| `chelpmod toxic` | Langsung membuka panduan moderasi & pengaturan anti-toxic |
+| `cping` | Mengecek kecepatan respon dan latensi bot secara instan |
+| `ctoxic on` / `off` / `status` | Mengaktifkan, mematikan, atau cek status filter anti-toxic |
+| `cbotstatus` | Menampilkan statistik RAM, CPU, Uptime, dan latensi bot |
 
 ---
 
 ## 🛠️ Persyaratan Sistem
 
-* **Node.js:** Versi 18 ke atas (Direkomendasikan v20+)
-* **Database:** SQLite3 / better-sqlite3
+* **Node.js:** Versi 18.0.0 atau lebih tinggi (Direkomendasikan **Node.js v20 LTS**)
+* **Basis Data:** 
+  * **MongoDB Atlas** (Direkomendasikan - URI Mongoose)
+  * SQLite3 (Kompatibilitas fallback lokal)
+* **Kompiler C++:** Node-gyp runtime standar untuk instalasi modul `@napi-rs/canvas`
 
 ---
 
-## 🚀 Langkah Instalasi & Menjalankan Bot
+## 🚀 Instalasi & Konfigurasi
 
-### 1. Kloning Repositori & Instalasi Dependensi
+### 1. Kloning Repositori
 ```bash
 git clone https://github.com/cyizzievielle/mystralassistant-bot.git
 cd mystralassistant-bot
 npm install
 ```
 
-### 2. Konfigurasi Environment (`.env`)
-Salin file konfigurasi env atau buat file `.env` di direktori utama, lalu lengkapi isinya:
+### 2. Konfigurasi File `.env`
+Salin template atau buat file `.env` di root direktori project:
 
 ```env
-DISCORD_TOKEN=TOKEN_BOT_DISCORD_ANDA
-CLIENT_ID=APPLICATION_ID_BOT_ANDA
-GUILD_ID=ID_SERVER_DISCORD_UTAMA
-BOT_OWNER_ID=ID_USER_PEMILIK_BOT
+# Bot Credentials
+DISCORD_TOKEN=your_discord_bot_token
+CLIENT_ID=your_application_client_id
+GUILD_ID=your_primary_server_id
+BOT_OWNER_ID=your_discord_user_id
 PREFIX=c
 
-# SQLite Database
+# Database
+MONGODB_URI=mongodb+srv://<username>:<password>@cluster.mongodb.net/mystral
 SQLITE_PATH=./data/hovassistant_v2.db
 
-# ID Channel Penting
-GENERAL_CHANNEL_ID=ID_CHANNEL_UMUM
-MENFESS_CHANNEL_ID=ID_CHANNEL_MENFESS
-MENFESS_LOG_CHANNEL_ID=ID_CHANNEL_LOG_MENFESS
-IDCARD_CHANNEL_ID=ID_CHANNEL_ID_CARD
-
-# Konfigurasi Faksi (Sorting Hat)
-SORTING_CHANNEL_ID=ID_CHANNEL_TEST_SORTING
-HOUSECARD_CHANNEL_ID=ID_CHANNEL_HOUSE_CARD
-LIGHT_ROLE_ID=ID_ROLE_LIGHT_FACCTION
-DARK_ROLE_ID=ID_ROLE_DARK_FACTION
-
-# Tiket Bantuan
-TICKET_CATEGORY_ID=ID_KATEGORI_TIKET
-TICKET_STAFF_ROLE_ID=ID_ROLE_STAF_TIKET
-TICKET_LOG_CHANNEL_ID=ID_CHANNEL_LOG_TIKET
-
-# Anti-Toxic
-TOXIC_ENABLED=1
-TOXIC_WORDS=anjing,babi,tolol,goblok,bangsat,...
+# Anti-Toxic Filter (0 = Nonaktif, 1 = Aktif)
+TOXIC_ENABLED=0
 TOXIC_ACTION=warn
 TOXIC_STRIKE_LIMIT=3
-TOXIC_LOG_CHANNEL_ID=ID_CHANNEL_LOG_TOXIC
+TOXIC_LOG_CHANNEL_ID=
+
+# Saluran Penting
+GENERAL_CHANNEL_ID=
+MENFESS_CHANNEL_ID=
+MENFESS_LOG_CHANNEL_ID=
+IDCARD_CHANNEL_ID=
+QUOTES_CHANNEL_ID=
+
+# Tiket & Moderasi
+TICKET_CATEGORY_ID=
+TICKET_STAFF_ROLE_ID=
+TICKET_LOG_CHANNEL_ID=
 ```
 
-### 3. Daftarkan Slash Commands
-Daftarkan seluruh perintah global dan lokal ke Discord API agar bisa digunakan oleh member di server:
+### 3. Deploy Slash Commands
+Daftarkan seluruh interaksi slash command ke Discord API:
 ```bash
 npm run deploy:commands
 ```
 
-### 4. Jalankan Bot
-* Jalankan secara normal:
-  ```bash
-  npm start
-  ```
-* Atau jalankan di lingkungan pengembangan:
-  ```bash
-  npm run dev
-  ```
+### 4. Menjalankan Bot
+```bash
+# Menjalankan langsung
+npm start
+
+# Atau dengan nodemon untuk mode pengembangan
+npm run dev
+```
 
 ---
 
-## 💬 Daftar Slash Commands Utama
+## 📂 Struktur Direktori Utama
 
-| Perintah | Deskripsi |
-| :--- | :--- |
-| `/streak profile [user]` | Menampilkan Kartu Profil Streak (Canvas) |
-| `/streak list` | Menampilkan seluruh pasangan streak Anda |
-| `/streak leaderboard` | Papan peringkat interaksi streak teraktif |
-| `/streak recover` | Memulihkan streak padam (Maksimal 5x per bulan) |
-| `/streak break` | Memutuskan hubungan streak dengan pasangan |
-| `/tarot pull` | Mengambil ramalan kartu tarot harian |
-| `/tarot collection` | Melihat daftar koleksi kartu tarot Anda |
-| `/idcard register` | Membuat/mendaftar data ID Card profil Anda |
-| `/idcard view` | Menampilkan visual ID Card (Canvas) |
-| `/remind [durasi] [pesan]`| Membuat pengingat berdasarkan durasi waktu (misal: 10m) |
-| `/warn [user] [alasan]` | Memberi peringatan pelanggaran kepada member (Admin) |
+```
+CyzaMyst-V2/
+├── commands/             # Handler slash commands modular
+├── data/                 # Penyimpanan database lokal SQLite & aset statis
+├── events/               # Handler Discord client events
+├── utils/                # Utility canvas rendering, database helpers, & formatter
+├── db.js                 # Inisialisasi koneksi MongoDB & SQLite
+├── streak.js             # Logika subsystem flame streak & daily evaluator
+├── deploy-commands.js    # Script registrasi slash commands ke Discord REST API
+├── index.js              # Entry point utama bot, event bus, in-memory cache, & prefix commands
+├── package.json          # Metadata dependensi project
+└── README.md             # Dokumentasi lengkap bot
+```
 
 ---
 
-## 📝 Kontribusi
-Jika Anda menemukan *bug* atau ingin menambahkan fitur baru pada bot ini:
-1. Lakukan *fork* repositori ini.
-2. Buat *branch* fitur baru Anda (`git checkout -b feature/FiturKeren`).
-3. Lakukan *commit* perubahan Anda (`git commit -m 'Add new feature'`).
-4. *Push* ke *branch* tersebut (`git push origin feature/FiturKeren`).
-5. Ajukan sebuah *Pull Request*.
+## 🤝 Lisensi & Kontribusi
+Dikembangkan dengan ❤️ untuk komunitas **Mystral**.
+Segala bentuk kontribusi, perbaikan bug, atau saran fitur dapat diajukan melalui Pull Request atau Issue di repositori GitHub.

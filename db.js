@@ -1,3 +1,9 @@
+if (typeof globalThis.crypto === "undefined") {
+  try {
+    globalThis.crypto = require("crypto");
+  } catch (_) { }
+}
+
 require("dotenv").config();
 const mongoose = require("mongoose");
 

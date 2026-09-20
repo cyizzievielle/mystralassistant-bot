@@ -738,6 +738,18 @@ const commands = [
     .addStringOption((o) => o.setName("footer").setDescription("footer text (opsional)").setRequired(false))
     .addUserOption((o) => o.setName("mention_user").setDescription("Mention user di atas panel (opsional)").setRequired(false))
     .addRoleOption((o) => o.setName("mention_role").setDescription("Mention role di atas panel (opsional)").setRequired(false)),
+
+  // ===== QUOTES =====
+  new SlashCommandBuilder()
+    .setName("setup-quotes")
+    .setDescription("Kirim panel quotes ke channel (Admin only)")
+    .addChannelOption((o) =>
+      o
+        .setName("channel")
+        .setDescription("Channel tujuan (opsional, default: QUOTES_CHANNEL_ID di .env)")
+        .setRequired(false)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map((c) => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(token);

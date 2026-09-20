@@ -13,6 +13,12 @@
  * ╚══════════════════════════════════════════════════════════════════════╝
  */
 
+if (typeof globalThis.crypto === "undefined") {
+  try {
+    globalThis.crypto = require("crypto");
+  } catch (_) { }
+}
+
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
@@ -898,8 +904,8 @@ async function mongoAll(sql, params = []) {
         query.$or = [{ is_enabled: 0 }, { is_enabled: "0" }, { is_enabled: false }, { is_enabled: { $exists: false } }];
       }
       const AR = getMongoModel("autoresponses");
-      const docs = await AR.find(query);
-      return docs.map((d) => d.toObject());
+      const docs = await AR.find(query).sort({ id: 1, _id: 1 }).lean();
+      return docs;
     }
 
     // NOTE: voice_activity_daily HARUS dicek SEBELUM activity_daily
@@ -1312,6 +1318,7 @@ async function syncToMongo(sql, params = []) {
 
     // autoresponses CRUD
     if (s.includes("autoresponses")) {
+      if (typeof invalidateArCache === "function") invalidateArCache();
       const AR = getMongoModel("autoresponses");
       if (s.includes("delete")) {
         // DELETE FROM autoresponses WHERE id=? AND guild_id=?
@@ -1337,8 +1344,13 @@ async function syncToMongo(sql, params = []) {
           const fields = fieldsMatch[1].split(",").map(f => f.trim().replace(/[`"]/g, ""));
           const docObj = {};
           fields.forEach((f, idx) => { if (idx < params.length) docObj[f] = params[idx]; });
-          const count = await AR.countDocuments({ guild_id: String(docObj.guild_id || "") });
-          docObj.id = count + 1;
+          if (docObj.id === undefined || docObj.id === null) {
+            const existingDocs = await AR.find({ guild_id: String(docObj.guild_id || "") }, { id: 1 }).lean();
+            const usedSet = new Set(existingDocs.map(d => Number(d.id)).filter(n => Number.isInteger(n) && n > 0));
+            let nextId = 1;
+            while (usedSet.has(nextId)) nextId++;
+            docObj.id = nextId;
+          }
           if (docObj.is_enabled === undefined || docObj.is_enabled === null) docObj.is_enabled = 1;
           if (!docObj.created_by) docObj.created_by = "2cyi";
           await AR.create(docObj);
@@ -1524,20 +1536,12 @@ function startOwnerDmBackupSchedule(discordClient) {
 // =======================
 async function nextMenfessId() {
   try {
-    let doc = await MetaText.findOne({ key: "menfess_last_id" });
-    if (!doc) {
-      const row = await safeGet(`SELECT value FROM menfess_meta WHERE key='menfess_last_id'`);
-      doc = { value: Number(row?.value || 800) };
-    }
-    const current = Number(doc?.value || 800);
-    const next = current + 1;
-    await MetaText.updateOne(
+    const doc = await MetaText.findOneAndUpdate(
       { key: "menfess_last_id" },
-      { $set: { value: next } },
-      { upsert: true }
+      { $inc: { value: 1 } },
+      { upsert: true, returnDocument: 'after' }
     );
-    await safeRun(`UPDATE menfess_meta SET value=? WHERE key='menfess_last_id'`, [next]).catch(() => { });
-    return next;
+    return Number(doc?.value || 801);
   } catch {
     return 801;
   }
@@ -1560,7 +1564,10 @@ function isIgnorableDiscordError(err) {
   if (!err) return false;
   const code = err.code || err.rawError?.code;
   const status = err.status || err.rawError?.status;
-  return code === 10062 || code === 40060 || code === 10008 || code === 50027 || status === 404;
+  // 10062 = interaction expired, 40060 = already acknowledged
+  // 10008 = unknown message, 50027 = invalid webhook token
+  // 50035 = invalid form body (includes message_reference to deleted message)
+  return code === 10062 || code === 40060 || code === 10008 || code === 50027 || code === 50035 || status === 404;
 }
 
 // anti-crash
@@ -2005,15 +2012,13 @@ function containsToxic(text) {
 }
 
 async function toxicStrike(guildId, userId) {
-  const row = await safeGet(`SELECT strikes, last_at FROM toxic_strikes WHERE guild_id=? AND user_id=?`, [String(guildId), String(userId)]);
-  const strikes = Number(row?.strikes || 0) + 1;
-  await safeRun(
-    `INSERT INTO toxic_strikes (guild_id, user_id, strikes, last_at)
-     VALUES (?,?,?,?)
-     ON CONFLICT(guild_id, user_id) DO UPDATE SET strikes=excluded.strikes, last_at=excluded.last_at`,
-    [String(guildId), String(userId), strikes, Date.now()]
+  const ToxicStrike = getMongoModel("toxic_strikes");
+  const doc = await ToxicStrike.findOneAndUpdate(
+    { guild_id: String(guildId), user_id: String(userId) },
+    { $inc: { strikes: 1 }, $set: { last_at: Date.now() } },
+    { upsert: true, returnDocument: 'after' }
   );
-  return strikes;
+  return doc ? doc.strikes : 1;
 }
 
 // ===================== GIVEAWAY =====================
@@ -2740,8 +2745,9 @@ function buildLobbyWelcomeText(member) {
 
 async function seedSupportLeaderboard() {
   try {
-    // Clean up old string-based entries to re-seed with correct Discord IDs
-    await safeRun("DELETE FROM support_leaderboard WHERE user_id IN ('kemasharfy', 'ayapaw', '24114012423426', 'victoriesberry', 'lovely_feyy')");
+    const SL = getMongoModel("support_leaderboard");
+    // Clean up old string-based entries
+    await SL.deleteMany({ user_id: { $in: ['kemasharfy', 'ayapaw', '24114012423426', 'victoriesberry', 'lovely_feyy'] } }).catch(() => null);
 
     const now = Date.now();
     const initialData = [
@@ -2756,11 +2762,10 @@ async function seedSupportLeaderboard() {
     ];
 
     for (const item of initialData) {
-      await safeRun(
-        `INSERT INTO support_leaderboard (user_id, type, username, amount, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, type) DO UPDATE SET amount = excluded.amount, updated_at = excluded.updated_at`,
-        [item.user_id, item.type, item.username, item.amount, now]
+      await SL.updateOne(
+        { user_id: item.user_id, type: item.type },
+        { $set: { username: item.username, amount: item.amount, updated_at: now } },
+        { upsert: true }
       );
     }
     console.log("[DB] support_leaderboard seeded/updated successfully with Discord IDs.");
@@ -2771,348 +2776,7 @@ async function seedSupportLeaderboard() {
 
 // ===================== INIT DB =====================
 async function initDb() {
-  await dbExec(`
-    CREATE TABLE IF NOT EXISTS menfess_posts (
-      id INTEGER PRIMARY KEY,
-      message_id TEXT,
-      channel_id TEXT,
-      thread_id TEXT,
-      created_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS ticket_meta (
-      guild_id TEXT NOT NULL,
-      channel_id TEXT PRIMARY KEY,
-      opener_id TEXT,
-      type TEXT,
-      subject TEXT,
-      created_at INTEGER,
-      claimed_by TEXT,
-      claimed_at INTEGER,
-      closed_by TEXT,
-      closed_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS menfess_anonmap (
-      user_id TEXT PRIMARY KEY,
-      anon_label TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sorting_users (
-      user_id TEXT PRIMARY KEY,
-      choice TEXT NOT NULL,
-      at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS house_cards (
-      user_id TEXT PRIMARY KEY,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS idcard_users (
-      user_id TEXT PRIMARY KEY,
-      number TEXT,
-      name TEXT,
-      gender TEXT,
-      domisili TEXT,
-      hobi TEXT,
-      status TEXT,
-      theme TEXT,
-      created_at INTEGER,
-      updated_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS afk_users (
-      user_id TEXT PRIMARY KEY,
-      reason TEXT,
-      since INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS menfess_meta (
-      key TEXT PRIMARY KEY,
-      value INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS app_meta (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS faq_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      content TEXT NOT NULL,
-      tags TEXT,
-      created_by TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER
-    );
-    CREATE INDEX IF NOT EXISTS idx_faq_guild ON faq_items(guild_id);
-     CREATE TABLE IF NOT EXISTS user_activity (
-    user_id TEXT PRIMARY KEY,
-    last_seen INTEGER NOT NULL DEFAULT 0,
-    msg_total INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS activity_daily (
-    day TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    msg_count INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (day, user_id)
-  );
-    CREATE TABLE IF NOT EXISTS reminders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    message TEXT NOT NULL,
-    due_at INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    is_done INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS mod_warnings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      moderator_id TEXT NOT NULL,
-      reason TEXT,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_modwarn_guild_user ON mod_warnings(guild_id, user_id);
-
-    CREATE TABLE IF NOT EXISTS toxic_strikes (
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      strikes INTEGER NOT NULL DEFAULT 0,
-      last_at INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (guild_id, user_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS giveaways (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      message_id TEXT,
-      prize TEXT NOT NULL,
-      winners INTEGER NOT NULL DEFAULT 1,
-      end_at INTEGER NOT NULL,
-      host_id TEXT NOT NULL,
-      is_ended INTEGER NOT NULL DEFAULT 0,
-      ended_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS giveaway_entries (
-      giveaway_id INTEGER NOT NULL,
-      user_id TEXT NOT NULL,
-      joined_at INTEGER NOT NULL,
-      PRIMARY KEY (giveaway_id, user_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_give_entries_g ON giveaway_entries(giveaway_id);
-
-    CREATE TABLE IF NOT EXISTS tickets_custom (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      owner_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      closed_at INTEGER);
-  CREATE TABLE IF NOT EXISTS ticket_settings (
-      guild_id TEXT PRIMARY KEY,
-      panel_channel_id TEXT,
-      category_id TEXT,
-      staff_role_id TEXT,
-
-      panel_title TEXT,
-      panel_description TEXT,
-      panel_color INTEGER,
-      main_button_label TEXT,
-      extra_buttons TEXT,
-
-      updated_at INTEGER NOT NULL
-);
-
-    CREATE TABLE IF NOT EXISTS tod_questions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,
-      category TEXT NOT NULL,
-      rating TEXT NOT NULL,
-      question TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'seed',
-      pack_name TEXT,
-      created_by TEXT,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS tod_favorites (
-      question_id INTEGER NOT NULL,
-      user_id TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      PRIMARY KEY (question_id, user_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS tod_reports (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      question_id INTEGER NOT NULL,
-      user_id TEXT NOT NULL,
-      reason TEXT,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS tod_submissions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,
-      category TEXT NOT NULL,
-      rating TEXT NOT NULL,
-      question TEXT NOT NULL,
-      created_by TEXT NOT NULL,
-      is_anonymous INTEGER NOT NULL DEFAULT 1,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS guess_number_scores (
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      wins INTEGER NOT NULL DEFAULT 0,
-      best_attempts INTEGER,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (guild_id, user_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_guess_number_scores_guild
-      ON guess_number_scores(guild_id, wins DESC, best_attempts ASC);
-
-    CREATE TABLE IF NOT EXISTS tarot_users (
-      user_id TEXT PRIMARY KEY,
-      username TEXT NOT NULL,
-      total_reading INTEGER DEFAULT 0,
-      last_reading_date TEXT,
-      streak INTEGER DEFAULT 0,
-      favorite_category TEXT DEFAULT '—',
-      last_card TEXT DEFAULT '—',
-      rarest_card TEXT DEFAULT '—',
-      cards_collected TEXT DEFAULT '',
-      streak_recovery_left INTEGER DEFAULT 3,
-      last_streak_before_break INTEGER DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS tarot_category_stats (
-      user_id TEXT,
-      category TEXT,
-      count INTEGER DEFAULT 0,
-      PRIMARY KEY (user_id, category)
-    );
-
-    CREATE TABLE IF NOT EXISTS support_leaderboard (
-      user_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      username TEXT,
-      amount INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (user_id, type)
-    );
-
-    CREATE TABLE IF NOT EXISTS voice_activity_daily (
-      day TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      duration INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (day, user_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_voice_act_day ON voice_activity_daily(day);
-
-    CREATE TABLE IF NOT EXISTS activity_daily_channel (
-      day TEXT NOT NULL,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      msg_count INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (day, guild_id, channel_id, user_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_act_chan_day_g_c ON activity_daily_channel(day, guild_id, channel_id);
-
-    CREATE TABLE IF NOT EXISTS leaderboard_lobby_channels (
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      added_at INTEGER NOT NULL,
-      PRIMARY KEY (guild_id, channel_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS monthly_recap_snapshots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      year INTEGER NOT NULL,
-      month INTEGER NOT NULL,
-      category TEXT NOT NULL,
-      rank INTEGER NOT NULL,
-      user_id TEXT NOT NULL,
-      score INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS autoresponses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      trigger_text TEXT NOT NULL,
-      response_text TEXT NOT NULL,
-      match_type TEXT NOT NULL,
-      ignore_case INTEGER NOT NULL DEFAULT 1,
-      cooldown INTEGER NOT NULL DEFAULT 0,
-      is_enabled INTEGER NOT NULL DEFAULT 1,
-      reply_mode TEXT NOT NULL DEFAULT 'reply',
-      mention_user INTEGER NOT NULL DEFAULT 0,
-      embed_response INTEGER NOT NULL DEFAULT 0,
-      random_responses TEXT,
-      attachment_url TEXT,
-      button_label TEXT,
-      button_url TEXT,
-      select_menu_options TEXT,
-      created_by TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS timed_roles (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      role_id TEXT NOT NULL,
-      expire_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS active_voice_sessions (
-      user_id TEXT PRIMARY KEY,
-      join_timestamp INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sticky_messages (
-      channel_id TEXT PRIMARY KEY,
-      content TEXT NOT NULL,
-      last_message_id TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS media_settings (
-      guild_id TEXT PRIMARY KEY,
-      enabled INTEGER DEFAULT 1,
-      delete_original INTEGER DEFAULT 0,
-      nsfw_filter INTEGER DEFAULT 1,
-      quality TEXT DEFAULT 'auto',
-      platforms TEXT DEFAULT '{}'
-    );
-  `);
-
-
-  try {
-    await dbExec(`ALTER TABLE menfess_posts ADD COLUMN thread_id TEXT`);
-  } catch { }
-  try {
-    await dbExec(`ALTER TABLE tarot_users ADD COLUMN streak_recovery_left INTEGER DEFAULT 3`);
-  } catch { }
-  try {
-    await dbExec(`ALTER TABLE tarot_users ADD COLUMN last_streak_before_break INTEGER DEFAULT 0`);
-  } catch { }
-
+  // MongoDB only — no SQLite table creation needed
   await seedSupportLeaderboard().catch(() => null);
   await seedTodQuestionsIfNeeded().catch(() => null);
 }
@@ -3123,28 +2787,21 @@ async function getOrInitMediaSettings(guildId) {
     return mediaSettingsCache.get(gid);
   }
 
-  let row = await safeGet("SELECT * FROM media_settings WHERE guild_id=?", [gid]);
+  const MS = getMongoModel("media_settings");
+  let row = await MS.findOne({ guild_id: gid }).lean().catch(() => null);
   if (!row) {
-    await safeRun(
-      "INSERT OR IGNORE INTO media_settings (guild_id, enabled, delete_original, nsfw_filter, quality, platforms) VALUES (?, 1, 0, 1, 'auto', '{}')",
-      [gid]
-    );
-    row = {
-      guild_id: gid,
-      enabled: 1,
-      delete_original: 0,
-      nsfw_filter: 1,
-      quality: "auto",
-      platforms: "{}"
-    };
+    row = { guild_id: gid, enabled: 1, delete_original: 0, nsfw_filter: 1, quality: "auto", platforms: "{}" };
+    await MS.updateOne({ guild_id: gid }, { $setOnInsert: row }, { upsert: true }).catch(() => null);
   }
 
   const settings = {
-    enabled: Number(row.enabled),
-    deleteOriginal: Number(row.delete_original),
-    nsfwFilter: Number(row.nsfw_filter),
+    enabled: Number(row.enabled ?? 1),
+    deleteOriginal: Number(row.delete_original ?? 0),
+    nsfwFilter: Number(row.nsfw_filter ?? 1),
     quality: String(row.quality || "auto"),
-    platforms: JSON.parse(row.platforms || "{}")
+    platforms: typeof row.platforms === "object" && row.platforms !== null
+      ? row.platforms
+      : JSON.parse(row.platforms || "{}")
   };
   mediaSettingsCache.set(gid, settings);
   return settings;
@@ -3153,16 +2810,19 @@ async function getOrInitMediaSettings(guildId) {
 async function saveMediaSettings(guildId, settings) {
   const gid = String(guildId);
   mediaSettingsCache.set(gid, settings);
-  await safeRun(
-    "INSERT INTO media_settings (guild_id, enabled, delete_original, nsfw_filter, quality, platforms) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled, delete_original=excluded.delete_original, nsfw_filter=excluded.nsfw_filter, quality=excluded.quality, platforms=excluded.platforms",
-    [
-      gid,
-      settings.enabled ? 1 : 0,
-      settings.deleteOriginal ? 1 : 0,
-      settings.nsfwFilter ? 1 : 0,
-      settings.quality || "auto",
-      JSON.stringify(settings.platforms || {})
-    ]
+  const MS = getMongoModel("media_settings");
+  await MS.updateOne(
+    { guild_id: gid },
+    {
+      $set: {
+        enabled: settings.enabled ? 1 : 0,
+        delete_original: settings.deleteOriginal ? 1 : 0,
+        nsfw_filter: settings.nsfwFilter ? 1 : 0,
+        quality: settings.quality || "auto",
+        platforms: settings.platforms || {}
+      }
+    },
+    { upsert: true }
   );
 }
 
@@ -4119,11 +3779,10 @@ function wibDayKey(ts = Date.now()) {
 // ===================== TICKET SETTINGS HELPERS =====================
 async function getTicketSettings(guildId) {
   if (!guildId) return null;
-
   try {
-    // ✅ aman walau kolom beda-beda, karena SELECT * ga nembak kolom yang ga ada
-    const row = await safeGet(`SELECT * FROM ticket_settings WHERE guild_id=?`, [guildId]);
-    return row || null;
+    const TS = getMongoModel("ticket_settings");
+    const doc = await TS.findOne({ guild_id: String(guildId) }).lean();
+    return doc || null;
   } catch (e) {
     console.error("[TICKET] getTicketSettings error:", e?.message || e);
     return null;
@@ -4157,45 +3816,20 @@ async function upsertTicketSettings(guildId, patch = {}) {
         ? merged.extra_buttons
         : JSON.stringify(merged.extra_buttons);
 
-  await safeRun(
-    `INSERT INTO ticket_settings (
-        guild_id, panel_channel_id, category_id, staff_role_id,
-        panel_title, panel_description, panel_color, main_button_label, extra_buttons,
-        updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(guild_id) DO UPDATE SET
-        panel_channel_id=excluded.panel_channel_id,
-        category_id=excluded.category_id,
-        staff_role_id=excluded.staff_role_id,
-        panel_title=excluded.panel_title,
-        panel_description=excluded.panel_description,
-        panel_color=excluded.panel_color,
-        main_button_label=excluded.main_button_label,
-        extra_buttons=excluded.extra_buttons,
-        updated_at=excluded.updated_at`,
-    [
-      merged.guild_id,
-      merged.panel_channel_id,
-      merged.category_id,
-      merged.staff_role_id,
-      merged.panel_title,
-      merged.panel_description,
-      merged.panel_color,
-      merged.main_button_label,
-      extraButtonsJson,
-      now,
-    ]
+  const TS = getMongoModel("ticket_settings");
+  await TS.updateOne(
+    { guild_id: String(guildId) },
+    { $set: { ...merged, extra_buttons: extraButtonsJson, updated_at: now } },
+    { upsert: true }
   );
 
   return await getTicketSettings(guildId);
 }
 
 async function userHasOpenTicket(guildId, userId) {
-  const r = await safeGet(
-    `SELECT 1 FROM tickets_custom WHERE guild_id=? AND owner_id=? AND closed_at IS NULL`,
-    [String(guildId), String(userId)]
-  );
-  return !!r;
+  const TC = getMongoModel("tickets_custom");
+  const doc = await TC.findOne({ guild_id: String(guildId), owner_id: String(userId), closed_at: null }).lean();
+  return !!doc;
 }
 
 function buildTicketPanel(settings) {
@@ -4687,41 +4321,19 @@ async function getIdCard(userId) {
     const doc = await IdCardUser.findOne({ user_id: String(userId) });
     if (doc) return doc.toObject();
   } catch { }
-  return (await safeGet(`SELECT * FROM idcard_users WHERE user_id=?`, [userId])) || null;
+  return null;
 }
 
 async function getAllIdCards() {
-  try {
-    const docs = await IdCardUser.find().sort({ created_at: 1 });
-    if (docs.length) return docs.map(d => d.toObject());
-  } catch { }
-  return await safeAll(`
-    SELECT *
-    FROM idcard_users
-    ORDER BY created_at ASC
-  `);
+  const docs = await IdCardUser.find().sort({ created_at: 1 });
+  return docs.map(d => d.toObject());
 }
 
 async function getAllAfkUsers(guildId = null) {
   const gId = guildId ? String(guildId) : null;
-  try {
-    const filter = gId ? { guild_id: gId } : {};
-    const docs = await AfkUser.find(filter).sort({ since: 1 });
-    if (docs.length) return docs.map(d => d.toObject());
-  } catch { }
-  if (gId) {
-    return (await safeAll(`
-      SELECT *
-      FROM afk_users
-      WHERE guild_id=?
-      ORDER BY since ASC
-    `, [gId])) || [];
-  }
-  return (await safeAll(`
-    SELECT *
-    FROM afk_users
-    ORDER BY since ASC
-  `)) || [];
+  const filter = gId ? { guild_id: gId } : {};
+  const docs = await AfkUser.find(filter).sort({ since: 1 });
+  return docs.map(d => d.toObject());
 }
 
 async function upsertIdCard(userId, data) {
@@ -4752,45 +4364,16 @@ async function upsertIdCard(userId, data) {
     console.error("[ID CARD MONGO ERROR]", e);
   }
 
-  await safeRun(
-    `INSERT INTO idcard_users (user_id, number, name, gender, domisili, hobi, status, theme, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?)
-     ON CONFLICT(user_id) DO UPDATE SET
-       name=excluded.name,
-       gender=excluded.gender,
-       domisili=excluded.domisili,
-       hobi=excluded.hobi,
-       status=excluded.status,
-       theme=excluded.theme,
-       number=excluded.number,
-       updated_at=excluded.updated_at`,
-    [userId, number, data.name, data.gender, data.domisili, data.hobi, data.status, data.theme, createdAt, updatedAt]
-  ).catch(() => { });
-
   return getIdCard(userId);
 }
 
 async function countRegistry() {
-  try {
-    const count = await IdCardUser.countDocuments();
-    if (count > 0) return count;
-  } catch { }
-  const r = await safeGet(`SELECT COUNT(*) AS n FROM idcard_users`);
-  return Number(r?.n || 0);
+  return await IdCardUser.countDocuments();
 }
 
 async function registryPage(offset, limit) {
-  try {
-    const docs = await IdCardUser.find().sort({ created_at: -1 }).skip(Number(offset)).limit(Number(limit));
-    if (docs.length) return docs.map(d => ({ user_id: d.user_id, name: d.name, created_at: d.created_at }));
-  } catch { }
-  return (await safeAll(
-    `SELECT user_id, name, created_at
-     FROM idcard_users
-     ORDER BY created_at DESC
-     LIMIT ? OFFSET ?`,
-    [Number(limit), Number(offset)]
-  )) || [];
+  const docs = await IdCardUser.find().sort({ created_at: -1 }).skip(Number(offset)).limit(Number(limit));
+  return docs.map(d => ({ user_id: d.user_id, name: d.name, created_at: d.created_at }));
 }
 
 // ===== AFK Nick Helpers (prefix [AFK]) =====
@@ -4817,130 +4400,88 @@ async function trySetMemberNick(member, nickOrNull) {
   }
 }
 
-// ===================== AFK =====================
+// ===================== AFK WITH IN-MEMORY CACHE =====================
+const afkCache = new Map();
+let afkCacheInitialized = false;
+
+async function initAfkCache() {
+  if (afkCacheInitialized) return;
+  try {
+    const docs = await AfkUser.find().lean();
+    for (const doc of docs) {
+      const key = `${doc.user_id}:${doc.guild_id || "all"}`;
+      afkCache.set(key, { reason: doc.reason, since: doc.since, guild_id: doc.guild_id });
+      afkCache.set(`${doc.user_id}:any`, true);
+    }
+    afkCacheInitialized = true;
+    console.log(`[AFK CACHE] Loaded ${docs.length} AFK users into memory.`);
+  } catch (err) {
+    console.error("[AFK CACHE INIT ERROR]", err.message);
+  }
+}
+
 async function setAfk(userId, reason, guildId = null) {
   const rText = safeText(reason || "AFK", 80);
   const since = Date.now();
   const gId = guildId ? String(guildId) : null;
 
-  try {
-    const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
-    await AfkUser.updateOne(
-      filter,
-      { $set: { guild_id: gId, user_id: String(userId), reason: rText, since } },
-      { upsert: true }
-    );
-  } catch (e) {
-    console.error("[AFK MONGO ERROR]", e);
-  }
+  afkCache.set(`${userId}:${gId || "all"}`, { reason: rText, since, guild_id: gId });
+  afkCache.set(`${userId}:any`, true);
 
-  await safeRun(
-    `INSERT INTO afk_users (user_id, reason, since, guild_id)
-     VALUES (?,?,?,?)
-     ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, since=excluded.since, guild_id=excluded.guild_id`,
-    [userId, rText, since, gId]
-  ).catch(() => {
-    return safeRun(
-      `INSERT INTO afk_users (user_id, reason, since)
-       VALUES (?,?,?)
-       ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, since=excluded.since`,
-      [userId, rText, since]
-    ).catch(() => { });
-  });
+  const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
+  await AfkUser.updateOne(
+    filter,
+    { $set: { guild_id: gId, user_id: String(userId), reason: rText, since } },
+    { upsert: true }
+  ).catch(e => console.error("[AFK MONGO ERROR]", e));
 }
 
 async function clearAfk(userId, guildId = null) {
-  let removed = false;
   const gId = guildId ? String(guildId) : null;
+  afkCache.delete(`${userId}:${gId || "all"}`);
+  afkCache.delete(`${userId}:any`);
 
-  try {
-    const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
-    const res = await AfkUser.deleteOne(filter);
-    if (res.deletedCount > 0) removed = true;
-  } catch { }
-
-  try {
-    if (gId) {
-      const r = await safeRun(`DELETE FROM afk_users WHERE user_id=? AND (guild_id=? OR guild_id IS NULL)`, [userId, gId]);
-      if ((r?.changes || 0) > 0) removed = true;
-    } else {
-      const r = await safeRun(`DELETE FROM afk_users WHERE user_id=?`, [userId]);
-      if ((r?.changes || 0) > 0) removed = true;
-    }
-  } catch { }
-
-  return removed;
+  const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
+  const res = await AfkUser.deleteOne(filter).catch(() => ({ deletedCount: 0 }));
+  return res.deletedCount > 0;
 }
 
 async function clearAllAfkUsers(guildId = null) {
   const gId = guildId ? String(guildId) : null;
-  try {
-    const filter = gId ? { guild_id: gId } : {};
-    await AfkUser.deleteMany(filter);
-  } catch { }
-
-  try {
-    if (gId) {
-      const r = await safeRun(`DELETE FROM afk_users WHERE guild_id=?`, [gId]);
-      return r?.changes || 0;
+  if (!gId) afkCache.clear();
+  else {
+    for (const [k, v] of afkCache.entries()) {
+      if (v?.guild_id === gId) afkCache.delete(k);
     }
-    const r = await safeRun(`DELETE FROM afk_users`);
-    return r?.changes || 0;
-  } catch {
-    return 0;
   }
+  const filter = gId ? { guild_id: gId } : {};
+  const res = await AfkUser.deleteMany(filter).catch(() => ({ deletedCount: 0 }));
+  return res.deletedCount;
 }
 
 async function getAfk(userId, guildId = null) {
-  const gId = guildId ? String(guildId) : null;
-  try {
-    const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
-    const doc = await AfkUser.findOne(filter);
-    if (doc) return { reason: doc.reason, since: doc.since, guild_id: doc.guild_id };
-  } catch { }
+  if (!afkCacheInitialized) await initAfkCache();
+  if (!afkCache.has(`${userId}:any`)) return null;
 
-  try {
-    if (gId) {
-      const row = await safeGet(`SELECT reason, since, guild_id FROM afk_users WHERE user_id=? AND (guild_id=? OR guild_id IS NULL)`, [userId, gId]);
-      if (row) return row;
-    }
-    return (await safeGet(`SELECT reason, since FROM afk_users WHERE user_id=?`, [userId])) || null;
-  } catch {
-    return null;
-  }
+  const gId = guildId ? String(guildId) : null;
+  const direct = afkCache.get(`${userId}:${gId || "all"}`);
+  if (direct) return direct;
+  return null;
 }
 
 // ===================== SORTING (LOCK) =====================
 async function getSortedUser(userId) {
-  try {
-    const doc = await SortingUser.findOne({ user_id: String(userId) });
-    if (doc) return doc.toObject();
-  } catch { }
-
-  return (await safeGet(
-    `SELECT user_id, choice, at FROM sorting_users WHERE user_id=?`,
-    [userId]
-  )) || null;
+  const doc = await SortingUser.findOne({ user_id: String(userId) }).catch(() => null);
+  return doc ? doc.toObject() : null;
 }
 
 async function setSortedUser(userId, choice) {
   const at = Date.now();
-  try {
-    await SortingUser.updateOne(
-      { user_id: String(userId) },
-      { $set: { choice, at } },
-      { upsert: true }
-    );
-  } catch (e) {
-    console.error("[SORTING MONGO ERROR]", e);
-  }
-
-  await safeRun(
-    `INSERT INTO sorting_users (user_id, choice, at)
-     VALUES (?,?,?)
-     ON CONFLICT(user_id) DO UPDATE SET choice=excluded.choice, at=excluded.at`,
-    [userId, choice, at]
-  ).catch(() => { });
+  await SortingUser.updateOne(
+    { user_id: String(userId) },
+    { $set: { choice, at } },
+    { upsert: true }
+  ).catch(e => console.error("[SORTING MONGO ERROR]", e));
 }
 
 // ===================== SORTING BAG SYSTEM =====================
@@ -6243,6 +5784,7 @@ const ADMIN_HELP_CATEGORIES = {
       "`cunban <user_id>` — Cabut blokir/unban ID user dari server.",
       "`ccn @user <namabaru>` / `ccn @user reset` — Ganti atau reset nickname member lain.",
       "`cpurge <jumlah>` / `clear` — Hapus pesan masal di channel (1-100 pesan).",
+      "`ctoxic on/off/status` — Aktifkan, nonaktifkan, atau cek status filter anti-toxic (kata kasar/slur).",
       "`cinvitelog` — Pengaturan detektor anti-invite link & whitelist manager.",
       "`cbotwl` / `cbotbl` — Whitelist & Blacklist bot manager (Anti-raid bot lock).",
       "`cstafflog` — Audit log moderasi otomatis (role, kick, ban, timeout) & staff notes."
@@ -6693,7 +6235,16 @@ const pendingConfirmations = new Map();
 const autoresponseCooldowns = new Map();
 
 // Sticky Message System Cache
-const stickyCache = new Map(); // channelId -> { content, lastMessageId }
+const stickyCache = new Map();
+const botSecurityCache = new Map();
+const toxicGuildOverride = new Map();
+
+function getIsToxicEnabled(guildId) {
+  if (toxicGuildOverride.has(String(guildId))) {
+    return toxicGuildOverride.get(String(guildId));
+  }
+  return String(process.env.TOXIC_ENABLED || "0").trim() === "1";
+} // channelId -> { content, lastMessageId }
 const stickyLocks = new Set();  // channelId
 const stickyDebounces = new Map(); // channelId -> Timeout
 
@@ -6810,10 +6361,7 @@ function parseKeyValueArgs(text) {
   return args;
 }
 
-const AR_IMAGE_DIR = path.join(__dirname, 'data', 'autoresponses');
-if (!fs.existsSync(AR_IMAGE_DIR)) {
-  try { fs.mkdirSync(AR_IMAGE_DIR, { recursive: true }); } catch (_) { }
-}
+// AR images are stored as base64 in MongoDB — no local file storage needed
 
 async function downloadAndStoreArImage(url, asSticker = true) {
   if (!url || typeof url !== 'string') return null;
@@ -6845,7 +6393,7 @@ async function downloadAndStoreArImage(url, asSticker = true) {
       try {
         const img = await loadImage(buffer);
         let { width, height } = img;
-        const maxSize = 180;
+        const maxSize = 160;
         if (width > maxSize || height > maxSize) {
           if (width > height) {
             height = Math.round((height * maxSize) / width);
@@ -6868,11 +6416,8 @@ async function downloadAndStoreArImage(url, asSticker = true) {
     }
 
     const filename = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
-    const localFilePath = path.join(AR_IMAGE_DIR, filename);
-    fs.writeFileSync(localFilePath, buffer);
 
     return {
-      localPath: localFilePath,
       fileName: filename,
       ext: ext,
       base64: buffer.toString('base64'),
@@ -6885,9 +6430,88 @@ async function downloadAndStoreArImage(url, asSticker = true) {
   }
 }
 
+/**
+ * Mencari slot ID positif terkecil (mulai dari 1) yang belum terpakai di suatu guild.
+ * Jika ada autoresponse yang dihapus (misal ID 2 dihapus dari 1, 2, 3),
+ * maka autoresponse baru akan mengisi slot ID 2 tersebut secara otomatis.
+ */
+async function getLowestAvailableArId(guildId) {
+  const AR = getMongoModel("autoresponses");
+  if (!AR) return 1;
+  const docs = await AR.find({ guild_id: String(guildId) }, { id: 1 }).lean();
+  const usedIds = new Set();
+  for (const d of docs) {
+    const num = Number(d.id);
+    if (Number.isInteger(num) && num > 0) {
+      usedIds.add(num);
+    }
+  }
+  let candidate = 1;
+  while (usedIds.has(candidate)) {
+    candidate++;
+  }
+  return candidate;
+}
+
+/**
+ * Merapikan seluruh ID autoresponse di server agar urut tanpa celah dari 1 sampai N.
+ */
+async function renumberAutoresponses(guildId) {
+  const AR = getMongoModel("autoresponses");
+  if (!AR) return [];
+  const docs = await AR.find({ guild_id: String(guildId) });
+  if (!docs || !docs.length) return [];
+
+  // Urutkan berdasarkan id numerik jika valid, lalu _id
+  docs.sort((a, b) => {
+    const numA = (Number.isInteger(Number(a.id)) && Number(a.id) > 0) ? Number(a.id) : 99999999;
+    const numB = (Number.isInteger(Number(b.id)) && Number(b.id) > 0) ? Number(b.id) : 99999999;
+    if (numA !== numB) return numA - numB;
+    return String(a._id).localeCompare(String(b._id));
+  });
+
+  let currentId = 1;
+  for (const doc of docs) {
+    if (doc.id !== currentId) {
+      await AR.updateOne({ _id: doc._id }, { $set: { id: currentId } });
+      doc.id = currentId;
+    }
+    currentId++;
+  }
+  return docs;
+}
+
+// ===================== AUTORESPONSE IN-MEMORY RAM CACHE =====================
+const arCache = new Map(); // guildId -> { list: Array, lastFetch: number }
+const arImageCache = new Map(); // key -> { buf: Buffer, ext: string }
+const AR_CACHE_TTL = 10 * 60 * 1000; // 10 menit TTL
+
+function invalidateArCache(guildId) {
+  if (guildId) {
+    arCache.delete(String(guildId));
+  } else {
+    arCache.clear();
+  }
+  arImageCache.clear();
+}
+
+async function getCachedAutoresponses(guildId) {
+  const gId = String(guildId);
+  const cached = arCache.get(gId);
+  const now = Date.now();
+  if (cached && (now - cached.lastFetch < AR_CACHE_TTL)) {
+    return cached.list;
+  }
+  const responses = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=? AND is_enabled=1`, [gId]);
+  arCache.set(gId, { list: responses, lastFetch: now });
+  return responses;
+}
+
 async function checkAutoresponses(message) {
+  if (!message.guild || message.author.bot) return false;
   const guildId = message.guild.id;
-  const responses = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=? AND is_enabled=1`, [guildId]);
+  const responses = await getCachedAutoresponses(guildId);
+  if (!responses || !responses.length) return false;
   const now = Date.now();
   for (const r of responses) {
     const cooldownKey = `${message.author.id}:${r.id}`;
@@ -6926,49 +6550,108 @@ async function checkAutoresponses(message) {
         .replace(/{displayName}/g, message.member ? message.member.displayName : message.author.username)
         .replace(/{channel}/g, `<#${message.channel.id}>`);
 
-      // Resolve image attachment if available (base64 from MongoDB or local file)
-      let imgAttachment = null;
-      if (r.image_base64) {
-        try {
-          const buf = Buffer.from(r.image_base64, "base64");
-          const ext = r.image_ext || "png";
-          imgAttachment = new AttachmentBuilder(buf, { name: `image.${ext}` });
-        } catch (_) { }
-      }
-
-      if (!imgAttachment) {
-        const candidates = [finalResponse, r.attachment_url, r.response_text];
-        for (const cand of candidates) {
-          if (cand && typeof cand === "string") {
-            const trimmed = cand.trim();
-            if (fs.existsSync(trimmed)) {
-              imgAttachment = new AttachmentBuilder(trimmed);
-              break;
-            }
-          }
-        }
-      }
-
       const isDirectImg = (u) => {
         if (!u || typeof u !== "string") return false;
         const trimmed = u.trim();
         return /^https?:\/\//i.test(trimmed) && (!validateDirectImageUrl(trimmed) || /\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(trimmed));
       };
 
+      const isLocalFilePath = (s) => {
+        if (!s || typeof s !== "string") return false;
+        const str = s.trim();
+        return (
+          str.includes("data/autoresponses") ||
+          (str.includes("ar_") && /\.(png|jpe?g|gif|webp|svg)$/i.test(str)) ||
+          str.startsWith("/home/") ||
+          str.startsWith("C:\\") ||
+          str.startsWith("c:/") ||
+          /^[a-zA-Z]:[\\\/]/i.test(str)
+        );
+      };
+
+      // Resolve image attachment if available (base64 from MongoDB or local file)
+      let imgAttachment = null;
+      if (r.image_base64) {
+        try {
+          const imgKey = String(r.id || r._id);
+          const cachedImg = arImageCache.get(imgKey);
+          if (cachedImg) {
+            imgAttachment = new AttachmentBuilder(cachedImg.buf, { name: `sticker.${cachedImg.ext}` });
+          } else {
+            let buf = Buffer.from(r.image_base64, "base64");
+            let ext = r.image_ext || "png";
+
+            // Jika bukan mode embed penuh, pastikan gambar di-resize kecil seukuran stiker (max 160px)
+            if (!r.embed_response && ext !== "gif") {
+              try {
+                const img = await loadImage(buf);
+                const maxSize = 160;
+                if (img.width > maxSize || img.height > maxSize) {
+                  let w = img.width;
+                  let h = img.height;
+                  if (w > h) {
+                    h = Math.round((h * maxSize) / w);
+                    w = maxSize;
+                  } else {
+                    w = Math.round((w * maxSize) / h);
+                    w = maxSize;
+                  }
+                  const canvas = createCanvas(w, h);
+                  const ctx = canvas.getContext("2d");
+                  ctx.imageSmoothingEnabled = true;
+                  ctx.imageSmoothingQuality = "high";
+                  ctx.drawImage(img, 0, 0, w, h);
+                  buf = canvas.toBuffer("image/png");
+                  ext = "png";
+                }
+              } catch (_) { }
+            }
+
+            arImageCache.set(imgKey, { buf, ext });
+            imgAttachment = new AttachmentBuilder(buf, { name: `sticker.${ext}` });
+          }
+        } catch (_) { }
+      }
+
+      // Jika image_base64 belum ada tapi ada URL gambar (misal autoresponse lama seperti "dana masuk")
+      if (!imgAttachment) {
+        const potentialUrl = (r.attachment_url && isDirectImg(r.attachment_url))
+          ? r.attachment_url.trim()
+          : (isDirectImg(finalResponse) ? finalResponse.trim() : null);
+
+        if (potentialUrl) {
+          try {
+            const stored = await downloadAndStoreArImage(potentialUrl, !r.embed_response);
+            if (stored && stored.base64) {
+              const buf = Buffer.from(stored.base64, "base64");
+              imgAttachment = new AttachmentBuilder(buf, { name: `sticker.${stored.ext}` });
+              // Cache ke MongoDB secara background agar request berikutnya instan
+              const AR = getMongoModel("autoresponses");
+              if (AR) {
+                const arFilter = r._id ? { _id: r._id } : { id: Number(r.id), guild_id: String(message.guild.id) };
+                AR.updateOne(arFilter, { $set: { image_base64: stored.base64, image_ext: stored.ext } }).catch(() => null);
+              }
+            }
+          } catch (_) { }
+        }
+      }
+
       const payload = {};
       const embeds = [];
       const components = [];
-      const isLocalFilePath = (s) => typeof s === "string" && (s.includes("autoresponses") || fs.existsSync(s.trim()));
 
       if (imgAttachment) {
+        const isImgRef = isLocalFilePath(finalResponse) || isDirectImg(finalResponse) || (r.attachment_url && finalResponse.trim() === r.attachment_url.trim());
         if (r.embed_response) {
+          // embed=1: pakai kotak embed (gambar besar)
           const embed = new EmbedBuilder().setColor(EMBED_COLOR).setImage(`attachment://${imgAttachment.name}`);
-          if (finalResponse && !isLocalFilePath(finalResponse)) {
+          if (finalResponse && !isImgRef) {
             embed.setDescription(finalResponse);
           }
           embeds.push(embed);
         } else {
-          if (finalResponse && !isLocalFilePath(finalResponse)) {
+          // embed=0 (default): TANPA EMBED! Kirim langsung sebagai file gambar kecil polos seperti stiker
+          if (finalResponse && !isImgRef) {
             payload.content = finalResponse;
           }
         }
@@ -6983,7 +6666,9 @@ async function checkAutoresponses(message) {
           }
           embeds.push(embed);
         } else {
-          payload.content = finalResponse;
+          if (finalResponse && !isLocalFilePath(finalResponse)) {
+            payload.content = finalResponse;
+          }
         }
 
         if (r.attachment_url && isDirectImg(r.attachment_url)) {
@@ -9248,7 +8933,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     if (!targetId) return null;
     const list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [guildId]);
     if (!list || !list.length) return null;
-    const tid = String(targetId).trim().toLowerCase();
+    const tid = String(targetId).trim().toLowerCase().replace(/^#/, "");
 
     return list.find((r, idx) => {
       if (r.id !== undefined && r.id !== null && String(r.id).toLowerCase() === tid) return true;
@@ -9262,23 +8947,27 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     }) || null;
   };
 
-  // Helper to delete an autoresponse doc
+  // Helper to delete an autoresponse doc (MongoDB only)
   const deleteAutoResponseDoc = async (guildId, arDoc) => {
+    if (typeof invalidateArCache === "function") invalidateArCache(guildId);
     const AR = getMongoModel("autoresponses");
-    if (AR && arDoc._id) {
+    if (!AR) return;
+    if (arDoc._id) {
       await AR.deleteOne({ _id: arDoc._id });
     } else if (arDoc.id !== undefined && arDoc.id !== null) {
-      await safeRun(`DELETE FROM autoresponses WHERE id=? AND guild_id=?`, [arDoc.id, guildId]);
+      await AR.deleteOne({ id: Number(arDoc.id), guild_id: String(guildId) });
     }
   };
 
-  // Helper to update autoresponse enabled status
+  // Helper to update autoresponse enabled status (MongoDB only)
   const setAutoResponseStatusDoc = async (guildId, arDoc, isEnabled) => {
+    if (typeof invalidateArCache === "function") invalidateArCache(guildId);
     const AR = getMongoModel("autoresponses");
-    if (AR && arDoc._id) {
+    if (!AR) return;
+    if (arDoc._id) {
       await AR.updateOne({ _id: arDoc._id }, { $set: { is_enabled: isEnabled ? 1 : 0 } });
     } else if (arDoc.id !== undefined && arDoc.id !== null) {
-      await safeRun(`UPDATE autoresponses SET is_enabled=? WHERE id=? AND guild_id=?`, [isEnabled ? 1 : 0, arDoc.id, guildId]);
+      await AR.updateOne({ id: Number(arDoc.id), guild_id: String(guildId) }, { $set: { is_enabled: isEnabled ? 1 : 0 } });
     }
   };
 
@@ -9308,7 +8997,8 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     }
 
     if (!duplicates.length) {
-      const embed = new EmbedBuilder().setTitle("✅ Pembersihan Selesai").setColor(0x2ecc71).setDescription("Tidak ditemukan autoresponse duplikat di server ini. Semua trigger sudah unik.").setTimestamp();
+      await renumberAutoresponses(ctx.guild.id);
+      const embed = new EmbedBuilder().setTitle("✅ Pembersihan Selesai").setColor(0x2ecc71).setDescription("Tidak ditemukan autoresponse duplikat di server ini. Seluruh nomor ID sudah dirapikan berurutan 1-seterusnya.").setTimestamp();
       await safeCtxReply(ctx, { embeds: [embed] });
       return true;
     }
@@ -9316,11 +9006,12 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     for (const dup of duplicates) {
       await deleteAutoResponseDoc(ctx.guild.id, dup);
     }
+    await renumberAutoresponses(ctx.guild.id);
 
     const embedSuccess = new EmbedBuilder()
       .setTitle("🧹 Autoresponse Duplikat Dibersihkan")
       .setColor(0x2ecc71)
-      .setDescription(`Berhasil menghapus **${duplicates.length}** autoresponse duplikat.\nSekarang tersisa **${seen.size}** autoresponse unik di server ini.`)
+      .setDescription(`Berhasil menghapus **${duplicates.length}** autoresponse duplikat.\nSekarang tersisa **${seen.size}** autoresponse unik dan seluruh ID telah dirapikan dari **#1** hingga **#${seen.size}**.`)
       .setTimestamp();
     await safeCtxReply(ctx, { embeds: [embedSuccess] });
     return true;
@@ -9336,14 +9027,27 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const existingList = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
     const existingTriggers = new Set(existingList.map(r => String(r.trigger_text || "").trim().toLowerCase()));
 
+    const AR = getMongoModel("autoresponses");
     let addedCount = 0;
     for (const item of defaultList) {
       if (!existingTriggers.has(item.trigger.toLowerCase())) {
-        await safeRun(
-          `INSERT INTO autoresponses (guild_id, trigger_text, response_text, match_type, ignore_case, cooldown, reply_mode, mention_user, embed_response)
-           VALUES (?, ?, ?, 'exact', 1, 0, 'reply', 0, 0)`,
-          [ctx.guild.id, item.trigger, item.response]
-        );
+        if (AR) {
+          const nextId = await getLowestAvailableArId(ctx.guild.id);
+          await AR.create({
+            id: nextId,
+            guild_id: String(ctx.guild.id),
+            trigger_text: item.trigger,
+            response_text: item.response,
+            match_type: 'exact',
+            ignore_case: 1,
+            cooldown: 0,
+            reply_mode: 'reply',
+            mention_user: 0,
+            embed_response: 0,
+            is_enabled: 1,
+            created_by: "2cyi"
+          });
+        }
         addedCount++;
       }
     }
@@ -9359,6 +9063,24 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
 
   if (cmd === "add_autoresponse" || cmd === "create_autoresponse" || cmd === "ar" || cmd === "aar" || cmd === "arr" || cmd === "car" || cmd === "caar" || cmd === "carr" || cmd === "ccar" || ((cmd === "add" || cmd === "create") && (args[0] === "autoresponse" || args[0] === "ar"))) {
     const sub0 = (args[0] || "").toLowerCase();
+
+    // ─── Admin: merapikan urutan nomor ID autoresponse 1..N ───
+    if (sub0 === "rapikan" || sub0 === "renumber" || sub0 === "reindex" || sub0 === "sort") {
+      const isAdmin = isBotOwner(authorId) || ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild);
+      if (!isAdmin) {
+        const embed = new EmbedBuilder().setTitle("❌ Izin Ditolak").setColor(0xe74c3c).setDescription("Hanya **Admin** yang bisa merapikan urutan ID autoresponse.").setTimestamp();
+        await safeCtxReply(ctx, { embeds: [embed] });
+        return true;
+      }
+      const updatedDocs = await renumberAutoresponses(ctx.guild.id);
+      const embed = new EmbedBuilder()
+        .setTitle("✨ ID Autoresponse Dirapikan")
+        .setColor(0x2ecc71)
+        .setDescription(`Berhasil merapikan **${updatedDocs.length}** autoresponse di server ini secara berurutan mulai dari **#1** hingga **#${updatedDocs.length}**.\n\nSemua nomor yang kosong atau tidak berurutan telah ditata ulang.`)
+        .setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
+    }
 
     // ─── Admin: konfigurasi role yang boleh tambah autoresponse ───
     if (sub0 === "setrole" || sub0 === "addrole") {
@@ -9457,7 +9179,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     }
 
     const asSticker = !(parsed.full === "1" || parsed.size === "full" || parsed.sticker === "0");
-    let storedImage = null;
+    let storedImage = null; // base64 image data for MongoDB storage
     if (galleryImage) {
       storedImage = await downloadAndStoreArImage(galleryImage, asSticker);
     }
@@ -9479,7 +9201,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
         } else if (rawText) {
           trigger = rawText.trim();
         }
-        response = storedImage ? storedImage.localPath : galleryImage;
+        response = galleryImage; // Use original URL; image_base64 stored in MongoDB
       } else if (cleanTokens.length >= 2) {
         trigger = cleanTokens[0];
         response = cleanTokens.slice(1).join(" ");
@@ -9487,9 +9209,8 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     }
 
     if (galleryImage) {
-      const imgRef = storedImage ? storedImage.localPath : galleryImage;
       if (!response) {
-        response = imgRef;
+        response = galleryImage; // URL as response text; actual image in image_base64
         if (!trigger) {
           if (quoteMatches.length >= 1) {
             trigger = quoteMatches[0][1] || quoteMatches[0][2];
@@ -9502,7 +9223,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
           }
         }
       } else if (!parsed.attachment) {
-        parsed.attachment = imgRef;
+        parsed.attachment = galleryImage;
       }
     }
 
@@ -9550,8 +9271,8 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
         };
         if (AR && existing._id) {
           await AR.updateOne({ _id: existing._id }, { $set: updateFields });
-        } else {
-          await safeRun(`UPDATE autoresponses SET response_text=?, attachment_url=? WHERE id=? AND guild_id=?`, [response, parsed.attachment || null, existing.id, ctx.guild.id]);
+        } else if (AR) {
+          await AR.updateOne({ id: Number(existing.id), guild_id: String(ctx.guild.id) }, { $set: updateFields });
         }
         const exId = existing.id !== undefined && existing.id !== null ? existing.id : (existing._id ? String(existing._id).slice(-6) : "?");
         const embedUpdate = new EmbedBuilder()
@@ -9587,40 +9308,37 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const createdBy = (ctx.author ? (ctx.author.username || ctx.author.tag) : null) || "2cyi";
 
     const AR = getMongoModel("autoresponses");
-    if (AR) {
-      const count = await AR.countDocuments({ guild_id: String(ctx.guild.id) });
-      await AR.create({
-        id: count + 1,
-        guild_id: String(ctx.guild.id),
-        trigger_text: trigger,
-        response_text: response,
-        match_type: matchType,
-        ignore_case: ignoreCase,
-        cooldown: cooldown,
-        reply_mode: replyMode,
-        mention_user: mentionUser,
-        embed_response: embedVal,
-        random_responses: randomResponses,
-        attachment_url: attachmentUrl,
-        button_label: buttonLabel,
-        button_url: buttonUrl,
-        select_menu_options: selectMenuOptions,
-        created_by: createdBy,
-        is_enabled: 1,
-        image_base64: storedImage ? storedImage.base64 : null,
-        image_ext: storedImage ? storedImage.ext : null
-      });
-    } else {
-      await safeRun(
-        `INSERT INTO autoresponses (guild_id, trigger_text, response_text, match_type, ignore_case, cooldown, reply_mode, mention_user, embed_response, random_responses, attachment_url, button_label, button_url, select_menu_options, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [ctx.guild.id, trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, createdBy]
-      );
+    if (!AR) {
+      const embed = new EmbedBuilder().setTitle("❌ Database Error").setColor(0xe74c3c).setDescription("Koneksi ke database (MongoDB) tidak tersedia. Coba beberapa saat lagi.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
     }
+    const nextId = await getLowestAvailableArId(ctx.guild.id);
+    await AR.create({
+      id: nextId,
+      guild_id: String(ctx.guild.id),
+      trigger_text: trigger,
+      response_text: response,
+      match_type: matchType,
+      ignore_case: ignoreCase,
+      cooldown: cooldown,
+      reply_mode: replyMode,
+      mention_user: mentionUser,
+      embed_response: embedVal,
+      random_responses: randomResponses,
+      attachment_url: attachmentUrl,
+      button_label: buttonLabel,
+      button_url: buttonUrl,
+      select_menu_options: selectMenuOptions,
+      created_by: createdBy,
+      is_enabled: 1,
+      image_base64: storedImage ? storedImage.base64 : null,
+      image_ext: storedImage ? storedImage.ext : null
+    });
     const embedSuccess = new EmbedBuilder()
       .setTitle("✅ Autoresponse Ditambahkan")
       .setColor(0x2ecc71)
-      .setDescription(`Autoresponse untuk trigger \`${trigger}\` berhasil disimpan secara permanen.${storedImage ? ' 📸 *(Gambar tersimpan)*' : ''}`)
+      .setDescription(`Autoresponse **#${nextId}** untuk trigger \`${trigger}\` berhasil disimpan secara permanen.${storedImage ? ' 📸 *(Gambar tersimpan)*' : ''}`)
       .setTimestamp();
     await safeCtxReply(ctx, { embeds: [embedSuccess] });
     return true;
@@ -9674,7 +9392,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     let editStoredImage = null;
     if (editGalleryImage) {
       editStoredImage = await downloadAndStoreArImage(editGalleryImage, asSticker);
-      const imgRef = editStoredImage ? editStoredImage.localPath : editGalleryImage;
+      const imgRef = editGalleryImage; // image_base64 stored in MongoDB; use URL as reference
       if (parsed.response === undefined && (!attachmentUrl || parsed.attachment === undefined)) {
         if (ar.attachment_url) attachmentUrl = imgRef;
         else response = imgRef;
@@ -9688,35 +9406,34 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     const createdBy = parsed.created_by !== undefined ? parsed.created_by : (ar.created_by || "2cyi");
 
     const AR = getMongoModel("autoresponses");
-    if (AR && ar._id) {
-      await AR.updateOne({ _id: ar._id }, {
-        $set: {
-          trigger_text: trigger,
-          response_text: response,
-          match_type: matchType,
-          ignore_case: ignoreCase,
-          cooldown: cooldown,
-          reply_mode: replyMode,
-          mention_user: mentionUser,
-          embed_response: embedVal,
-          random_responses: randomResponses,
-          attachment_url: attachmentUrl,
-          button_label: buttonLabel,
-          button_url: buttonUrl,
-          select_menu_options: selectMenuOptions,
-          created_by: createdBy,
-          ...(editStoredImage ? {
-            image_base64: editStoredImage.base64,
-            image_ext: editStoredImage.ext
-          } : {})
-        }
-      });
-    } else {
-      await safeRun(
-        `UPDATE autoresponses SET trigger_text=?, response_text=?, match_type=?, ignore_case=?, cooldown=?, reply_mode=?, mention_user=?, embed_response=?, random_responses=?, attachment_url=?, button_label=?, button_url=?, select_menu_options=?, created_by=? WHERE id=? AND guild_id=?`,
-        [trigger, response, matchType, ignoreCase, cooldown, replyMode, mentionUser, embedVal, randomResponses, attachmentUrl, buttonLabel, buttonUrl, selectMenuOptions, createdBy, ar.id, ctx.guild.id]
-      );
+    if (!AR) {
+      const embed = new EmbedBuilder().setTitle("❌ Database Error").setColor(0xe74c3c).setDescription("Koneksi ke database (MongoDB) tidak tersedia.").setTimestamp();
+      await safeCtxReply(ctx, { embeds: [embed] });
+      return true;
     }
+    const arFilter = ar._id ? { _id: ar._id } : { id: Number(ar.id), guild_id: String(ctx.guild.id) };
+    await AR.updateOne(arFilter, {
+      $set: {
+        trigger_text: trigger,
+        response_text: response,
+        match_type: matchType,
+        ignore_case: ignoreCase,
+        cooldown: cooldown,
+        reply_mode: replyMode,
+        mention_user: mentionUser,
+        embed_response: embedVal,
+        random_responses: randomResponses,
+        attachment_url: attachmentUrl,
+        button_label: buttonLabel,
+        button_url: buttonUrl,
+        select_menu_options: selectMenuOptions,
+        created_by: createdBy,
+        ...(editStoredImage ? {
+          image_base64: editStoredImage.base64,
+          image_ext: editStoredImage.ext
+        } : {})
+      }
+    });
 
     const displayId = ar.id !== undefined && ar.id !== null ? ar.id : (ar._id ? String(ar._id).slice(-6) : idArg);
     const embedSuccess = new EmbedBuilder()
@@ -9779,7 +9496,7 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
     }
 
     let desc = "";
-    if (deleted.length) desc += `**✅ Berhasil dihapus (${deleted.length}):**\n${deleted.join("\n")}`;
+    if (deleted.length) desc += `**✅ Berhasil dihapus (${deleted.length}):**\n${deleted.join("\n")}\n\n💡 *Nomor ID yang baru saja dihapus akan otomatis diisi kembali saat kamu menambahkan autoresponse baru (atau gunakan \`car rapikan\` untuk merapatkan nomor).*`;
     if (notFound.length) desc += `${deleted.length ? "\n\n" : ""}**❌ Tidak ditemukan:**\n${notFound.map(id => `\`${id}\``).join(", ")}`;
 
     const embedResult = new EmbedBuilder()
@@ -9813,73 +9530,177 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
 
     // Pisahkan aktif & nonaktif
     const isArEnabled = (r) => r.is_enabled === 1 || r.is_enabled === true || r.is_enabled === "1" || (r.is_enabled !== 0 && r.is_enabled !== "0" && r.is_enabled !== false);
-    const activeList = list.filter(isArEnabled);
-    const inactiveList = list.filter(r => !isArEnabled(r));
 
-    const formatEntry = (r, idx) => {
-      const arId = r.id !== undefined && r.id !== null ? r.id : (r._id ? String(r._id).slice(-6) : (idx + 1));
-      const trigger = String(r.trigger_text || "").slice(0, 30);
-      const response = String(r.response_text || "").replace(/\n/g, " ").slice(0, 40);
-      const matchIcon = r.match_type === "exact" ? "🎯" : r.match_type === "contains" ? "🔍" : r.match_type === "regex" ? "🔣" : "🎯";
-      const cooldownText = r.cooldown > 0 ? ` ⏱${r.cooldown}s` : "";
-      const creatorText = r.created_by ? ` • *by ${r.created_by}*` : "";
-      return `${matchIcon} \`#${arId}\` **${trigger}**${cooldownText}${creatorText}\n> ↳ ${response}`;
+    // Helper ambil ID yang konsisten & sort key
+    const getArId = (r) => {
+      if (r.id !== undefined && r.id !== null) return r.id; // numeric SQLite ID
+      if (r._id) return String(r._id).slice(-6);            // Mongo ObjectId (6 char hex)
+      return null;
+    };
+    const getSortKey = (r) => {
+      const id = getArId(r);
+      if (id === null) return Infinity;
+      const n = Number(id);
+      return isNaN(n) ? 99999999 : n; // numeric ID sort numerik, hex ke bawah
     };
 
-    // Header
-    const totalActive = activeList.length;
-    const totalInactive = inactiveList.length;
-    let headerStr = `## 📋 Daftar Autoresponse — ${ctx.guild.name}\n`;
-    headerStr += `🟢 **${totalActive} Aktif** ・ 🔴 **${totalInactive} Nonaktif** ・ 📦 **Total ${list.length}**`;
-    if (dupTotal > 0) headerStr += `\n⚠️ *${dupTotal} duplikat terdeteksi — ketik \`cdedupe\` untuk membersihkan.*`;
-    headerStr += `\n\n> 🎯 exact ・ 🔍 contains ・ 🔣 regex ・ ⏱ cooldown detik`;
+    const activeList = list.filter(isArEnabled).sort((a, b) => getSortKey(a) - getSortKey(b));
+    const inactiveList = list.filter(r => !isArEnabled(r)).sort((a, b) => getSortKey(a) - getSortKey(b));
 
-    const container = new ContainerBuilder().setAccentColor(0x5865f2);
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(headerStr));
+    const formatEntry = (r) => {
+      const arId = getArId(r) ?? "?";
+      const trigger = String(r.trigger_text || "").slice(0, 32);
+      const rawResp = String(r.response_text || "");
+      // Kalau response adalah URL gambar/attachment → tampilkan ikon aja
+      const isImageUrl = /^https?:\/\/.+\.(png|jpe?g|gif|webp)/i.test(rawResp.trim()) ||
+        rawResp.trim().startsWith("https://cdn.discordapp.com") ||
+        rawResp.trim().startsWith("https://media.discordapp");
+      const response = isImageUrl ? "📷 *[gambar]*" : rawResp.replace(/\n/g, " ").slice(0, 45);
+      const matchIcon = r.match_type === "exact" ? "🎯" : r.match_type === "contains" ? "🔍" : r.match_type === "regex" ? "🔣" : "🎯";
+      const idStr = typeof arId === "number" ? `#${arId}` : `#${arId}`;
+      const cooldownText = r.cooldown > 0 ? ` ⏱${r.cooldown}s` : "";
+      const creatorText = r.created_by ? ` · *${r.created_by}*` : "";
+      return `${matchIcon} \`${idStr}\` **${trigger}**${cooldownText}${creatorText}\n> ↳ ${response}`;
+    };
 
-    // Seksi Aktif
-    if (activeList.length > 0) {
-      const activeChunks = [];
-      let chunk = "";
-      for (let i = 0; i < activeList.length; i++) {
-        const entry = formatEntry(activeList[i], i) + "\n";
-        if ((chunk + entry).length > 1800) {
-          activeChunks.push(chunk.trim());
-          chunk = entry;
-        } else {
-          chunk += entry;
-        }
-      }
-      if (chunk.trim()) activeChunks.push(chunk.trim());
+    const PAGE_SIZE = 15;
+    const totalPages = Math.max(1, Math.ceil(activeList.length / PAGE_SIZE));
+    const usePagination = activeList.length > PAGE_SIZE;
 
-      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🟢 Autoresponse Aktif (${activeList.length})`));
-      for (const c of activeChunks) {
-        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(c));
-      }
-    }
+    const buildPage = (page) => {
+      const totalActive = activeList.length;
+      const totalInactive = inactiveList.length;
+      const pageSlice = activeList.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-    // Seksi Nonaktif
-    if (inactiveList.length > 0) {
-      const inactiveLines = inactiveList.map((r, i) => {
-        const arId = r.id !== undefined && r.id !== null ? r.id : (r._id ? String(r._id).slice(-6) : (i + 1));
-        const trigger = String(r.trigger_text || "").slice(0, 30);
-        return `🔴 \`#${arId}\` ~~${trigger}~~`;
-      });
-      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`### 🔴 Nonaktif (${inactiveList.length})\n${inactiveLines.join(" ・ ")}`)
+      // ─── Container 1: Header ───────────────────────────────────────
+      const headerParts = [
+        `## 📋 Autoresponse — ${ctx.guild.name}`,
+        `🟢 **${totalActive}** aktif  ·  🔴 **${totalInactive}** nonaktif  ·  📦 **${list.length}** total`,
+      ];
+      if (dupTotal > 0) headerParts.push(`⚠️ *${dupTotal} duplikat* — ketik \`cdedupe\` untuk bersihkan`);
+      if (usePagination) headerParts.push(`-# 📄 Halaman **${page + 1}** dari **${totalPages}**  ·  🎯 exact  🔍 contains  🔣 regex  ⏱ cooldown`);
+      else headerParts.push(`-# 🎯 exact  ·  🔍 contains  ·  🔣 regex  ·  ⏱ = cooldown`);
+
+      const headerContainer = new ContainerBuilder()
+        .setAccentColor(0x5865f2)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(headerParts.join("\n")));
+
+      // ─── Container 2: List Aktif ───────────────────────────────────
+      const listContainer = new ContainerBuilder().setAccentColor(0x57f287);
+
+      listContainer.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `### 🟢 Aktif ${usePagination ? `(${(page * PAGE_SIZE) + 1}–${Math.min((page + 1) * PAGE_SIZE, totalActive)} dari ${totalActive})` : `(${totalActive})`}`
+        )
       );
+      listContainer.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(1));
+
+      // Semua entry dalam 1 TextDisplay, tiap entry = 1 baris
+      const lines = pageSlice.map(r => {
+        const arId = getArId(r) ?? "?";
+        const trigger = String(r.trigger_text || "").slice(0, 28);
+        const rawResp = String(r.response_text || "");
+        const isImg = /^https?:\/\/.+\.(png|jpe?g|gif|webp)/i.test(rawResp.trim()) ||
+          rawResp.trim().startsWith("https://cdn.discordapp.com") ||
+          rawResp.trim().startsWith("https://media.discordapp");
+        const resp = isImg ? "📷 gambar" : rawResp.replace(/\n/g, " ").slice(0, 38);
+        const matchIcon = r.match_type === "contains" ? "🔍" : r.match_type === "regex" ? "🔣" : "🎯";
+        const cdText = r.cooldown > 0 ? ` ⏱${r.cooldown}s` : "";
+        return `${matchIcon} \`#${arId}\` **${trigger}**${cdText} — ${resp}`;
+      });
+      listContainer.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(lines.join("\n"))
+      );
+
+      listContainer.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(1));
+      listContainer.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          `-# \`cdar <id>\` hapus  ·  \`cenar/cdisar <id>\` toggle  ·  \`cear <id>\` edit  ·  *by ${authorTag}*`
+        )
+      );
+
+      const components = [headerContainer, listContainer];
+
+      // ─── Container 3: Nonaktif (halaman 1 saja, compact) ──────────
+      if (page === 0 && inactiveList.length > 0) {
+        const inactiveLines = inactiveList.map(r => {
+          const arId = getArId(r) ?? "?";
+          const trigger = String(r.trigger_text || "").slice(0, 28);
+          return `\`#${arId}\` ~~${trigger}~~`;
+        });
+        const inactContainer = new ContainerBuilder().setAccentColor(0xed4245)
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`### 🔴 Nonaktif (${inactiveList.length})\n${inactiveLines.join("  ·  ")}`)
+          );
+        components.push(inactContainer);
+      }
+
+      // ─── Nav buttons (pagination) ──────────────────────────────────
+      if (usePagination) {
+        const navRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`arlist_prev_${page}`)
+            .setLabel("◀ Prev")
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(page === 0),
+          new ButtonBuilder()
+            .setCustomId(`arlist_page_info`)
+            .setLabel(`${page + 1} / ${totalPages}`)
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId(`arlist_next_${page}`)
+            .setLabel("Next ▶")
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(page === totalPages - 1)
+        );
+        components.push(navRow);
+      }
+
+      return components;
+    };
+
+    // Kirim halaman pertama
+    const replyMsg = await safeCtxReply(ctx, {
+      components: buildPage(0),
+      flags: MessageFlags.IsComponentsV2,
+    });
+
+    // Collector untuk navigasi (hanya kalau ada pagination)
+    if (usePagination && replyMsg) {
+      let currentPage = 0;
+      const filter = (i) =>
+        (i.customId.startsWith("arlist_prev_") || i.customId.startsWith("arlist_next_")) &&
+        i.user.id === (ctx.author?.id || ctx.user?.id);
+
+      const collector = replyMsg.createMessageComponentCollector({ filter, time: 120_000 });
+
+      collector.on("collect", async (btnInt) => {
+        await btnInt.deferUpdate().catch(() => null);
+        if (btnInt.customId.startsWith("arlist_next_")) {
+          currentPage = Math.min(currentPage + 1, totalPages - 1);
+        } else if (btnInt.customId.startsWith("arlist_prev_")) {
+          currentPage = Math.max(currentPage - 1, 0);
+        }
+        await replyMsg.edit({ components: buildPage(currentPage), flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+      });
+
+      collector.on("end", async () => {
+        // Disable semua tombol setelah timeout
+        const disabledRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`arlist_prev_done`).setLabel("◀ Prev").setStyle(ButtonStyle.Secondary).setDisabled(true),
+          new ButtonBuilder().setCustomId(`arlist_page_done`).setLabel(`${currentPage + 1} / ${totalPages}`).setStyle(ButtonStyle.Primary).setDisabled(true),
+          new ButtonBuilder().setCustomId(`arlist_next_done`).setLabel("Next ▶").setStyle(ButtonStyle.Secondary).setDisabled(true)
+        );
+        const pageComps = buildPage(currentPage);
+        pageComps[pageComps.length - 1] = disabledRow;
+        await replyMsg.edit({ components: pageComps, flags: MessageFlags.IsComponentsV2 }).catch(() => null);
+      });
     }
 
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`📌 \`dar <id>\` hapus ・ \`enar/disar <id>\` toggle ・ \`ear <id>\` edit  •  *by ${authorTag}*`)
-    );
-
-    await safeCtxReply(ctx, { components: [container], flags: MessageFlags.IsComponentsV2 });
     return true;
   }
+
 
   if (cmd === "enable_autoresponse" || cmd === "enar" || (cmd === "enable" && (args[0] === "autoresponse" || args[0] === "ar"))) {
     if (!ctx.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
@@ -10868,7 +10689,10 @@ async function flushActiveVoiceSessions(client) {
 
       if (!inValidVc) {
         voiceSessions.delete(userId);
-        await safeRun("DELETE FROM active_voice_sessions WHERE user_id = ?", [userId]).catch(() => null);
+        const AVS = getMongoModel("active_voice_sessions");
+        if (AVS) {
+          await AVS.deleteOne({ user_id: String(userId) }).catch(() => null);
+        }
         continue;
       }
 
@@ -10877,7 +10701,14 @@ async function flushActiveVoiceSessions(client) {
       if (elapsedSec >= 5) {
         await saveVoiceActivity(userId, elapsedSec);
         voiceSessions.set(userId, now);
-        await safeRun("INSERT OR REPLACE INTO active_voice_sessions (user_id, join_timestamp) VALUES (?, ?)", [userId, now]).catch(() => null);
+        const AVS = getMongoModel("active_voice_sessions");
+        if (AVS) {
+          await AVS.updateOne(
+            { user_id: String(userId) },
+            { $set: { join_timestamp: now } },
+            { upsert: true }
+          ).catch(() => null);
+        }
       }
     }
   } catch (err) {
@@ -10976,19 +10807,28 @@ async function ensureAutoresponsesNormalized() {
   try {
     const AR = getMongoModel("autoresponses");
     if (!AR) return;
-    const docs = await AR.find({}).sort({ _id: 1 });
-    if (!docs || !docs.length) return;
-    const guildMap = new Map();
-    for (const doc of docs) {
-      const gId = String(doc.guild_id || "");
-      const currentMax = guildMap.get(gId) || 0;
-      const nextId = (doc.id && Number.isInteger(doc.id)) ? Math.max(currentMax, doc.id) : currentMax + 1;
-      guildMap.set(gId, nextId);
+    const allGuilds = await AR.distinct("guild_id");
+    for (const gId of allGuilds) {
+      if (gId) {
+        await renumberAutoresponses(gId);
+      }
+    }
 
+    const docs = await AR.find({});
+    if (!docs || !docs.length) return;
+    for (const doc of docs) {
       const updateFields = {};
       if (doc.is_enabled === undefined || doc.is_enabled === null) updateFields.is_enabled = 1;
-      if (doc.id === undefined || doc.id === null) updateFields.id = nextId;
       if (!doc.created_by) updateFields.created_by = "2cyi";
+      if (doc.image_base64 && doc.response_text && (
+        doc.response_text.includes("data/autoresponses") ||
+        doc.response_text.includes("ar_") ||
+        doc.response_text.startsWith("/home/") ||
+        doc.response_text.startsWith("C:\\") ||
+        doc.response_text.startsWith("c:/")
+      )) {
+        updateFields.response_text = "";
+      }
 
       if (Object.keys(updateFields).length > 0) {
         await AR.updateOne({ _id: doc._id }, { $set: updateFields });
@@ -11004,8 +10844,9 @@ client.once(Events.ClientReady, async (c) => {
   await initVoiceTracking(c);
   await ensureAutoresponsesNormalized().catch(() => null);
 
-  // Load sticky messages
-  const stickies = await safeAll("SELECT * FROM sticky_messages").catch(() => []);
+  // Load sticky messages from MongoDB
+  const SM = getMongoModel("sticky_messages");
+  const stickies = await SM.find().lean().catch(() => []);
   for (const row of stickies) {
     stickyCache.set(row.channel_id, {
       content: row.content,
@@ -11013,15 +10854,18 @@ client.once(Events.ClientReady, async (c) => {
     });
   }
 
-  // Load media settings
-  const mediaSettings = await safeAll("SELECT * FROM media_settings").catch(() => []);
+  // Load media settings from MongoDB
+  const MS = getMongoModel("media_settings");
+  const mediaSettings = await MS.find().lean().catch(() => []);
   for (const row of mediaSettings) {
     mediaSettingsCache.set(row.guild_id, {
-      enabled: row.enabled,
-      deleteOriginal: row.delete_original,
-      nsfwFilter: row.nsfw_filter,
-      quality: row.quality,
-      platforms: JSON.parse(row.platforms || "{}")
+      enabled: Number(row.enabled ?? 1),
+      deleteOriginal: Number(row.delete_original ?? 0),
+      nsfwFilter: Number(row.nsfw_filter ?? 1),
+      quality: row.quality || "auto",
+      platforms: typeof row.platforms === "object" && row.platforms !== null
+        ? row.platforms
+        : JSON.parse(row.platforms || "{}")
     });
   }
 
@@ -11087,15 +10931,11 @@ client.once(Events.ClientReady, async (c) => {
   c.guilds.cache.forEach(g => { totalMembers += g.memberCount; });
   const latency = c.ws.ping;
 
-  let dbSizeFormatted = "0 B";
+  let dbSizeFormatted = "MongoDB Atlas";
   try {
-    if (fs.existsSync(SQLITE_PATH)) {
-      const stats = fs.statSync(SQLITE_PATH);
-      const bytes = stats.size;
-      if (bytes < 1024) dbSizeFormatted = `${bytes} B`;
-      else if (bytes < 1048576) dbSizeFormatted = `${(bytes / 1024).toFixed(1)} KB`;
-      else dbSizeFormatted = `${(bytes / 1048576).toFixed(1)} MB`;
-    }
+    const mongoose = require("mongoose");
+    const state = mongoose.connection.readyState;
+    dbSizeFormatted = state === 1 ? "MongoDB Atlas ✅" : "MongoDB Atlas (disconnected)";
   } catch { }
 
   const wib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
@@ -11128,13 +10968,9 @@ async function startReminderLoop(client) {
   setInterval(async () => {
     try {
       const now = Date.now();
-      const due = await safeAll(
-        `SELECT * FROM reminders
-         WHERE is_done = 0 AND due_at <= ?
-         ORDER BY due_at ASC
-         LIMIT 10`,
-        [now]
-      );
+      const Reminder = getMongoModel("reminders");
+      const due = await Reminder.find({ is_done: 0, due_at: { $lte: now } })
+        .sort({ due_at: 1 }).limit(10).lean();
 
       for (const r of due) {
         const ch = await client.channels.fetch(r.channel_id).catch(() => null);
@@ -11145,7 +10981,10 @@ async function startReminderLoop(client) {
             console.error(`[reminderLoop] Missing permissions or failed to send reminder to channel ${r.channel_id}:`, err?.message || err);
           });
         }
-        await safeRun("UPDATE reminders SET is_done = 1 WHERE id = ?", [r.id]);
+        await Reminder.updateOne(
+          { _id: r._id },
+          { $set: { is_done: 1 } }
+        ).catch(() => null);
       }
     } catch (e) {
       console.error("[reminderLoop]", e);
@@ -11335,18 +11174,16 @@ function guessHintText(game) {
 }
 
 async function addGuessNumberWin(guildId, userId, attempts) {
-  await safeRun(
-    `INSERT INTO guess_number_scores (guild_id, user_id, wins, best_attempts, updated_at)
-     VALUES (?, ?, 1, ?, ?)
-     ON CONFLICT(guild_id, user_id) DO UPDATE SET
-       wins=guess_number_scores.wins+1,
-       best_attempts=CASE
-         WHEN guess_number_scores.best_attempts IS NULL THEN excluded.best_attempts
-         WHEN excluded.best_attempts < guess_number_scores.best_attempts THEN excluded.best_attempts
-         ELSE guess_number_scores.best_attempts
-       END,
-       updated_at=excluded.updated_at`,
-    [guildId, userId, attempts, Date.now()]
+  const GNS = getMongoModel("guess_number_scores");
+  await GNS.updateOne(
+    { guild_id: String(guildId), user_id: String(userId) },
+    {
+      $inc: { wins: 1 },
+      $min: { best_attempts: Number(attempts) },
+      $set: { updated_at: Date.now() },
+      $setOnInsert: { guild_id: String(guildId), user_id: String(userId) }
+    },
+    { upsert: true }
   );
 }
 
@@ -13037,11 +12874,18 @@ client.on(Events.MessageCreate, async (message) => {
         const filename = `temp_media_${Date.now()}.mp4`;
         const outputPath = path.join(__dirname, filename);
         const formatArg = "b/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+
+        // Check for optional cookies file to bypass YouTube bot detection
+        // Place a 'yt_cookies.txt' (Netscape format) in the bot root directory
+        const cookiesPath = path.join(__dirname, "yt_cookies.txt");
+        const hasCookies = fs.existsSync(cookiesPath);
+
         const ytArgs = [
           "--no-warnings",
           "--no-playlist",
           "--playlist-items", "1",
-          "--extractor-args", "youtube:player_client=android,web",
+          "--extractor-args", "youtube:player_client=tv_embedded,ios,android",
+          ...(hasCookies ? ["--cookies", cookiesPath] : []),
           "-o", outputPath,
           "-f", formatArg,
           url
@@ -13242,7 +13086,8 @@ client.on(Events.MessageCreate, async (message) => {
                 await message.reply({
                   files: [attachment],
                   components: [row],
-                  allowedMentions: { repliedUser: false }
+                  allowedMentions: { repliedUser: false },
+                  failIfNotExists: false
                 }).catch(() => null);
               }
             } else {
@@ -13258,7 +13103,8 @@ client.on(Events.MessageCreate, async (message) => {
                 await message.reply({
                   content: fixedUrls.join("\n"),
                   components: [row],
-                  allowedMentions: { repliedUser: false }
+                  allowedMentions: { repliedUser: false },
+                  failIfNotExists: false
                 }).catch(() => null);
               }
             }
@@ -13268,28 +13114,37 @@ client.on(Events.MessageCreate, async (message) => {
     }
     // ===================== SECURITY & AUTOMOD FILTERS (FOR USERS & 3RD-PARTY BOTS) =====================
 
-    // 0. 🚫 BOT BLACKLIST & WHITELIST CHECK (USERS & ROLES)
+    // 0. 🚫 BOT BLACKLIST & WHITELIST CHECK WITH IN-MEMORY CACHE (0ms delay)
     let isWhitelistedBot = false;
     let isBlacklistedTarget = false;
 
     if (message.guild) {
-      const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+      const gid = message.guild.id;
+      let sec = botSecurityCache.get(gid);
+      const nowMsSec = Date.now();
+      if (!sec || nowMsSec - sec.lastFetch > 300000) {
+        const [botWlDoc, botWlRolesDoc, botBlDoc, botBlRolesDoc] = await Promise.all([
+          MetaText.findOne({ key: `bot_whitelist_${gid}` }).lean().catch(() => null),
+          MetaText.findOne({ key: `bot_whitelist_roles_${gid}` }).lean().catch(() => null),
+          MetaText.findOne({ key: `bot_blacklist_${gid}` }).lean().catch(() => null),
+          MetaText.findOne({ key: `bot_blacklist_roles_${gid}` }).lean().catch(() => null),
+        ]);
+        sec = {
+          wlList: Array.isArray(botWlDoc?.value) ? botWlDoc.value : [],
+          wlRoles: Array.isArray(botWlRolesDoc?.value) ? botWlRolesDoc.value : [],
+          blList: Array.isArray(botBlDoc?.value) ? botBlDoc.value : [],
+          blRoles: Array.isArray(botBlRolesDoc?.value) ? botBlRolesDoc.value : [],
+          lastFetch: nowMsSec,
+        };
+        botSecurityCache.set(gid, sec);
+      }
 
-      const botWlDoc = await MetaText.findOne({ key: `bot_whitelist_${message.guild.id}` }).lean().catch(() => null);
-      const botWlList = Array.isArray(botWlDoc?.value) ? botWlDoc.value : [];
-      const botWlRolesDoc = await MetaText.findOne({ key: `bot_whitelist_roles_${message.guild.id}` }).lean().catch(() => null);
-      const botWlRoles = Array.isArray(botWlRolesDoc?.value) ? botWlRolesDoc.value : [];
-
-      if (botWlList.includes(message.author.id) || (member && member.roles.cache.some(r => botWlRoles.includes(r.id)))) {
+      const member = message.member;
+      if (sec.wlList.includes(message.author.id) || (member && member.roles.cache.some(r => sec.wlRoles.includes(r.id)))) {
         isWhitelistedBot = true;
       }
 
-      const botBlDoc = await MetaText.findOne({ key: `bot_blacklist_${message.guild.id}` }).lean().catch(() => null);
-      const botBlList = Array.isArray(botBlDoc?.value) ? botBlDoc.value : [];
-      const botBlRolesDoc = await MetaText.findOne({ key: `bot_blacklist_roles_${message.guild.id}` }).lean().catch(() => null);
-      const botBlRoles = Array.isArray(botBlRolesDoc?.value) ? botBlRolesDoc.value : [];
-
-      if (botBlList.includes(message.author.id) || (member && member.roles.cache.some(r => botBlRoles.includes(r.id)))) {
+      if (sec.blList.includes(message.author.id) || (member && member.roles.cache.some(r => sec.blRoles.includes(r.id)))) {
         isBlacklistedTarget = true;
       }
     }
@@ -13368,12 +13223,13 @@ client.on(Events.MessageCreate, async (message) => {
     if (isInviteHandled) return;
 
     // 3. 🛡️ Anti-Toxic & Slur Filter (Check bad words & hate speech for USERS & 3RD-PARTY BOTS)
+    const isToxicEnabled = getIsToxicEnabled(message.guild.id);
     const ownerId = String(process.env.BOT_OWNER_ID || "");
     const ignoreRoleId = String(process.env.TOXIC_IGNORE_ROLE_ID || "").trim();
     const isToxicOwner = message.author.id === ownerId;
     const hasIgnoreRole = ignoreRoleId && message.member?.roles?.cache?.has(ignoreRoleId);
 
-    if (!isToxicOwner && !hasIgnoreRole && !isWhitelistedBot) {
+    if (isToxicEnabled && !isToxicOwner && !hasIgnoreRole && !isWhitelistedBot) {
       const toxicRaw =
         process.env.TOXIC_WORDS ||
         "nigger,nigga,n1gger,n1gga,niggr,nigg3r,retard,anjing,babi,tolol,goblok,bangsat,ngentot,memek,kontol,jilmek,desah,pepek,kampang,memew,mmk,kntl,gblk,bengak,buyan,gelat";
@@ -13462,17 +13318,17 @@ client.on(Events.MessageCreate, async (message) => {
     const day = wib.toISOString().slice(0, 10); // YYYY-MM-DD (WIB)
 
     try {
-      await safeRun(
+      safeRun(
         `INSERT INTO activity_daily (day, user_id, msg_count) VALUES (?, ?, 1)
          ON CONFLICT(day, user_id) DO UPDATE SET msg_count = activity_daily.msg_count + 1`,
         [day, message.author.id]
-      );
+      ).catch(() => null);
       if (message.guild) {
-        await safeRun(
+        safeRun(
           `INSERT INTO activity_daily_channel (day, guild_id, channel_id, user_id, msg_count) VALUES (?, ?, ?, ?, 1)
            ON CONFLICT(day, guild_id, channel_id, user_id) DO UPDATE SET msg_count = activity_daily_channel.msg_count + 1`,
           [day, message.guild.id, message.channel.id, message.author.id]
-        );
+        ).catch(() => null);
       }
     } catch (actErr) {
       console.error("[ACTIVITY LOGGER ERROR]", actErr);
@@ -13580,13 +13436,18 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // Check autoresponses
-    const handledByAR = await checkAutoresponses(message);
-    if (handledByAR) return;
+    // Prioritaskan command ber-prefix agar langsung instan (0ms delay)
+    const isPrefixedCmd = message.content.startsWith(PREFIX);
 
-    // Tebak Angka guess attempt (processes guesses both with and without prefix)
-    const handledByGuess = await handleGuessNumberAttempt(message);
-    if (handledByGuess) return;
+    if (!isPrefixedCmd) {
+      // Check autoresponses via in-memory cache
+      const handledByAR = await checkAutoresponses(message);
+      if (handledByAR) return;
+
+      // Tebak Angka guess attempt (processes guesses both with and without prefix)
+      const handledByGuess = await handleGuessNumberAttempt(message);
+      if (handledByGuess) return;
+    }
 
     // Check for pending confirmation
     const textClean = message.content.trim().toLowerCase();
@@ -13614,7 +13475,7 @@ client.on(Events.MessageCreate, async (message) => {
       "help", "chelp", "helpmod", "helpadmin", "modhelp", "adminhelp", "chelpmod", "chelpadmin", "cmodhelp", "cadminhelp",
       "profile", "cprofile", "cp", "cprofilestaff", "cpstaff", "staffprofile", "cstaffprofile",
       "userinfo", "cuserinfo", "who", "cwho", "whorole", "cwhorole",
-      "ping", "cping", "latency",
+      "ping", "cping", "latency", "toxic", "ctoxic", "antitoxic", "cantitoxic",
       "serverinfo", "servers",
       "leaderboard", "lb",
       "wordle", "cwordle", "tebakkata", "ctebakkata", "tebakangka", "ctebakangka", "ta", "cta", "hint", "chint", "stopgame", "cstopgame", "cstop", "stopta",
@@ -13659,9 +13520,9 @@ client.on(Events.MessageCreate, async (message) => {
       "ping",
     ]);
 
-    // Log prefix command usage to thread — HANYA untuk command yang dikenali
+    // Log prefix command usage to thread secara background agar tidak menunda respons bot
     if (cmd && KNOWN_PREFIX_CMDS.has(cmd)) {
-      await sendCommandLogToThread(client, message.author, message.content, message.channel, false);
+      sendCommandLogToThread(client, message.author, message.content, message.channel, false).catch(() => null);
     }
 
     const cleanInput = message.content.slice(PREFIX.length).trim();
@@ -18653,17 +18514,38 @@ Enjoy your reward ✨`
 
     }
 
-    // cping
+    // ctoxic on / ctoxic off / ctoxic status
+    if (cmd === "toxic" || cmd === "ctoxic" || cmd === "antitoxic" || cmd === "cantitoxic") {
+      const isAdm = isBotOwner(message.author.id) || message.member.permissions.has(PermissionsBitField.Flags.ManageGuild) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+      if (!isAdm) {
+        return message.reply("❌ Perintah ini hanya untuk Administrator / Manager.");
+      }
+      const sub = args[0]?.toLowerCase();
+      if (sub === "on" || sub === "enable" || sub === "aktif" || sub === "1") {
+        await MetaText.updateOne({ key: `toxic_enabled_${message.guild.id}` }, { $set: { value: "1" } }, { upsert: true });
+        toxicGuildOverride.set(message.guild.id, true);
+        return message.reply("🟢 **Fitur Anti-Toxic Berhasil DIAKTIFKAN!** Kata-kata kasar akan disaring & ditindak.");
+      } else if (sub === "off" || sub === "disable" || sub === "nonaktif" || sub === "0") {
+        await MetaText.updateOne({ key: `toxic_enabled_${message.guild.id}` }, { $set: { value: "0" } }, { upsert: true });
+        toxicGuildOverride.set(message.guild.id, false);
+        return message.reply("🔴 **Fitur Anti-Toxic Berhasil DINONAKTIFKAN!** Bot tidak akan menyaring atau menghapus kata kasar.");
+      } else {
+        const isCurrentOn = getIsToxicEnabled(message.guild.id);
+        return message.reply(`ℹ️ **Status Anti-Toxic:** ${isCurrentOn ? "🟢 **AKTIF**" : "🔴 **NONAKTIF**"}\n\n💡 Ketik \`ctoxic on\` untuk mengaktifkan atau \`ctoxic off\` untuk menonaktifkan.`);
+      }
+    }
+
+    // cping (Fast single-message instant reply)
     if (cmd === "latency" || cmd === "ping" || cmd === "cping") {
-      const Latency = message.client.ws.ping;                 // ping websocket
-      const botLatency = Date.now() - message.createdTimestamp;  // waktu respons bot (estimasi)
+      const wsPing = Math.round(message.client.ws.ping);
+      const botLatency = Math.max(1, Date.now() - message.createdTimestamp);
 
       const embed = new EmbedBuilder()
         .setTitle("🏓 Pong!")
         .setColor(EMBED_COLOR)
         .setDescription(
           [
-            `💗 **Latency (Heartbeat):** \`${Latency}ms\``,
+            `💗 **Latency (Heartbeat):** \`${wsPing}ms\``,
             `🤖 **Bot Latency (Respons):** \`${botLatency}ms\``,
           ].join("\n")
         )
@@ -18672,7 +18554,7 @@ Enjoy your reward ✨`
           iconURL: message.author.displayAvatarURL(),
         })
         .setTimestamp();
-      return message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [embed] }).catch(() => null);
     }
 
     // cbm (Check Bot Music - Tampilkan status bot music di channel manapun tempat command dipanggil)
@@ -18744,7 +18626,7 @@ Enjoy your reward ✨`
       else if (rawArg.includes("streak") || rawArg.includes("flame") || rawArg.includes("tarot") || rawArg.includes("recovery")) subCategory = "admin_streak";
       else if (rawArg.includes("boost")) subCategory = "admin_booster";
       else if (rawArg.includes("role")) subCategory = "admin_roles";
-      else if (rawArg.includes("mod") || rawArg.includes("warn") || rawArg.includes("invite") || rawArg.includes("log") || rawArg.includes("bot")) subCategory = "admin_moderation";
+      else if (rawArg.includes("mod") || rawArg.includes("warn") || rawArg.includes("invite") || rawArg.includes("log") || rawArg.includes("bot") || rawArg.includes("toxic")) subCategory = "admin_moderation";
       else if (rawArg.includes("auto") || rawArg.includes("sticky")) subCategory = "admin_automation";
       else if (rawArg.includes("voice") || rawArg.includes("vc")) subCategory = "admin_voice";
       else if (rawArg.includes("panel")) subCategory = "admin_panels";
@@ -20716,11 +20598,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: "❌ Format submit tidak valid.", flags: MessageFlags.Ephemeral });
       }
 
-      await safeRun(
-        `INSERT INTO tod_submissions (type, category, rating, question, created_by, is_anonymous, status, created_at)
-     VALUES (?,?,?,?,?,?,?,?)`,
-        [type, category || "general", rating || "PG", question, interaction.user.id, 1, "pending", Date.now()]
-      );
+      const TS = getMongoModel("tod_submissions");
+      if (TS) {
+        await TS.create({
+          type,
+          category: category || "general",
+          rating: rating || "PG",
+          question,
+          created_by: String(interaction.user.id),
+          is_anonymous: 1,
+          status: "pending",
+          created_at: Date.now()
+        }).catch(console.error);
+      }
 
       return interaction.reply({
         content: "✅ Pertanyaan anonim berhasil dikirim untuk direview staff.",
@@ -21040,16 +20930,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       // ✅ FIX: kalau user pernah delete manual, clean stale open tickets (channel sudah tidak ada)
-      const openRow = await safeGet(
-        `SELECT channel_id FROM tickets_custom WHERE guild_id=? AND owner_id=? AND closed_at IS NULL ORDER BY created_at DESC LIMIT 1`,
-        [String(interaction.guild.id), String(interaction.user.id)]
-      ).catch(() => null);
+      const TC = getMongoModel("tickets_custom");
+      const openRow = TC ? await TC.findOne({
+        guild_id: String(interaction.guild.id),
+        owner_id: String(interaction.user.id),
+        closed_at: null
+      }).sort({ created_at: -1 }).lean().catch(() => null) : null;
+
       if (openRow?.channel_id) {
         const ch = await interaction.guild.channels.fetch(String(openRow.channel_id)).catch(() => null);
-        if (!ch) {
-          await safeRun(
-            `UPDATE tickets_custom SET closed_at=? WHERE guild_id=? AND channel_id=? AND closed_at IS NULL`,
-            [Date.now(), String(interaction.guild.id), String(openRow.channel_id)]
+        if (!ch && TC) {
+          await TC.updateOne(
+            { guild_id: String(interaction.guild.id), channel_id: String(openRow.channel_id), closed_at: null },
+            { $set: { closed_at: Date.now() } }
           ).catch(() => null);
         }
       }
@@ -21096,11 +20989,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ],
       });
 
-      await safeRun(
-        `INSERT INTO tickets_custom (guild_id, channel_id, owner_id, type, subject, created_at)
-         VALUES (?,?,?,?,?,?)`,
-        [String(interaction.guild.id), String(channel.id), String(interaction.user.id), safeType, safeText(subject, 80), Date.now()]
-      ).catch(() => null);
+      if (TC) {
+        await TC.create({
+          guild_id: String(interaction.guild.id),
+          channel_id: String(channel.id),
+          owner_id: String(interaction.user.id),
+          type: safeType,
+          subject: safeText(subject, 80),
+          created_at: Date.now(),
+          closed_at: null
+        }).catch(console.error);
+      }
 
       const mainEmbed = new EmbedBuilder()
         .setTitle(`🎫 TICKET ${ticketTypeLabel(safeType).toUpperCase()}`)
@@ -21218,11 +21117,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const channel = await interaction.guild.channels.create(channelOptions);
 
-        await safeRun(
-          `INSERT INTO tickets_custom (guild_id, channel_id, owner_id, type, subject, created_at)
-           VALUES (?,?,?,?,?,?)`,
-          [String(interaction.guild.id), String(channel.id), String(interaction.user.id), "verification", "Verifikasi Role Cewe", Date.now()]
-        ).catch(() => null);
+        const TC = getMongoModel("tickets_custom");
+        if (TC) {
+          await TC.create({
+            guild_id: String(interaction.guild.id),
+            channel_id: String(channel.id),
+            owner_id: String(interaction.user.id),
+            type: "verification",
+            subject: "Verifikasi Role Cewe",
+            created_at: Date.now(),
+            closed_at: null
+          }).catch(console.error);
+        }
 
         const now = new Date();
         const options = { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Jakarta" };
@@ -21618,10 +21524,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).catch(() => { });
 
         // ✅ update DB dulu biar user bisa bikin ticket baru
-        await safeRun(
-          `UPDATE tickets_custom SET closed_at=? WHERE guild_id=? AND channel_id=? AND closed_at IS NULL`,
-          [Date.now(), String(interaction.guild.id), String(interaction.channel.id)]
-        ).catch(() => null);
+        const TC = getMongoModel("tickets_custom");
+        if (TC) {
+          await TC.updateOne(
+            { guild_id: String(interaction.guild.id), channel_id: String(interaction.channel.id), closed_at: null },
+            { $set: { closed_at: Date.now() } }
+          ).catch(() => null);
+        }
 
         // optional transcript ke log channel
         const logCh = await getTicketLogChannel(interaction.guild).catch(() => null);
@@ -21671,14 +21580,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (!meta.claimed_by && claimedFromTopic) meta.claimed_by = claimedFromTopic;
 
             // Ambil subject/created dari DB (karena topic lama cuma simpan OWNER/TYPE)
-            const dbTicket = await safeGet(
-              `SELECT owner_id, type, subject, created_at
-             FROM tickets_custom
-             WHERE guild_id=? AND channel_id=?
-             ORDER BY created_at DESC
-             LIMIT 1`,
-              [String(interaction.guild.id), String(interaction.channel.id)]
-            ).catch(() => null);
+            const dbTicket = TC ? await TC.findOne({
+              guild_id: String(interaction.guild.id),
+              channel_id: String(interaction.channel.id)
+            }).sort({ created_at: -1 }).lean().catch(() => null) : null;
 
             if (dbTicket) {
               if (!meta.opener && dbTicket.owner_id) meta.opener = String(dbTicket.owner_id);
@@ -22782,15 +22687,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           await safeDefer(interaction, true);
 
-          await safeRun(
-            `INSERT INTO support_leaderboard (user_id, type, username, amount, updated_at)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(user_id, type) DO UPDATE SET
-               username = excluded.username,
-               amount = excluded.amount,
-               updated_at = excluded.updated_at`,
-            [targetUserId, type, targetUsername, amount, now]
-          );
+          const SL = getMongoModel("support_leaderboard");
+          if (SL) {
+            await SL.updateOne(
+              { user_id: targetUserId, type },
+              { $set: { username: targetUsername, amount, updated_at: now } },
+              { upsert: true }
+            ).catch(console.error);
+          }
 
           return interaction.editReply({
             content: `✅ Kontribusi berhasil ditambahkan/diperbarui untuk **${targetUsername}** (${type}) senilai **Rp ${amount.toLocaleString("id-ID")}**.`
@@ -22803,12 +22707,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
           await safeDefer(interaction, true);
 
-          const res = await safeRun(
-            "DELETE FROM support_leaderboard WHERE (user_id = ? OR username = ?) AND type = ?",
-            [target, target, type]
-          );
+          const SL = getMongoModel("support_leaderboard");
+          const res = SL ? await SL.deleteOne({
+            $or: [{ user_id: target }, { username: target }],
+            type
+          }).catch(() => null) : null;
 
-          if (res?.changes > 0) {
+          if (res?.deletedCount > 0) {
             return interaction.editReply({
               content: `✅ Kontribusi (${type}) untuk target **${target}** berhasil dihapus.`
             });
@@ -22822,7 +22727,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (sub === "list") {
           await safeDefer(interaction, true);
 
-          const list = await safeAll("SELECT * FROM support_leaderboard ORDER BY type DESC, amount DESC");
+          const SL = getMongoModel("support_leaderboard");
+          const list = SL ? await SL.find().sort({ type: -1, amount: -1 }).lean().catch(() => []) : [];
           if (!list.length) {
             return interaction.editReply({ content: "📭 Database support_leaderboard kosong." });
           }
@@ -23007,22 +22913,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           days.push(d.toISOString().slice(0, 10));
         }
 
-        const placeholders = days.map(() => "?").join(",");
-        const rows = await safeAll(
-          `SELECT user_id, SUM(msg_count) AS total
-     FROM activity_daily
-     WHERE day IN (${placeholders})
-     GROUP BY user_id
-     ORDER BY total DESC
-     LIMIT 10`,
-          days
-        );
+        const AD = getMongoModel("activity_daily");
+        const rows = AD ? await AD.aggregate([
+          { $match: { day: { $in: days } } },
+          { $group: { _id: "$user_id", total: { $sum: "$msg_count" } } },
+          { $sort: { total: -1 } },
+          { $limit: 10 }
+        ]) : [];
 
         if (!rows.length) return interaction.editReply("Belum ada data activity 7 hari terakhir.");
 
         const text =
           `🏆 **Top Active (7 hari terakhir, WIB)**\n` +
-          rows.map((r, i) => `**${i + 1}.** <@${r.user_id}> — **${r.total}** msg`).join("\n");
+          rows.map((r, i) => `**${i + 1}.** <@${r._id}> — **${r.total}** msg`).join("\n");
 
         return interaction.editReply(text);
       }
@@ -23973,11 +23876,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const question = safeText(interaction.options.getString("question", true), 300).trim();
         const pack = safeText(interaction.options.getString("pack", false) || "", 40).trim() || null;
 
-        await safeRun(
-          `INSERT INTO tod_questions (type, category, rating, question, source, pack_name, created_by, created_at)
-           VALUES (?,?,?,?,?,?,?,?)`,
-          [type, category, rating, question, "custom", pack, interaction.user.id, Date.now()]
-        );
+        const TQ = getMongoModel("tod_questions");
+        if (TQ) {
+          await TQ.create({
+            type,
+            category,
+            rating,
+            question,
+            source: "custom",
+            pack_name: pack,
+            created_by: String(interaction.user.id),
+            is_active: 1,
+            created_at: Date.now()
+          }).catch(console.error);
+        }
 
         return safeReply(interaction, {
           content: `✅ Pertanyaan TOD custom ditambahkan${pack ? ` ke pack **${pack}**` : ""}.`,
@@ -24110,12 +24022,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const msg = interaction.options.getString("message", true);
 
         const due = Date.now() + minutes * 60 * 1000;
-
-        await safeRun(
-          `INSERT INTO reminders (user_id, channel_id, message, due_at, created_at)
-          VALUES (?, ?, ?, ?, ?)`,
-          [interaction.user.id, interaction.channelId, msg, due, Date.now()]
-        );
+        const Reminder = getMongoModel("reminders");
+        if (Reminder) {
+          const maxDoc = await Reminder.findOne().sort({ id: -1 }).lean().catch(() => null);
+          const nextId = (maxDoc?.id || 0) + 1;
+          await Reminder.create({
+            id: nextId,
+            user_id: String(interaction.user.id),
+            channel_id: String(interaction.channelId),
+            message: msg,
+            due_at: due,
+            created_at: Date.now(),
+            is_done: 0
+          }).catch(console.error);
+        }
 
         return safeReply(interaction, {
           content: `✅ Reminder diset untuk <t:${Math.floor(due / 1000)}:R>`,
@@ -24145,11 +24065,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        await safeRun(
-          `INSERT INTO reminders (user_id, channel_id, message, due_at, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
-          [interaction.user.id, interaction.channelId, msg, due, Date.now()]
-        );
+        const Reminder = getMongoModel("reminders");
+        if (Reminder) {
+          const maxDoc = await Reminder.findOne().sort({ id: -1 }).lean().catch(() => null);
+          const nextId = (maxDoc?.id || 0) + 1;
+          await Reminder.create({
+            id: nextId,
+            user_id: String(interaction.user.id),
+            channel_id: String(interaction.channelId),
+            message: msg,
+            due_at: due,
+            created_at: Date.now(),
+            is_done: 0
+          }).catch(console.error);
+        }
 
         return safeReply(interaction, {
           content: `✅ Reminder diset untuk <t:${Math.floor(due / 1000)}:F>`,
@@ -24159,14 +24088,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (name === "remind_list") {
         await safeDefer(interaction, true);
 
-        const rows = await safeAll(
-          `SELECT id, message, due_at
-     FROM reminders
-     WHERE user_id = ? AND is_done = 0
-     ORDER BY due_at ASC
-     LIMIT 20`,
-          [interaction.user.id]
-        );
+        const Reminder = getMongoModel("reminders");
+        const rows = Reminder ? await Reminder.find({
+          user_id: String(interaction.user.id),
+          is_done: 0
+        }).sort({ due_at: 1 }).limit(20).lean().catch(() => []) : [];
 
         if (!rows.length) return interaction.editReply("Kamu belum punya reminder aktif.");
 
@@ -24284,10 +24210,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (sub === "set") {
           const content = interaction.options.getString("content", true).trim();
 
-          await safeRun(
-            "INSERT INTO sticky_messages (channel_id, content, last_message_id) VALUES (?, ?, NULL) ON CONFLICT(channel_id) DO UPDATE SET content=excluded.content",
-            [interaction.channelId, content]
-          );
+          const SM = getMongoModel("sticky_messages");
+          if (SM) {
+            await SM.updateOne(
+              { channel_id: String(interaction.channelId) },
+              { $set: { content, last_message_id: null } },
+              { upsert: true }
+            ).catch(console.error);
+          }
 
           // Delete old message if any
           const cache = stickyCache.get(interaction.channelId);
@@ -24299,8 +24229,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           // Send first sticky message
           const sent = await interaction.channel.send({ content }).catch(() => null);
           const lastMessageId = sent ? sent.id : null;
-          if (sent) {
-            await safeRun("UPDATE sticky_messages SET last_message_id=? WHERE channel_id=?", [lastMessageId, interaction.channelId]);
+          if (sent && SM) {
+            await SM.updateOne(
+              { channel_id: String(interaction.channelId) },
+              { $set: { last_message_id: lastMessageId } }
+            ).catch(console.error);
           }
 
           stickyCache.set(interaction.channelId, { content, lastMessageId });
@@ -24317,10 +24250,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return safeReply(interaction, { embeds: [embed], flags: MessageFlags.Ephemeral });
           }
 
-          await safeRun(
-            "UPDATE sticky_messages SET content=? WHERE channel_id=?",
-            [content, interaction.channelId]
-          );
+          const SM = getMongoModel("sticky_messages");
+          if (SM) {
+            await SM.updateOne(
+              { channel_id: String(interaction.channelId) },
+              { $set: { content } }
+            ).catch(console.error);
+          }
 
           // Delete old message if any
           const cache = stickyCache.get(interaction.channelId);
@@ -24332,8 +24268,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           // Send updated sticky message
           const sent = await interaction.channel.send({ content }).catch(() => null);
           const lastMessageId = sent ? sent.id : null;
-          if (sent) {
-            await safeRun("UPDATE sticky_messages SET last_message_id=? WHERE channel_id=?", [lastMessageId, interaction.channelId]);
+          if (sent && SM) {
+            await SM.updateOne(
+              { channel_id: String(interaction.channelId) },
+              { $set: { last_message_id: lastMessageId } }
+            ).catch(console.error);
           }
 
           stickyCache.set(interaction.channelId, { content, lastMessageId });
@@ -24349,7 +24288,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (oldMsg) await oldMsg.delete().catch(() => null);
           }
 
-          await safeRun("DELETE FROM sticky_messages WHERE channel_id=?", [interaction.channelId]);
+          const SM = getMongoModel("sticky_messages");
+          if (SM) {
+            await SM.deleteOne({ channel_id: String(interaction.channelId) }).catch(console.error);
+          }
           stickyCache.delete(interaction.channelId);
 
           const embed = new EmbedBuilder().setTitle("✅ Sticky Message Removed").setColor(0x2ecc71).setDescription(`Successfully removed sticky message from <#${interaction.channelId}>.`).setTimestamp();
@@ -24357,7 +24299,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         if (sub === "list") {
-          const stickies = await safeAll("SELECT * FROM sticky_messages").catch(() => []);
+          const SM = getMongoModel("sticky_messages");
+          const stickies = SM ? await SM.find().lean().catch(() => []) : [];
           const guildChannels = await interaction.guild.channels.fetch().catch(() => null);
           if (!guildChannels) {
             return safeReply(interaction, { content: "❌ Failed to fetch channels list.", flags: MessageFlags.Ephemeral });
@@ -24934,9 +24877,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // ================== QUOTES SYSTEM ==================
       if (interaction.isButton() && interaction.customId === "add_quote") {
-        if (interaction.channelId !== QUOTES_CHANNEL_ID) {
-          return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", flags: MessageFlags.Ephemeral });
-        }
 
         const modal = new ModalBuilder().setCustomId("add_quote_modal").setTitle("Add a Quote");
 
@@ -24953,10 +24893,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     } // close pending block
 
-    if (interaction.isModalSubmit() && interaction.customId === "add_quote_modal") {
-      if (interaction.channelId !== QUOTES_CHANNEL_ID) {
-        return interaction.reply({ content: "Ini cuma bisa dipakai di quotes channel.", flags: MessageFlags.Ephemeral });
+    // ================== SETUP-QUOTES SLASH COMMAND ==================
+    if (interaction.isChatInputCommand() && interaction.commandName === "setup-quotes") {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return interaction.reply({ content: "❌ Khusus Admin.", flags: MessageFlags.Ephemeral });
       }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const targetChannel = interaction.options.getChannel("channel") || interaction.guild.channels.cache.get(QUOTES_CHANNEL_ID);
+      if (!targetChannel) {
+        return interaction.editReply("❌ Channel tidak ditemukan. Set `QUOTES_CHANNEL_ID` di `.env` atau pilih channel via opsi.");
+      }
+
+      const panelEmbed = new EmbedBuilder()
+        .setColor(0x111111)
+        .setTitle("**📝 𝐐𝐮𝐨𝐭𝐞𝐬**")
+        .setDescription(
+          "Punya kata-kata yang ingin kamu abadikan?\n\n" +
+          "Klik tombol **➕ Add Quote** di bawah untuk mengirim quote kamu.\n" +
+          "Kamu juga bisa langsung mengetik pesan di channel ini — bot akan otomatis mengubahnya menjadi gambar quote."
+        )
+        .setFooter({ text: `Generated • ${formatQuoteTime(Date.now())}` });
+
+      await targetChannel.send({
+        embeds: [panelEmbed],
+        components: [buildQuoteButtonRow()],
+      });
+
+      return interaction.editReply(`✅ Panel quotes berhasil dikirim ke ${targetChannel}.`);
+    }
+
+
+    if (interaction.isModalSubmit() && interaction.customId === "add_quote_modal") {
 
       const quoteText = (interaction.fields.getTextInputValue("quote_text") || "").trim();
       if (!quoteText) return interaction.reply({ content: "Quote kosong.", flags: MessageFlags.Ephemeral });
@@ -25357,10 +25326,13 @@ client.on("channelDelete", async (channel) => {
     const topic = String(channel.topic || "");
     if (!topic.includes("[TICKET:") || !topic.includes("[OWNER:")) return;
 
-    await safeRun(
-      `UPDATE tickets_custom SET closed_at=? WHERE guild_id=? AND channel_id=? AND closed_at IS NULL`,
-      [Date.now(), String(channel.guild.id), String(channel.id)]
-    ).catch(() => null);
+    const TC = getMongoModel("tickets_custom");
+    if (TC) {
+      await TC.updateOne(
+        { guild_id: String(channel.guild.id), channel_id: String(channel.id), closed_at: null },
+        { $set: { closed_at: Date.now() } }
+      ).catch(() => null);
+    }
   } catch (e) {
     console.error("[ticket][channelDelete cleanup]", e);
   }
