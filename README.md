@@ -62,6 +62,17 @@
 * **Sistem Tiket Bantuan:** Pembuatan kategori tiket privat (Support, Report, Donasi, Kemitraan, Verifikasi) dengan log transkrip obrolan otomatis saat tiket ditutup.
 * **FAQ Interaktif:** Menu bantuan informatif berbasis dropdown components.
 
+### 9. 🎨 Multimedia & Creative Utilities
+* **Brat Meme Generator & Typing Video:**
+  * `cbrat <teks>` — Stiker gambar meme Brat Charli XCX berlatar hijau neon `#8ACE00` tajam 1:1.
+  * `cbratvid <teks>` — Video animasi MP4 ketikan teks meme Brat kata per kata berkecepatan tinggi.
+* **Enhancement & Media Conversion:**
+  * `chd` / `chdimage` *(lampiran / reply foto)* — Upscale 2× resolusi gambar dengan penajaman detail (Unsharp Mask filter).
+  * `ckompres` *(lampiran / reply foto)* — Kompresi cerdas ukuran file gambar (JPEG/WebP) hemat kuota hingga 50-80% tanpa merusak estetika.
+  * `ctopdf <teks>` *(atau reply file .txt)* — Konversi teks langsung menjadi dokumen PDF A4 rapi dengan penomoran baris dan footer.
+  * `cdlmusic <judul / link>` — Download lagu/audio instan via yt-dlp berformat MP3 langsung ke Discord.
+  * `ctoimg` *(reply stiker / gambar WebP)* — Konversi stiker Discord atau gambar WebP menjadi file PNG resolusi penuh.
+
 ---
 
 ## 📖 Panduan Bantuan & Prefix Commands
@@ -75,6 +86,12 @@ Prefix bot adalah **`c`** (atau slash commands `/`).
 | `chelpmod toxic` | Langsung membuka panduan moderasi & pengaturan anti-toxic |
 | `cping` | Mengecek kecepatan respon dan latensi bot secara instan |
 | `cbrat <teks>` | Membuat stiker teks meme gaya album Charli XCX (Brat Generator) |
+| `cbratvid <teks>` | Membuat video animasi MP4 teks ketik Brat meme (Charli XCX) |
+| `chd` *(reply/lampiran)* | Tingkatkan kualitas & resolusi gambar (2x HD Upscale & Sharpen) |
+| `ckompres` *(reply/lampiran)* | Kompres dan kecilkan ukuran file gambar hemat kuota |
+| `ctopdf <teks>` | Konversi teks atau pesan obrolan menjadi dokumen PDF |
+| `cdlmusic <lagu>` | Download musik/lagu MP3 langsung dari YouTube/SoundCloud |
+| `ctoimg` *(reply stiker)* | Ubah stiker Discord atau format WebP menjadi gambar PNG |
 | `ctoxic on` / `off` / `status` | Mengaktifkan, mematikan, atau cek status filter anti-toxic |
 | `cbotstatus` | Menampilkan statistik RAM, CPU, Uptime, dan latensi bot |
 

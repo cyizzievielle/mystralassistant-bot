@@ -5736,6 +5736,21 @@ const HELP_CATEGORIES = {
       "`/about` — Informasi detail pengembang & sistem Mystral Assistant."
     ]
   },
+  media: {
+    emoji: "🎬",
+    label: "Media, Kreatif & Stiker",
+    description: "Brat meme (teks & video), HD upscaling, kompres gambar, musik MP3, & PDF.",
+    commands: [
+      "`cbrat <teks>` — Buat stiker teks meme gaya album Charli XCX (Brat Generator).",
+      "`cbratvid <teks>` — Buat video/animasi teks bergaya album Brat (MP4 typing animation).",
+      "`chd` / `chdimage` — Tingkatkan resolusi & ketajaman gambar ke High Definition (HD 2×).",
+      "`ckompres` / `ccompress` — Kompres ukuran file gambar (hemat kuota & cepat) tanpa pecah.",
+      "`ctopdf <teks>` — Konversi teks atau pesan chat panjang menjadi file dokumen PDF resmi.",
+      "`cdlmusic <judul/link>` — Download musik/lagu MP3 langsung dari YouTube.",
+      "`ctoimg` — Ubah stiker Discord atau gambar WebP menjadi file gambar PNG biasa.",
+      "`cremovebg` / `crbg` — Hapus latar belakang (background) foto otomatis."
+    ]
+  },
   faq: {
     emoji: "📚",
     label: "Pusat Informasi (FAQ)",
@@ -13599,7 +13614,12 @@ client.on(Events.MessageCreate, async (message) => {
       "donatur", "cdonatur", "booster", "cbooster", "boosterthank", "cboosterthank", "thankboost", "cthankboost",
       "boostersend", "cboostersend", "boosterannounce", "cboosterannounce",
       "rbg", "crbg", "rembg", "crembg", "removebg", "cremovebg", "nobg", "cnobg",
-      "brat", "cbrat",
+      "brat", "cbrat", "bratvid", "cbratvid", "bratgif", "cbratgif",
+      "hd", "chd", "hdimage", "chdimage", "enhance", "cenhance",
+      "kompres", "ckompres", "compress", "ccompress",
+      "topdf", "ctopdf", "pdf", "cpdf", "texttopdf", "ctexttopdf",
+      "dlmusic", "cdlmusic", "mp3", "cmp3", "song", "csong", "musicdl", "cmusicdl",
+      "toimg", "ctoimg", "sticker2img", "csticker2img", "toimage", "ctoimage",
       "ccr", "createrole",
       "stealemoji", "cstealemoji", "stemoji",
       "shorturl", "surl", "su",
@@ -14102,6 +14122,429 @@ client.on(Events.MessageCreate, async (message) => {
       } catch (err) {
         console.error("[BRAT GENERATOR ERROR]", err);
         return message.reply("❌ Gagal membuat stiker brat. Silakan coba lagi dengan teks yang lebih pendek.");
+      }
+    }
+
+    // ===================== BRAT VIDEO GENERATOR (CBRATVID / BRATVID) =====================
+    if (cmd === "bratvid" || cmd === "cbratvid" || cmd === "bratgif" || cmd === "cbratgif") {
+      let rawText = args.join(" ").trim();
+      if (!rawText && message.reference && message.reference.messageId) {
+        try {
+          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+          if (refMsg && refMsg.content) rawText = refMsg.content.trim();
+        } catch (_) { }
+      }
+
+      if (!rawText) {
+        return message.reply("💡 **Format:** `cbratvid <teks kamu>` atau balas (reply) pesan teman lalu ketik `cbratvid`!");
+      }
+
+      const statusMsg = await message.reply("⏳ *Sedang merender video animasi brat...*").catch(() => null);
+
+      try {
+        const W = 400, H = 400;
+        const content = String(rawText).trim().toLowerCase();
+        const words = content.split(/\s+/);
+
+        function renderBratVideoFrame(textToDraw) {
+          const canvas = createCanvas(W, H);
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#8ACE00";
+          ctx.fillRect(0, 0, W, H);
+
+          let fontSize = 68;
+          if (content.length > 50) fontSize = 28;
+          else if (content.length > 30) fontSize = 36;
+          else if (content.length > 15) fontSize = 48;
+
+          ctx.fillStyle = "#000000";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+
+          const maxW = W - 60;
+          const fWords = textToDraw.split(/\s+/).filter(Boolean);
+          let curLine = "";
+          const lines = [];
+          ctx.font = `${fontSize}px Arial, InterBold, sans-serif`;
+          for (const w of fWords) {
+            const testLine = curLine ? `${curLine} ${w}` : w;
+            if (ctx.measureText(testLine).width > maxW && curLine) {
+              lines.push(curLine);
+              curLine = w;
+            } else {
+              curLine = testLine;
+            }
+          }
+          if (curLine) lines.push(curLine);
+
+          const lineHeight = fontSize * 1.15;
+          const totalH = lines.length * lineHeight;
+          let startY = (H - totalH) / 2 + (fontSize / 2);
+
+          try { ctx.filter = "blur(1.15px)"; } catch (_) { }
+          for (const l of lines) {
+            ctx.fillText(l, W / 2, startY);
+            startY += lineHeight;
+          }
+          return canvas.toBuffer("image/jpeg");
+        }
+
+        const frames = [];
+        let curWords = [];
+        for (let i = 0; i < words.length; i++) {
+          curWords.push(words[i]);
+          frames.push(renderBratVideoFrame(curWords.join(" ")));
+        }
+        const lastFrame = frames[frames.length - 1];
+        for (let i = 0; i < 4; i++) frames.push(lastFrame);
+
+        const { spawn } = require("child_process");
+        const tempOut = path.join(__dirname, `brat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.mp4`);
+
+        await new Promise((resolve, reject) => {
+          const ffmpeg = spawn("ffmpeg", [
+            "-y", "-f", "image2pipe", "-r", "2.5", "-i", "-",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            tempOut
+          ]);
+          ffmpeg.on("close", (code) => {
+            if (code === 0 && fs.existsSync(tempOut)) resolve();
+            else reject(new Error(`ffmpeg exited code ${code}`));
+          });
+          ffmpeg.stdin.on("error", () => {});
+          for (const f of frames) ffmpeg.stdin.write(f);
+          ffmpeg.stdin.end();
+        });
+
+        const videoBuf = fs.readFileSync(tempOut);
+        try { fs.unlinkSync(tempOut); } catch (_) {}
+
+        const att = new AttachmentBuilder(videoBuf, { name: "brat.mp4" });
+        if (statusMsg) await statusMsg.delete().catch(() => null);
+        return message.reply({ files: [att], allowedMentions: { repliedUser: false } });
+      } catch (err) {
+        console.error("[BRATVID ERROR]", err);
+        if (statusMsg) await statusMsg.edit("❌ Gagal membuat video brat. Silakan coba lagi.");
+      }
+    }
+
+    // ===================== HD IMAGE ENHANCER (CHD / HD / CHDIMAGE) =====================
+    if (cmd === "hd" || cmd === "chd" || cmd === "hdimage" || cmd === "chdimage" || cmd === "enhance" || cmd === "cenhance") {
+      let imageUrl = null;
+      if (message.attachments.size > 0) {
+        const att = message.attachments.first();
+        if (att.contentType && att.contentType.startsWith("image/")) imageUrl = att.url;
+        else if (att.url) imageUrl = att.url;
+      }
+      if (!imageUrl && args[0] && /^https?:\/\/.+/i.test(args[0])) imageUrl = args[0];
+      if (!imageUrl && message.reference && message.reference.messageId) {
+        try {
+          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+          if (refMsg && refMsg.attachments.size > 0) {
+            imageUrl = refMsg.attachments.first()?.url;
+          }
+        } catch (_) {}
+      }
+
+      if (!imageUrl) {
+        return message.reply("💡 **Format:** Lampirkan foto lalu ketik `chd`, atau balas (reply) pesan yang ada fotonya!");
+      }
+
+      const statusMsg = await message.reply("⏳ *Sedang meningkatkan resolusi & mempertajam gambar ke HD...*").catch(() => null);
+
+      try {
+        const res = await fetch(imageUrl);
+        if (!res.ok) throw new Error("Gagal mengunduh gambar.");
+        const arr = await res.arrayBuffer();
+        const inBuf = Buffer.from(arr);
+        const img = await loadImage(inBuf);
+
+        const scale = 2;
+        const newW = Math.min(img.width * scale, 4096);
+        const newH = Math.min(img.height * scale, 4096);
+
+        const canvas = createCanvas(newW, newH);
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, newW, newH);
+
+        const imgData = ctx.getImageData(0, 0, newW, newH);
+        const data = imgData.data;
+        for (let i = 0; i < data.length; i += 4) {
+          data[i] = Math.min(255, Math.max(0, 1.05 * (data[i] - 128) + 128));
+          data[i + 1] = Math.min(255, Math.max(0, 1.05 * (data[i + 1] - 128) + 128));
+          data[i + 2] = Math.min(255, Math.max(0, 1.05 * (data[i + 2] - 128) + 128));
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        const outBuf = canvas.toBuffer("image/png");
+        const att = new AttachmentBuilder(outBuf, { name: "hd_image.png" });
+
+        const embed = new EmbedBuilder()
+          .setTitle("✨ Gambar Berhasil Ditingkatkan ke HD")
+          .setColor(0x2ecc71)
+          .setDescription(`• **Resolusi Asli:** \`${img.width} × ${img.height} px\`\n• **Resolusi HD:** \`${newW} × ${newH} px\` *(2× Ultra Clear)*`)
+          .setImage("attachment://hd_image.png")
+          .setFooter({ text: "Mystral HD Engine" });
+
+        if (statusMsg) await statusMsg.delete().catch(() => null);
+        return message.reply({ embeds: [embed], files: [att], allowedMentions: { repliedUser: false } });
+      } catch (err) {
+        console.error("[HD ERROR]", err);
+        if (statusMsg) await statusMsg.edit(`❌ Gagal meningkatkan resolusi: ${err.message}`);
+      }
+    }
+
+    // ===================== IMAGE COMPRESSOR (CKOMPRES / CCOMPRESS) =====================
+    if (cmd === "kompres" || cmd === "ckompres" || cmd === "compress" || cmd === "ccompress") {
+      let imageUrl = null;
+      if (message.attachments.size > 0) imageUrl = message.attachments.first()?.url;
+      if (!imageUrl && args[0] && /^https?:\/\/.+/i.test(args[0])) imageUrl = args[0];
+      if (!imageUrl && message.reference && message.reference.messageId) {
+        try {
+          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+          if (refMsg && refMsg.attachments.size > 0) imageUrl = refMsg.attachments.first()?.url;
+        } catch (_) {}
+      }
+
+      if (!imageUrl) {
+        return message.reply("💡 **Format:** Lampirkan foto lalu ketik `ckompres` atau reply pesan berisi foto!");
+      }
+
+      const statusMsg = await message.reply("⏳ *Sedang mengompresi gambar...*").catch(() => null);
+
+      try {
+        const res = await fetch(imageUrl);
+        if (!res.ok) throw new Error("Gagal mengunduh gambar.");
+        const arr = await res.arrayBuffer();
+        const inBuf = Buffer.from(arr);
+        const originalSizeKB = (inBuf.length / 1024).toFixed(1);
+
+        const img = await loadImage(inBuf);
+        let w = img.width, h = img.height;
+        const maxDim = 1400;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+          else { w = Math.round((w * maxDim) / h); h = maxDim; }
+        }
+
+        const canvas = createCanvas(w, h);
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, w, h);
+
+        const outBuf = canvas.toBuffer("image/jpeg");
+        const newSizeKB = (outBuf.length / 1024).toFixed(1);
+        const savedPercent = Math.max(0, Math.round((1 - (outBuf.length / inBuf.length)) * 100));
+
+        const att = new AttachmentBuilder(outBuf, { name: "compressed.jpg" });
+        const embed = new EmbedBuilder()
+          .setTitle("📦 Kompresi Gambar Berhasil")
+          .setColor(0x3498db)
+          .setDescription(`• **Sebelum:** \`${originalSizeKB} KB\`\n• **Sesudah:** \`${newSizeKB} KB\`\n• **Penghematan:** \`⚡ ${savedPercent}% lebih hemat!\``)
+          .setImage("attachment://compressed.jpg");
+
+        if (statusMsg) await statusMsg.delete().catch(() => null);
+        return message.reply({ embeds: [embed], files: [att], allowedMentions: { repliedUser: false } });
+      } catch (err) {
+        console.error("[COMPRESS ERROR]", err);
+        if (statusMsg) await statusMsg.edit(`❌ Gagal mengompresi gambar: ${err.message}`);
+      }
+    }
+
+    // ===================== TEXT TO PDF (CTOPDF / CPDF) =====================
+    if (cmd === "topdf" || cmd === "ctopdf" || cmd === "pdf" || cmd === "cpdf" || cmd === "texttopdf" || cmd === "ctexttopdf") {
+      let textContent = args.join(" ").trim();
+      let docTitle = "Dokumen Mystral";
+
+      if (!textContent && message.reference && message.reference.messageId) {
+        try {
+          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+          if (refMsg && refMsg.content) textContent = refMsg.content.trim();
+        } catch (_) {}
+      }
+
+      if (message.attachments.size > 0) {
+        const att = message.attachments.first();
+        if (att.name?.endsWith(".txt")) {
+          try {
+            const txtRes = await fetch(att.url);
+            if (txtRes.ok) {
+              textContent = await txtRes.text();
+              docTitle = att.name.replace(".txt", "");
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (!textContent) {
+        return message.reply("💡 **Format:** `ctopdf <teks kamu>`, atau reply pesan teks lalu ketik `ctopdf`, atau lampirkan file `.txt`!");
+      }
+
+      const statusMsg = await message.reply("⏳ *Sedang merender dokumen PDF...*").catch(() => null);
+
+      try {
+        const PDFDocument = require("pdfkit");
+        const doc = new PDFDocument({ margin: 50, size: "A4" });
+        const chunks = [];
+        doc.on("data", c => chunks.push(c));
+
+        const pdfBufferPromise = new Promise((resolve, reject) => {
+          doc.on("end", () => resolve(Buffer.concat(chunks)));
+          doc.on("error", reject);
+        });
+
+        doc.rect(0, 0, doc.page.width, 8).fill("#5865F2");
+        doc.moveDown(1.5);
+
+        doc.fillColor("#111827").fontSize(20).font("Helvetica-Bold").text(docTitle, { align: "left" });
+        doc.fillColor("#6B7280").fontSize(9).font("Helvetica")
+          .text(`Dibuat oleh: ${message.author.tag} • Server: ${message.guild.name} • ${new Date().toLocaleString("id-ID")}`);
+
+        doc.moveDown(0.8);
+        doc.strokeColor("#E5E7EB").lineWidth(1).moveTo(50, doc.y).lineTo(doc.page.width - 50, doc.y).stroke();
+        doc.moveDown(1);
+
+        doc.fillColor("#1F2937").fontSize(11).font("Helvetica").text(textContent, {
+          align: "justify",
+          lineGap: 4
+        });
+
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < range.start + range.count; i++) {
+          doc.switchToPage(i);
+          doc.fillColor("#9CA3AF").fontSize(8).font("Helvetica")
+            .text(`Mystral Assistant Document • Halaman ${i + 1} dari ${range.count}`, 50, doc.page.height - 35, {
+              align: "center",
+              width: doc.page.width - 100
+            });
+        }
+
+        doc.end();
+        const pdfBuf = await pdfBufferPromise;
+        const att = new AttachmentBuilder(pdfBuf, { name: `${docTitle.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf` });
+
+        if (statusMsg) await statusMsg.delete().catch(() => null);
+        return message.reply({
+          content: `📄 **Dokumen PDF berhasil dibuat!** (${(pdfBuf.length / 1024).toFixed(1)} KB)`,
+          files: [att],
+          allowedMentions: { repliedUser: false }
+        });
+      } catch (err) {
+        console.error("[PDF ERROR]", err);
+        if (statusMsg) await statusMsg.edit(`❌ Gagal membuat PDF: ${err.message}`);
+      }
+    }
+
+    // ===================== DOWNLOAD MUSIC (CDLMUSIC / CMP3 / CSONG) =====================
+    if (cmd === "dlmusic" || cmd === "cdlmusic" || cmd === "mp3" || cmd === "cmp3" || cmd === "song" || cmd === "csong" || cmd === "musicdl" || cmd === "cmusicdl") {
+      const query = args.join(" ").trim();
+      if (!query) {
+        return message.reply("💡 **Format:** `cdlmusic <judul lagu atau link YouTube>`\n*Contoh:* `cdlmusic heather conan gray`");
+      }
+
+      const statusMsg = await message.reply(`🔍 *Sedang mencari & mengunduh lagu:* **${query}**...`).catch(() => null);
+
+      try {
+        const ytdlPath = await ensureYtDlp();
+        if (!ytdlPath) throw new Error("Binary yt-dlp tidak tersedia.");
+
+        const tempId = `music_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const outTemplate = path.join(__dirname, `${tempId}.%(ext)s`);
+
+        const isUrl = /^https?:\/\//i.test(query);
+        const target = isUrl ? query : `ytsearch1:${query}`;
+
+        const { execFile } = require("child_process");
+        await new Promise((resolve, reject) => {
+          execFile(ytdlPath, [
+            "-x",
+            "--audio-format", "mp3",
+            "--max-filesize", "24M",
+            "--output", outTemplate,
+            "--no-playlist",
+            target
+          ], { timeout: 90000 }, (err, stdout, stderr) => {
+            if (err) return reject(new Error(stderr || err.message));
+            resolve(stdout);
+          });
+        });
+
+        const expectedFile = path.join(__dirname, `${tempId}.mp3`);
+        const found = fs.existsSync(expectedFile) ? expectedFile : fs.readdirSync(__dirname).filter(f => f.startsWith(tempId)).map(f => path.join(__dirname, f))[0];
+        if (!found) throw new Error("File audio tidak ditemukan atau melebihi batas upload 24MB.");
+
+        const audioBuf = fs.readFileSync(found);
+        const stats = fs.statSync(found);
+        try { fs.unlinkSync(found); } catch (_) {}
+
+        const cleanName = `${query.slice(0, 30).replace(/[^a-zA-Z0-9_-]/g, "_")}.mp3`;
+        const att = new AttachmentBuilder(audioBuf, { name: cleanName });
+
+        if (statusMsg) await statusMsg.delete().catch(() => null);
+        return message.reply({
+          content: `🎵 **Musik Berhasil Diunduh!** (${(stats.size / (1024 * 1024)).toFixed(2)} MB)\nKetik: \`${query}\``,
+          files: [att],
+          allowedMentions: { repliedUser: false }
+        });
+      } catch (err) {
+        console.error("[MUSIC DOWNLOAD ERROR]", err);
+        if (statusMsg) await statusMsg.edit(`❌ Gagal mengunduh musik: ${err.message.slice(0, 150)}`);
+      }
+    }
+
+    // ===================== CONVERT STICKER/WEBP TO IMAGE (CTOIMG / TOIMG) =====================
+    if (cmd === "toimg" || cmd === "ctoimg" || cmd === "sticker2img" || cmd === "csticker2img" || cmd === "toimage" || cmd === "ctoimage") {
+      let targetUrl = null;
+
+      if (message.stickers && message.stickers.size > 0) {
+        targetUrl = message.stickers.first()?.url;
+      }
+
+      if (!targetUrl && message.reference && message.reference.messageId) {
+        try {
+          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+          if (refMsg) {
+            if (refMsg.stickers && refMsg.stickers.size > 0) targetUrl = refMsg.stickers.first()?.url;
+            else if (refMsg.attachments && refMsg.attachments.size > 0) targetUrl = refMsg.attachments.first()?.url;
+          }
+        } catch (_) {}
+      }
+
+      if (!targetUrl && message.attachments.size > 0) targetUrl = message.attachments.first()?.url;
+      if (!targetUrl && args[0] && /^https?:\/\/.+/i.test(args[0])) targetUrl = args[0];
+
+      if (!targetUrl) {
+        return message.reply("💡 **Format:** Balas (reply) sebuah **stiker** atau gambar WebP lalu ketik `ctoimg` untuk mengubahnya menjadi gambar PNG!");
+      }
+
+      const statusMsg = await message.reply("⏳ *Sedang mengubah stiker menjadi gambar PNG...*").catch(() => null);
+
+      try {
+        const res = await fetch(targetUrl);
+        if (!res.ok) throw new Error("Gagal mengunduh stiker.");
+        const arr = await res.arrayBuffer();
+        const inBuf = Buffer.from(arr);
+
+        const img = await loadImage(inBuf);
+        const canvas = createCanvas(img.width, img.height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+
+        const pngBuf = canvas.toBuffer("image/png");
+        const att = new AttachmentBuilder(pngBuf, { name: "converted_image.png" });
+
+        if (statusMsg) await statusMsg.delete().catch(() => null);
+        return message.reply({
+          content: "🖼️ **Stiker berhasil diubah menjadi gambar PNG!**",
+          files: [att],
+          allowedMentions: { repliedUser: false }
+        });
+      } catch (err) {
+        console.error("[TOIMG ERROR]", err);
+        if (statusMsg) await statusMsg.edit(`❌ Gagal mengubah stiker: ${err.message}`);
       }
     }
 
