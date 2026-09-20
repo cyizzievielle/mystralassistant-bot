@@ -898,13 +898,20 @@ async function mongoAll(sql, params = []) {
       if (gId) query.guild_id = gId;
       if (s.includes("is_enabled=1") || s.includes("is_enabled = 1")) {
         // Hanya ambil yang benar-benar aktif (is_enabled=1/true/"1")
-        // Dokumen lama yang belum punya field is_enabled akan dianggap NONAKTIF setelah fix ini
         query.$or = [{ is_enabled: 1 }, { is_enabled: "1" }, { is_enabled: true }];
       } else if (s.includes("is_enabled=0") || s.includes("is_enabled = 0")) {
         query.$or = [{ is_enabled: 0 }, { is_enabled: "0" }, { is_enabled: false }, { is_enabled: { $exists: false } }];
       }
       const AR = getMongoModel("autoresponses");
-      const docs = await AR.find(query).sort({ id: 1, _id: 1 }).lean();
+      if (!AR) return [];
+      // SANGAT PENTING: Jangan download image_base64 saat list/query massal!
+      // Ukuran image_base64 puluhan MB menyebabkan 'clar' dan fetch AR sangat lelet lewat WAN.
+      const includeImg = s.includes("image_base64");
+      let q = AR.find(query).sort({ id: 1, _id: 1 });
+      if (!includeImg) {
+        q = q.select("-image_base64");
+      }
+      const docs = await q.lean();
       return docs;
     }
 
@@ -6539,14 +6546,17 @@ async function renumberAutoresponses(guildId) {
 
 // ===================== AUTORESPONSE IN-MEMORY RAM CACHE =====================
 const arCache = new Map(); // guildId -> { list: Array, lastFetch: number }
+const arListCache = new Map(); // guildId -> { list: Array, lastFetch: number }
 const arImageCache = new Map(); // key -> { buf: Buffer, ext: string }
 const AR_CACHE_TTL = 10 * 60 * 1000; // 10 menit TTL
 
 function invalidateArCache(guildId) {
   if (guildId) {
     arCache.delete(String(guildId));
+    arListCache.delete(String(guildId));
   } else {
     arCache.clear();
+    arListCache.clear();
   }
   arImageCache.clear();
 }
@@ -6627,15 +6637,39 @@ async function checkAutoresponses(message) {
 
       // Resolve image attachment if available (base64 from MongoDB or local file)
       let imgAttachment = null;
-      if (r.image_base64) {
+      let base64Data = r.image_base64;
+      let extData = r.image_ext || "png";
+
+      // Jika image_base64 tidak dimuat di list query (untuk menghemat bandwidth), load on-demand saat ter-trigger
+      if (!base64Data && (r.attachment_url || r.image_ext || (finalResponse && isDirectImg(finalResponse)))) {
+        const imgKey = String(r.id || r._id);
+        const cachedImg = arImageCache.get(imgKey);
+        if (cachedImg) {
+          imgAttachment = new AttachmentBuilder(cachedImg.buf, { name: `sticker.${cachedImg.ext}` });
+        } else {
+          const AR = getMongoModel("autoresponses");
+          if (AR) {
+            const filter = r._id ? { _id: r._id } : { id: Number(r.id), guild_id: String(message.guild.id) };
+            const doc = await AR.findOne(filter).select("image_base64 image_ext").lean().catch(() => null);
+            if (doc?.image_base64) {
+              base64Data = doc.image_base64;
+              extData = doc.image_ext || extData;
+              r.image_base64 = base64Data;
+              r.image_ext = extData;
+            }
+          }
+        }
+      }
+
+      if (base64Data && !imgAttachment) {
         try {
           const imgKey = String(r.id || r._id);
           const cachedImg = arImageCache.get(imgKey);
           if (cachedImg) {
             imgAttachment = new AttachmentBuilder(cachedImg.buf, { name: `sticker.${cachedImg.ext}` });
           } else {
-            let buf = Buffer.from(r.image_base64, "base64");
-            let ext = r.image_ext || "png";
+            let buf = Buffer.from(base64Data, "base64");
+            let ext = extData || "png";
 
             // Jika bukan mode embed penuh, pastikan gambar di-resize kecil seukuran stiker (max 160px) via Stepped Downscaling
             if (!r.embed_response && ext !== "gif") {
@@ -9547,7 +9581,16 @@ async function handleDiscordManagementAssistant(ctx, cleanInput, cmd, args) {
   }
 
   if (cmd === "list_autoresponse" || cmd === "lar" || cmd === "clar" || (cmd === "list" && (args[0] === "autoresponse" || args[0] === "ar"))) {
-    const list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+    ctx.channel?.sendTyping().catch(() => {});
+    const gId = String(ctx.guild.id);
+    let list;
+    const cachedEntry = arListCache.get(gId);
+    if (cachedEntry && (Date.now() - cachedEntry.lastFetch < AR_CACHE_TTL)) {
+      list = cachedEntry.list;
+    } else {
+      list = await safeAll(`SELECT * FROM autoresponses WHERE guild_id=?`, [ctx.guild.id]);
+      arListCache.set(gId, { list, lastFetch: Date.now() });
+    }
     if (!list.length) {
       const container = new ContainerBuilder().setAccentColor(0x3498db)
         .addTextDisplayComponents(
