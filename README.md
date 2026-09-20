@@ -74,6 +74,7 @@ Prefix bot adalah **`c`** (atau slash commands `/`).
 | `chelpmod` *(atau `chelp mod`)* | Membuka Grimoire Bantuan Khusus Admin / Moderator |
 | `chelpmod toxic` | Langsung membuka panduan moderasi & pengaturan anti-toxic |
 | `cping` | Mengecek kecepatan respon dan latensi bot secara instan |
+| `cbrat <teks>` | Membuat stiker teks meme gaya album Charli XCX (Brat Generator) |
 | `ctoxic on` / `off` / `status` | Mengaktifkan, mematikan, atau cek status filter anti-toxic |
 | `cbotstatus` | Menampilkan statistik RAM, CPU, Uptime, dan latensi bot |
 

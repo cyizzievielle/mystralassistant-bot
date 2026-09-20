@@ -5726,6 +5726,7 @@ const HELP_CATEGORIES = {
       "`c lb recap` / `/leaderboard recap` — Peringkat keaktifan Member of the Month.",
       "`c lb all` / `c lb full` / `/leaderboard all` — Peringkat keaktifan keseluruhan member.",
       "`cremovebg` / `crmbg` / `cnobg` — Hapus background gambar otomatis (PNG transparan).",
+      "`cbrat <teks>` — Buat stiker teks meme gaya album Charli XCX (Brat Generator).",
       "`/calc <ekspresi>` / `ccalc` — Kalkulator perhitungan matematika instan.",
       "`/translate <teks>` / `cts` — Terjemahkan bahasa otomatis.",
       "`/weather <lokasi>` / `cweather` — Cek prakiraan cuaca lokasi.",
@@ -13598,6 +13599,7 @@ client.on(Events.MessageCreate, async (message) => {
       "donatur", "cdonatur", "booster", "cbooster", "boosterthank", "cboosterthank", "thankboost", "cthankboost",
       "boostersend", "cboostersend", "boosterannounce", "cboosterannounce",
       "rbg", "crbg", "rembg", "crembg", "removebg", "cremovebg", "nobg", "cnobg",
+      "brat", "cbrat",
       "ccr", "createrole",
       "stealemoji", "cstealemoji", "stemoji",
       "shorturl", "surl", "su",
@@ -13999,6 +14001,107 @@ client.on(Events.MessageCreate, async (message) => {
 
         await target.timeout(null);
         return message.reply(`🔊 Timeout untuk **${target.user.tag}** berhasil dihapus.`);
+      }
+    }
+
+    // ===================== BRAT MEME STICKER GENERATOR (CBRAT / BRAT) =====================
+    if (cmd === "brat" || cmd === "cbrat") {
+      let rawText = args.join(" ").trim();
+
+      // Jika teks tidak diberikan di argumen, cek apakah user mereply/membalas pesan lain
+      if (!rawText && message.reference && message.reference.messageId) {
+        try {
+          const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+          if (refMsg && refMsg.content) {
+            rawText = refMsg.content.trim();
+          }
+        } catch (_) { }
+      }
+
+      if (!rawText) {
+        const embedHelp = new EmbedBuilder()
+          .setTitle("💚 Brat Meme Sticker Generator (`cbrat`)")
+          .setColor(0x8ACE00)
+          .setDescription(
+            `Buat gambar stiker teks meme estetik ala album **Charli XCX (Brat)** secara instan!\n\n` +
+            `**Cara Penggunaan:**\n` +
+            `1. Ketik: \`${PREFIX} cbrat <teks kamu>\`\n` +
+            `   *Contoh:* \`${PREFIX} cbrat i love my life\` atau \`${PREFIX} cbrat bobo ah\`\n` +
+            `2. Atau **reply (balas) pesan member lain** lalu ketik \`${PREFIX} cbrat\`!`
+          )
+          .setFooter({ text: "Mystral Brat Generator • Charli XCX Aesthetic" });
+        return message.reply({ embeds: [embedHelp] });
+      }
+
+      try {
+        const W = 400;
+        const H = 400;
+        const canvas = createCanvas(W, H);
+        const ctx = canvas.getContext("2d");
+
+        // Warna Hijau Ikonik Charli XCX Brat
+        ctx.fillStyle = "#8ACE00";
+        ctx.fillRect(0, 0, W, H);
+
+        // Format lowercase khas album brat
+        const content = String(rawText).trim().toLowerCase();
+
+        // Hitung ukuran font dinamis sesuai panjang teks
+        let fontSize = 72;
+        if (content.length > 60) fontSize = 26;
+        else if (content.length > 35) fontSize = 34;
+        else if (content.length > 20) fontSize = 44;
+        else if (content.length > 10) fontSize = 56;
+
+        ctx.fillStyle = "#000000";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const maxW = W - 60;
+        function calculateLines(sz) {
+          ctx.font = `${sz}px Arial, InterBold, sans-serif`;
+          const words = content.split(/\s+/);
+          let curLine = "";
+          const res = [];
+          for (const w of words) {
+            const testLine = curLine ? `${curLine} ${w}` : w;
+            if (ctx.measureText(testLine).width > maxW && curLine) {
+              res.push(curLine);
+              curLine = w;
+            } else {
+              curLine = testLine;
+            }
+          }
+          if (curLine) res.push(curLine);
+          return res;
+        }
+
+        let lines = calculateLines(fontSize);
+        while (lines.length * (fontSize * 1.15) > (H - 60) && fontSize > 16) {
+          fontSize -= 4;
+          lines = calculateLines(fontSize);
+        }
+
+        const lineHeight = fontSize * 1.14;
+        const totalH = lines.length * lineHeight;
+        let startY = (H - totalH) / 2 + (fontSize / 2);
+
+        ctx.font = `${fontSize}px Arial, InterBold, sans-serif`;
+        try {
+          ctx.filter = "blur(1.15px)";
+        } catch (_) { }
+
+        for (const line of lines) {
+          ctx.fillText(line, W / 2, startY);
+          startY += lineHeight;
+        }
+
+        const buffer = canvas.toBuffer("image/png");
+        const attachment = new AttachmentBuilder(buffer, { name: "brat.png" });
+        return message.reply({ files: [attachment], allowedMentions: { repliedUser: false } });
+      } catch (err) {
+        console.error("[BRAT GENERATOR ERROR]", err);
+        return message.reply("❌ Gagal membuat stiker brat. Silakan coba lagi dengan teks yang lebih pendek.");
       }
     }
 
