@@ -6361,6 +6361,83 @@ function parseKeyValueArgs(text) {
   return args;
 }
 
+// ============================================================
+// COMPACT STICKER ENGINE: STEPPED DOWNSCALING & LOSSLESS PNG
+// ============================================================
+const STICKER_MAX_DIMENSION = 160;
+
+/**
+ * Mengubah gambar besar menjadi stiker Discord ukuran resmi (maks 160x160 px).
+ * Menggunakan 2 teknik utama:
+ * 1. Pengecilan Bertahap (Stepped Downscaling):
+ *    Mengecilkan gambar besar secara bertahap (1200 -> 600 -> 300 -> 160)
+ *    dengan Bicubic High Smoothing agar teks dan detail garis tetap tajam.
+ * 2. Format PNG Lossless Murni:
+ *    Tidak menggunakan kompresi JPEG agar bebas artifak buram dan transparansi utuh.
+ */
+async function optimizeStickerBuffer(buffer, ext = 'png') {
+  if (!buffer || buffer.length === 0) return buffer;
+  if (ext === 'gif') return buffer; // Animasi GIF tetap dipertahankan
+
+  try {
+    const img = await loadImage(buffer);
+    if (img.width <= STICKER_MAX_DIMENSION && img.height <= STICKER_MAX_DIMENSION) {
+      if (ext !== 'png') {
+        const c = createCanvas(img.width, img.height);
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        return c.toBuffer('image/png');
+      }
+      return buffer;
+    }
+
+    let targetWidth = img.width;
+    let targetHeight = img.height;
+    if (targetWidth >= targetHeight) {
+      targetHeight = Math.max(1, Math.round((targetHeight * STICKER_MAX_DIMENSION) / targetWidth));
+      targetWidth = STICKER_MAX_DIMENSION;
+    } else {
+      targetWidth = Math.max(1, Math.round((targetWidth * STICKER_MAX_DIMENSION) / targetHeight));
+      targetHeight = STICKER_MAX_DIMENSION;
+    }
+
+    // Pengecilan bertahap (Stepped Downscaling)
+    let curW = img.width;
+    let curH = img.height;
+    let canvas = createCanvas(curW, curH);
+    let ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    while (curW / 2 > targetWidth || curH / 2 > targetHeight) {
+      const nextW = Math.max(targetWidth, Math.round(curW / 2));
+      const nextH = Math.max(targetHeight, Math.round(curH / 2));
+      const nextCanvas = createCanvas(nextW, nextH);
+      const nextCtx = nextCanvas.getContext('2d');
+      nextCtx.imageSmoothingEnabled = true;
+      nextCtx.imageSmoothingQuality = 'high';
+      nextCtx.drawImage(canvas, 0, 0, curW, curH, 0, 0, nextW, nextH);
+      canvas = nextCanvas;
+      curW = nextW;
+      curH = nextH;
+    }
+
+    // Langkah akhir ke ukuran target stiker 160px
+    if (curW !== targetWidth || curH !== targetHeight) {
+      const finalCanvas = createCanvas(targetWidth, targetHeight);
+      const finalCtx = finalCanvas.getContext('2d');
+      finalCtx.imageSmoothingEnabled = true;
+      finalCtx.imageSmoothingQuality = 'high';
+      finalCtx.drawImage(canvas, 0, 0, curW, curH, 0, 0, targetWidth, targetHeight);
+      canvas = finalCanvas;
+    }
+
+    return canvas.toBuffer('image/png');
+  } catch (err) {
+    console.warn('[STICKER OPTIMIZE WARN]', err.message);
+    return buffer;
+  }
+}
+
 // AR images are stored as base64 in MongoDB — no local file storage needed
 
 async function downloadAndStoreArImage(url, asSticker = true) {
@@ -6388,31 +6465,10 @@ async function downloadAndStoreArImage(url, asSticker = true) {
       if (match) ext = match[1].toLowerCase();
     }
 
-    // Convert to compact sticker dimensions (max 180px) if asSticker is true and not an animated GIF
+    // Convert to compact sticker dimensions (max 160px) via Stepped Downscaling & Lossless PNG
     if (asSticker && !isGif) {
-      try {
-        const img = await loadImage(buffer);
-        let { width, height } = img;
-        const maxSize = 160;
-        if (width > maxSize || height > maxSize) {
-          if (width > height) {
-            height = Math.round((height * maxSize) / width);
-            width = maxSize;
-          } else {
-            width = Math.round((width * maxSize) / height);
-            height = maxSize;
-          }
-        }
-        const canvas = createCanvas(width, height);
-        const ctx = canvas.getContext("2d");
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(img, 0, 0, width, height);
-        buffer = canvas.toBuffer("image/png");
-        ext = "png";
-      } catch (resizeErr) {
-        console.warn("[AR STICKER RESIZE WARN]", resizeErr.message);
-      }
+      buffer = await optimizeStickerBuffer(buffer, ext);
+      ext = "png";
     }
 
     const filename = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
@@ -6581,29 +6637,11 @@ async function checkAutoresponses(message) {
             let buf = Buffer.from(r.image_base64, "base64");
             let ext = r.image_ext || "png";
 
-            // Jika bukan mode embed penuh, pastikan gambar di-resize kecil seukuran stiker (max 160px)
+            // Jika bukan mode embed penuh, pastikan gambar di-resize kecil seukuran stiker (max 160px) via Stepped Downscaling
             if (!r.embed_response && ext !== "gif") {
               try {
-                const img = await loadImage(buf);
-                const maxSize = 160;
-                if (img.width > maxSize || img.height > maxSize) {
-                  let w = img.width;
-                  let h = img.height;
-                  if (w > h) {
-                    h = Math.round((h * maxSize) / w);
-                    w = maxSize;
-                  } else {
-                    w = Math.round((w * maxSize) / h);
-                    w = maxSize;
-                  }
-                  const canvas = createCanvas(w, h);
-                  const ctx = canvas.getContext("2d");
-                  ctx.imageSmoothingEnabled = true;
-                  ctx.imageSmoothingQuality = "high";
-                  ctx.drawImage(img, 0, 0, w, h);
-                  buf = canvas.toBuffer("image/png");
-                  ext = "png";
-                }
+                buf = await optimizeStickerBuffer(buf, ext);
+                ext = "png";
               } catch (_) { }
             }
 
