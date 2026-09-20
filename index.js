@@ -4435,12 +4435,20 @@ async function setAfk(userId, reason, guildId = null) {
   afkCache.set(`${userId}:${gId || "all"}`, { reason: rText, since, guild_id: gId });
   afkCache.set(`${userId}:any`, true);
 
-  const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
   await AfkUser.updateOne(
-    filter,
+    { user_id: String(userId) },
     { $set: { guild_id: gId, user_id: String(userId), reason: rText, since } },
     { upsert: true }
-  ).catch(e => console.error("[AFK MONGO ERROR]", e));
+  ).catch(async (e) => {
+    if (e.code === 11000) {
+      await AfkUser.updateOne(
+        { user_id: String(userId) },
+        { $set: { guild_id: gId, reason: rText, since } }
+      ).catch(err => console.error("[AFK MONGO ERROR RETRY]", err?.message || err));
+    } else {
+      console.error("[AFK MONGO ERROR]", e?.message || e);
+    }
+  });
 }
 
 async function clearAfk(userId, guildId = null) {
@@ -4448,9 +4456,8 @@ async function clearAfk(userId, guildId = null) {
   afkCache.delete(`${userId}:${gId || "all"}`);
   afkCache.delete(`${userId}:any`);
 
-  const filter = gId ? { user_id: String(userId), guild_id: gId } : { user_id: String(userId) };
-  const res = await AfkUser.deleteOne(filter).catch(() => ({ deletedCount: 0 }));
-  return res.deletedCount > 0;
+  let res = await AfkUser.deleteOne({ user_id: String(userId) }).catch(() => ({ deletedCount: 0 }));
+  return (res?.deletedCount || 0) > 0;
 }
 
 async function clearAllAfkUsers(guildId = null) {
@@ -6299,28 +6306,25 @@ async function findMemberFuzzy(guild, userQuery) {
 
 async function safeCtxReply(ctx, payload) {
   try {
+    if (!ctx) return null;
     const isInteraction = Boolean(ctx.isInteraction?.() || ctx.deferred !== undefined || ctx.replied !== undefined);
     if (isInteraction) {
+      const data = typeof payload === 'string' ? { content: payload } : { ...payload };
       if (ctx.deferred || ctx.replied) {
-        return await ctx.editReply(payload).catch(async () => {
-          return await ctx.followUp(payload).catch(() => null);
+        return await ctx.editReply(data).catch(async () => {
+          return await ctx.followUp(data).catch(() => null);
         });
       }
-      if (typeof payload === 'object') {
-        payload.fetchReply = true;
-      } else {
-        payload = { content: payload, fetchReply: true };
-      }
-      return await ctx.reply(payload).catch(async () => {
+      return await ctx.reply(data).catch(async () => {
         if (ctx.deferred || ctx.replied) {
-          return await ctx.editReply(payload).catch(() => null);
+          return await ctx.editReply(data).catch(() => null);
         }
-        return await ctx.followUp(payload).catch(() => null);
+        return await ctx.followUp(data).catch(() => null);
       });
     }
     return await ctx.reply(payload).catch(() => null);
   } catch (e) {
-    console.error("[CTX REPLY ERROR]", e);
+    return null;
   }
 }
 
@@ -6402,6 +6406,24 @@ async function optimizeStickerBuffer(buffer, ext = 'png') {
   if (!buffer || buffer.length === 0) return buffer;
   if (ext === 'gif') return buffer; // Animasi GIF tetap dipertahankan
 
+  // Lewati file format non-raster / vektor / teks (SVG, JSON/Lottie, HTML)
+  if (ext === 'svg' || ext === 'json' || ext === 'lottie') return buffer;
+  if (buffer.length > 0 && (buffer[0] === 0x3C || buffer[0] === 0x7B)) {
+    // 0x3C = '<' (SVG/XML/HTML), 0x7B = '{' (JSON Lottie sticker)
+    return buffer;
+  }
+
+  // Verifikasi apakah header buffer adalah format raster standar (PNG, JPEG, WebP, GIF, BMP)
+  const isPng = buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
+  const isJpg = buffer.length >= 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+  const isWebp = buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
+  const isGif = buffer.length >= 4 && buffer.toString('ascii', 0, 3) === 'GIF';
+  const isBmp = buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4D;
+
+  if (!isPng && !isJpg && !isWebp && !isGif && !isBmp) {
+    return buffer;
+  }
+
   try {
     const img = await loadImage(buffer);
     if (img.width <= STICKER_MAX_DIMENSION && img.height <= STICKER_MAX_DIMENSION) {
@@ -6456,7 +6478,9 @@ async function optimizeStickerBuffer(buffer, ext = 'png') {
 
     return canvas.toBuffer('image/png');
   } catch (err) {
-    console.warn('[STICKER OPTIMIZE WARN]', err.message);
+    if (!err.message?.includes('Invalid SVG') && !err.message?.includes('failed to decode')) {
+      console.warn('[STICKER OPTIMIZE WARN]', err.message);
+    }
     return buffer;
   }
 }
@@ -20787,7 +20811,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         try {
           if (!passCooldown) {
-            return interaction.editReply(
+            return safeCtxReply(
+              interaction,
               `⏳ pelan dulu ya, coba lagi <t:${Math.floor((last + cooldownMs) / 1000)}:R>`
             );
           }
@@ -20800,7 +20825,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           );
 
           if (!ch) {
-            return interaction.editReply("⚠️ MENFESS_CHANNEL_ID tidak ketemu / bot tidak punya akses.");
+            return safeCtxReply(interaction, "⚠️ MENFESS_CHANNEL_ID tidak ketemu / bot tidak punya akses.");
           }
 
           const to = (interaction.fields?.getTextInputValue?.("to") || "").trim().slice(0, 60);
@@ -20826,17 +20851,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
 
           if (!msg) {
-            return interaction.editReply("⚠️ isi menfess tidak boleh kosong.");
+            return safeCtxReply(interaction, "⚠️ isi menfess tidak boleh kosong.");
           }
 
           if (to && isBadAlias(to)) {
-            return interaction.editReply("⚠️ kolom `Untuk` tidak boleh mengandung mention/role/staff impersonation.");
+            return safeCtxReply(interaction, "⚠️ kolom `Untuk` tidak boleh mengandung mention/role/staff impersonation.");
           }
 
           if (image && !isUploadedFile) {
             const directImageErr = validateDirectImageUrl(image);
             if (directImageErr) {
-              return interaction.editReply(directImageErr);
+              return safeCtxReply(interaction, directImageErr);
             }
           }
 
@@ -20890,7 +20915,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }).catch(() => null);
 
           if (!sent?.id) {
-            return interaction.editReply("⚠️ gagal mengirim menfess. Cek permission bot.");
+            return safeCtxReply(interaction, "⚠️ gagal mengirim menfess. Cek permission bot.");
           }
 
           await updateMenfessPostLink(id, {
@@ -20913,10 +20938,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             image: image || null,
           }).catch(() => null);
 
-          return interaction.editReply("✅ menfess terkirim.");
+          return safeCtxReply(interaction, "✅ menfess terkirim.");
         } catch (err) {
           console.error("[MENFESS NEW ERROR]", err);
-          return interaction.editReply("⚠️ terjadi error saat mengirim menfess. Coba lagi nanti.").catch(() => { });
+          return safeCtxReply(interaction, "⚠️ terjadi error saat mengirim menfess. Coba lagi nanti.");
         }
       }
 
@@ -20928,7 +20953,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         try {
           if (!passCooldown) {
-            return interaction.editReply(
+            return safeCtxReply(
+              interaction,
               `⏳ pelan dulu ya, coba lagi <t:${Math.floor((last + cooldownMs) / 1000)}:R>`
             );
           }
@@ -20944,7 +20970,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             .slice(0, 900);
 
           if (!targetIdInput || !msg) {
-            return interaction.editReply("⚠️ input tidak valid.");
+            return safeCtxReply(interaction, "⚠️ input tidak valid.");
           }
 
           let post = await getMenfessPostById(targetIdInput).catch(() => null);
@@ -20955,7 +20981,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
 
           if (!post) {
-            return interaction.editReply("⚠️ menfess tidak ditemukan. Cek nomor menfess / message ID.");
+            return safeCtxReply(interaction, "⚠️ menfess tidak ditemukan. Cek nomor menfess / message ID.");
           }
 
           const targetId = Number(post.id);
@@ -20963,7 +20989,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const ch = await getTextChannelOrNull(interaction.guild, chId);
 
           if (!ch) {
-            return interaction.editReply("⚠️ channel menfess tidak ditemukan.");
+            return safeCtxReply(interaction, "⚠️ channel menfess tidak ditemukan.");
           }
 
           const anonLabel = await getAnonLabel(interaction.user.id);
@@ -21045,7 +21071,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
 
           if (!sentReply?.id) {
-            return interaction.editReply("⚠️ gagal mengirim balasan. Cek permission bot.");
+            return safeCtxReply(interaction, "⚠️ gagal mengirim balasan. Cek permission bot.");
           }
 
           await sendMenfessLog(interaction.guild, {
@@ -21060,10 +21086,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             content: msg,
           }).catch(() => null);
 
-          return interaction.editReply("✅ balasan anonim terkirim.");
+          return safeCtxReply(interaction, "✅ balasan anonim terkirim.");
         } catch (err) {
           console.error("[MENFESS REPLY ERROR]", err);
-          return interaction.editReply("⚠️ terjadi error saat mengirim balasan. Coba lagi nanti.").catch(() => { });
+          return safeCtxReply(interaction, "⚠️ terjadi error saat mengirim balasan. Coba lagi nanti.");
         }
       }
     }
@@ -21576,7 +21602,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const staffRoleId = settings?.staff_role_id || requireEnv("TICKET_STAFF_ROLE_ID");
 
       if (!categoryId || !staffRoleId) {
-        return interaction.editReply(
+        return safeCtxReply(
+          interaction,
           "⚠️ Ticket belum dikonfigurasi. Jalankan /ticket_setup dan isi category + staff role (atau set TICKET_CATEGORY_ID & TICKET_STAFF_ROLE_ID)."
         );
       }
@@ -21601,7 +21628,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const has = await userHasOpenTicket(interaction.guild.id, interaction.user.id);
       if (has) {
-        return interaction.editReply("⚠️ Kamu masih punya ticket yang belum ditutup. Tutup dulu ya sebelum bikin ticket baru.");
+        return safeCtxReply(interaction, "⚠️ Kamu masih punya ticket yang belum ditutup. Tutup dulu ya sebelum bikin ticket baru.");
       }
 
       const safeUser =
@@ -21680,7 +21707,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         allowedMentions: { roles: [staffRoleId] },
       });
 
-      return interaction.editReply(`✅ Ticket dibuat: ${channel}`);
+      return safeCtxReply(interaction, `✅ Ticket dibuat: ${channel}`);
     }
 
     // ===================== FEMALE VERIFICATION TICKET: BUKA TIKET =====================
